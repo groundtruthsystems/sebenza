@@ -1,0 +1,195 @@
+/// Collapse runs of whitespace into a single `-`.
+fn whitespace_to_dash(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_ws = false;
+    for ch in s.chars() {
+        if ch.is_whitespace() {
+            if !in_ws {
+                out.push('-');
+            }
+            in_ws = true;
+        } else {
+            out.push(ch);
+            in_ws = false;
+        }
+    }
+    out
+}
+
+/// Collapse runs of 2+ `target` into a single `target`.
+fn collapse_char(s: &str, target: char) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev = false;
+    for ch in s.chars() {
+        if ch == target {
+            if !prev {
+                out.push(ch);
+            }
+            prev = true;
+        } else {
+            out.push(ch);
+            prev = false;
+        }
+    }
+    out
+}
+
+/// Port of `sanitizeBranchName` (domain/policies.ts).
+pub fn sanitize_branch_name(raw: &str) -> String {
+    let mut s = whitespace_to_dash(&raw.to_lowercase());
+    s.retain(|c| !matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | ']' | '\\'));
+    s = s.replace("@{", "");
+    s = collapse_char(&s, '.');
+    s = collapse_char(&s, '/');
+    s = collapse_char(&s, '-');
+    s = s
+        .trim_matches(|c| matches!(c, '.' | '-' | '/'))
+        .to_string();
+    if s.to_lowercase().ends_with(".lock") {
+        s.truncate(s.len() - ".lock".len());
+    }
+    s
+}
+
+/// A branch name is valid iff it is non-empty and already in sanitized form.
+pub fn is_valid_branch_name(raw: &str) -> bool {
+    !raw.is_empty() && sanitize_branch_name(raw) == raw
+}
+
+/// Valid env-var key: `^[a-z_][a-z0-9_]*$` (case-insensitive) — port of
+/// `isValidEnvKey` (`UNSAFE_ENV_KEY_RE`).
+pub fn is_valid_env_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Allocate the next free service-port slot across existing worktree metas —
+/// port of `allocateServicePorts` (domain/policies.ts). The first service with a
+/// `portStart` is the reference for slot occupancy; all allocatable services get
+/// `start + slot * step`.
+pub fn allocate_service_ports(
+    existing_metas: &[crate::domain::model::WorktreeMeta],
+    services: &[crate::domain::config::ServiceSpec],
+) -> std::collections::HashMap<String, u16> {
+    let allocatable: Vec<&crate::domain::config::ServiceSpec> =
+        services.iter().filter(|s| s.port_start.is_some()).collect();
+    if allocatable.is_empty() {
+        return std::collections::HashMap::new();
+    }
+
+    let reference = allocatable[0];
+    let reference_start = reference.port_start.unwrap();
+    let reference_step = reference.port_step.unwrap_or(1).max(1);
+    let mut occupied: std::collections::HashSet<u16> = std::collections::HashSet::new();
+
+    for meta in existing_metas {
+        let Some(&port) = meta.allocated_ports.get(&reference.port_env) else {
+            continue;
+        };
+        if port < reference_start {
+            continue;
+        }
+        let diff = port - reference_start;
+        if !diff.is_multiple_of(reference_step) {
+            continue;
+        }
+        occupied.insert(diff / reference_step);
+    }
+
+    let mut slot: u16 = 1;
+    while occupied.contains(&slot) {
+        slot += 1;
+    }
+
+    let mut result = std::collections::HashMap::new();
+    for service in allocatable {
+        let start = service.port_start.unwrap();
+        let step = service.port_step.unwrap_or(1);
+        result.insert(service.port_env.clone(), start + slot * step);
+    }
+    result
+}
+
+/// `change-<8 hex>` fallback branch name (port of `generateFallbackBranchName`).
+pub fn generate_fallback_branch_name() -> String {
+    format!("change-{}", crate::util::id::random_hex(4))
+}
+
+/// Path segments owned by the server's hub routes — a project prefix must not
+/// collide with these or `/<prefix>` would shadow them.
+const RESERVED_PROJECT_PREFIXES: [&str; 3] = ["api", "ws", "assets"];
+
+/// Slug a string into a URL-path-friendly prefix (lowercase, hyphenated,
+/// alphanumeric only). Empty if nothing usable remains.
+pub fn sanitize_project_prefix(raw: &str) -> String {
+    let lowered = raw.to_lowercase();
+    let mut out = String::with_capacity(lowered.len());
+    let mut prev_dash = false;
+    for ch in lowered.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    out.trim_matches('-').to_string()
+}
+
+/// Derive a Sebenza project URL prefix from a project dir's basename, adding
+/// `-2`, `-3`, … to avoid collisions with taken prefixes and reserved segments.
+pub fn derive_project_prefix<'a>(
+    project_dir: &str,
+    taken_prefixes: impl IntoIterator<Item = &'a str>,
+) -> String {
+    let basename = project_dir
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("sebenza");
+    let base = {
+        let s = sanitize_project_prefix(basename);
+        if s.is_empty() { "sebenza".to_string() } else { s }
+    };
+
+    let mut taken: std::collections::HashSet<String> =
+        taken_prefixes.into_iter().map(str::to_string).collect();
+    taken.extend(RESERVED_PROJECT_PREFIXES.iter().map(|s| s.to_string()));
+
+    if !taken.contains(&base) {
+        return base;
+    }
+    for n in 2..1000 {
+        let candidate = format!("{base}-{n}");
+        if !taken.contains(&candidate) {
+            return candidate;
+        }
+    }
+    format!("{base}-{}", crate::util::id::random_hex(4))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_plain_and_nested_branches() {
+        assert!(is_valid_branch_name("main"));
+        assert!(is_valid_branch_name("feature/foo-bar"));
+        assert!(is_valid_branch_name("release/1.2.3"));
+    }
+
+    #[test]
+    fn rejects_unsanitized() {
+        assert!(!is_valid_branch_name(""));
+        assert!(!is_valid_branch_name("Feature/Foo")); // uppercase
+        assert!(!is_valid_branch_name("has space"));
+        assert!(!is_valid_branch_name("bad~char"));
+        assert!(!is_valid_branch_name("-leading"));
+    }
+}

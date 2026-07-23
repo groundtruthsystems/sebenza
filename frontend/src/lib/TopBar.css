@@ -1,0 +1,26 @@
+.more-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.25rem;
+  width: max-content;
+  max-width: 80vw;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-edge);
+  background: var(--color-topbar);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 50;
+}
+
+.bell-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 0.25rem;
+  width: 18rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--color-edge);
+  background: var(--color-topbar);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 50;
+}
