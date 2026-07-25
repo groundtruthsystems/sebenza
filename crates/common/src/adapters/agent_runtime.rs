@@ -1,14 +1,8 @@
-//! Agent runtime artifacts — port of the artifact-writing path of
-//! `backend-legacy/src/adapters/agent-runtime.ts`. Writes the `sebenza-agentctl`
-//! helper (which POSTs runtime events to the control channel) plus the Claude /
-//! Codex hook configs that invoke it, so a launched agent reports lifecycle
-//! events. The agentctl script is the verbatim asset extracted from legacy.
-
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The exact `sebenza-agentctl` Python helper (extracted from the legacy builder).
+/// The exact `sebenza-agentctl` Python helper.
 const AGENTCTL_SCRIPT: &str = include_str!("testdata/sebenza-agentctl.py");
 
 const GENERATED_CODEX_HOOKS_EXCLUDE: &str = ".codex/hooks.json";

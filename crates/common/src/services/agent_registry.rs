@@ -1,4 +1,4 @@
-//! Agent registry — port of `backend-legacy/src/services/agent-registry.ts`.
+//! Agent registry.
 //! Resolves built-in (claude/codex) and custom agent definitions used when
 //! building a worktree's agent launch command.
 

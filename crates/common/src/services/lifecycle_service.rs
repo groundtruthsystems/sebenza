@@ -1,8 +1,3 @@
-//! Worktree lifecycle operations — port of the remove/merge/label/archive paths
-//! of `backend-legacy/src/services/lifecycle-service.ts`. Each op resolves the
-//! worktree, mutates git/tmux/fs, then force-reconciles so the next snapshot
-//! reflects the change. Blocking (shells out) — call via `spawn_blocking`.
-
 use crate::adapters::agent_runtime::ensure_agent_runtime_artifacts;
 use crate::adapters::control_token::load_control_token;
 use crate::adapters::docker::{launch_container, LaunchContainerOpts};
@@ -46,8 +41,8 @@ use crate::services::session_service::{
     ensure_session_layout, plan_session_layout, PaneCommandSet, SessionLayoutContext,
 };
 use crate::services::worktree_service::{
-    build_create_worktree_targets, create_managed_worktree, CreateManagedWorktreeOptions,
-    InitializeManagedWorktreeResult,
+    adopt_managed_worktree, build_create_worktree_targets, create_managed_worktree,
+    AdoptManagedWorktreeOptions, CreateManagedWorktreeOptions, InitializeManagedWorktreeResult,
 };
 use crate::domain::model::OneshotMeta;
 use chrono::{SecondsFormat, Utc};
@@ -109,8 +104,8 @@ impl LifecycleError {
     }
 }
 
-/// Wrap a shell/IO failure (`Err(String)`) as an unprocessable-entity error,
-/// matching the legacy `wrapOperationError` fallback of 422.
+/// Wrap a shell/IO failure (`Err(String)`) as an unprocessable-entity error
+/// (422).
 fn op(result: Result<(), String>) -> Result<(), LifecycleError> {
     result.map_err(|message| LifecycleError::new(message, 422))
 }
@@ -220,12 +215,11 @@ impl LifecycleService {
         oneshot: Option<OneshotMeta>,
     ) -> Result<(), LifecycleError> {
         let resolved = self.resolve_existing_worktree(branch)?;
-        let Some(mut meta) = resolved.meta.clone() else {
-            // NOTE: adopting an unmanaged worktree on open is deferred; require meta.
-            return Err(LifecycleError::new(
-                format!("Worktree {branch} has no managed metadata"),
-                409,
-            ));
+        // Adopt (import) an unmanaged worktree instead of failing: synthesize and
+        // write default managed metadata, then open it normally.
+        let mut meta = match resolved.meta.clone() {
+            Some(m) => m,
+            None => self.adopt_unmanaged_worktree(branch, &resolved.git_dir, &resolved.entry.path)?,
         };
 
         if let Some(oneshot) = oneshot {
@@ -273,6 +267,38 @@ impl LifecycleService {
 
         self.reconcile_force();
         Ok(())
+    }
+
+    /// Import an existing worktree that has no `meta.json`, writing default
+    /// managed metadata (default profile + agent) so it can be opened. Returns
+    /// the freshly-written meta.
+    fn adopt_unmanaged_worktree(
+        &self,
+        branch: &str,
+        git_dir: &str,
+        worktree_path: &str,
+    ) -> Result<WorktreeMeta, LifecycleError> {
+        let profile = self.resolve_profile(None)?;
+        if profile.profile.runtime == RuntimeKind::Docker && profile.profile.image.is_none() {
+            return Err(LifecycleError::new("Docker profile is missing an image", 422));
+        }
+        let agent = self.resolve_agent_definition(None)?;
+        let control_token = load_control_token().map_err(|e| LifecycleError::new(e, 422))?;
+        let control_url = self.control_url(profile.profile.runtime);
+        let result = adopt_managed_worktree(AdoptManagedWorktreeOptions {
+            git_dir: git_dir.to_string(),
+            worktree_path: worktree_path.to_string(),
+            branch: branch.to_string(),
+            profile: profile.name.clone(),
+            agent: agent.id.clone(),
+            runtime: profile.profile.runtime,
+            startup_env_values: self.build_startup_env_values(None)?,
+            allocated_ports: self.allocate_ports(),
+            control_url: Some(control_url),
+            control_token: Some(control_token),
+        })
+        .map_err(|e| LifecycleError::new(e, 422))?;
+        Ok(result.meta)
     }
 
     /// Launch a configured external tool (editor) against a worktree's directory.
@@ -1186,7 +1212,7 @@ impl LifecycleService {
         op(self
             .git
             .remove_worktree(&self.project_root, &resolved.entry.path, true))?;
-        // Best-effort branch delete (force) — matches legacy deleteBranch: true.
+        // Best-effort branch delete (force).
         let _ = self.git.delete_branch(&self.project_root, &branch, true);
         self.update_worktree_archived_state(&resolved.entry.path, false)?;
         self.reconcile_force();

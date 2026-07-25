@@ -1,8 +1,3 @@
-//! On-disk agent session discovery — port of
-//! `backend-legacy/src/adapters/session-discovery.ts`. Finds the session ids a
-//! built-in agent has written for a given cwd, newest first, and can poll for a
-//! freshly-created one (used when forking a tab and the id can't be pinned).
-
 use crate::adapters::{claude_cli, codex_session_log};
 
 /// Built-in agents whose on-disk session history we can discover.

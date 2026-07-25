@@ -1,13 +1,3 @@
-//! Self-registration of the running server under `~/.ai/sebenza/instances/<port>.json`
-//! — port of `backend-legacy/src/adapters/instance-registry.ts`.
-//!
-//! This registry is a transitional **migration sensor**: Sebenza now runs one
-//! multi-project server per machine, so the only reason to track other live
-//! servers is to detect leftover single-project instances (from the old
-//! one-server-per-project model) and consolidate them via `sebenza-cli project
-//! migrate`. Nothing new should be built on it; it goes away once the migration
-//! path is retired.
-
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -29,9 +19,9 @@ fn entry_path(port: u16) -> PathBuf {
     registry_dir().join(format!("{port}.json"))
 }
 
-/// A live PID is one whose `/proc/<pid>` exists (Linux). Mirrors the legacy
-/// `kill(pid, 0)` sensor: a process we can't signal (EPERM) still counts as
-/// alive — its `/proc` entry exists regardless of ownership.
+/// A live PID is one whose `/proc/<pid>` exists (Linux): a process we can't
+/// signal (EPERM) still counts as alive — its `/proc` entry exists regardless
+/// of ownership.
 fn is_alive(pid: u32) -> bool {
     PathBuf::from(format!("/proc/{pid}")).exists()
 }

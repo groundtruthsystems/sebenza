@@ -1,7 +1,3 @@
-//! Pure archive-state transforms — port of
-//! `backend-legacy/src/services/archive-service.ts`. The archive state is a
-//! project-level `archive.json` recording which worktree paths are archived.
-
 use crate::domain::model::{ArchivedWorktreeEntry, WorktreeArchiveState, WORKTREE_ARCHIVE_STATE_VERSION};
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};

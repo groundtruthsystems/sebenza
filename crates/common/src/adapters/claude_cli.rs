@@ -1,12 +1,3 @@
-//! Claude Code conversation session reader — port of the read path of
-//! `backend-legacy/src/adapters/claude-cli.ts`. Parses the JSONL session files
-//! Claude writes under `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl` into
-//! structured conversation messages. `build_claude_session_from_text` is pure
-//! (unit-tested). The live-streaming half of claude-cli is NOT ported here.
-//!
-//! UNVERIFIED-HERE: no `claude` in this environment to produce real session files;
-//! covered only by fixtures.
-
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -90,8 +81,7 @@ fn parse_session_records(text: &str) -> Vec<Value> {
         .collect()
 }
 
-/// Parse a Claude JSONL session into structured messages (port of
-/// `buildClaudeSessionFromText`).
+/// Parse a Claude JSONL session into structured messages.
 pub fn build_claude_session_from_text(path: &str, session_id: &str, text: &str) -> ClaudeCliSession {
     let records = parse_session_records(text);
     let mut messages: Vec<ClaudeCliMessage> = Vec::new();
@@ -266,7 +256,7 @@ pub struct ClaudeStreamBlock {
     pub tool_call_id: Option<String>,
 }
 
-/// The salient fields of a single `stream-json` line (port of `ParsedClaudeCliStreamLine`).
+/// The salient fields of a single `stream-json` line.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ParsedClaudeStreamLine {
     pub session_id: Option<String>,
@@ -366,7 +356,7 @@ fn stream_blocks_from_user(raw: &Value) -> Vec<ClaudeStreamBlock> {
         .collect()
 }
 
-/// Parse one `stream-json` line (port of `parseClaudeStreamLine`). Returns `None`
+/// Parse one `stream-json` line. Returns `None`
 /// for unparseable lines.
 pub fn parse_claude_stream_line(line: &str) -> Option<ParsedClaudeStreamLine> {
     let parsed: Value = serde_json::from_str(line).ok()?;
@@ -450,7 +440,7 @@ fn list_jsonl_files_by_mtime(dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Claude session ids for `cwd`, newest first. Reads only the encoded project
-/// dir (`~/.claude/projects/<encoded>/`) — matches legacy `listClaudeSessionIds`.
+/// dir (`~/.claude/projects/<encoded>/`).
 pub fn list_session_ids(cwd: &str) -> Vec<String> {
     let Some(root) = claude_projects_root() else {
         return Vec::new();

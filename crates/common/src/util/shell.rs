@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command;
 
-/// Result of a synchronous command execution, mirroring `backend-legacy/src/lib/shell.ts`.
+/// Result of a synchronous command execution.
 pub struct RunResult {
     pub success: bool,
     pub stdout: Vec<u8>,
@@ -9,7 +9,7 @@ pub struct RunResult {
 }
 
 /// Run a command synchronously and capture its output. Optionally set the working
-/// directory. Env/timeout are not threaded (the legacy helper doesn't either).
+/// directory. Env/timeout are not threaded.
 pub fn run(cmd: &str, args: &[&str], cwd: Option<&Path>) -> RunResult {
     let mut command = Command::new(cmd);
     command.args(args);

@@ -1,7 +1,3 @@
-//! Persistent registry of known projects — port of
-//! `backend-legacy/src/adapters/projects-registry.ts`. Stored as a JSON array at
-//! `~/.ai/sebenza/projects.json`. Malformed/unreadable files are treated as empty.
-
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;

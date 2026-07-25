@@ -1,9 +1,3 @@
-//! Codex session-log reader — port of the pure parser in
-//! `backend-legacy/src/services/codex-session-log-service.ts` plus on-disk
-//! session discovery (`~/.codex/sessions/**/rollout-*.jsonl`, matched by the
-//! `session_meta.cwd`). Lets Codex conversation *history* be read without the
-//! Codex app-server. UNVERIFIED-HERE (no real codex sessions); fixture-tested.
-
 use crate::services::agents_ui::AgentsUiMessage;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -167,8 +161,7 @@ fn finalize_tool_statuses(messages: Vec<AgentsUiMessage>) -> Vec<AgentsUiMessage
         .collect()
 }
 
-/// Parse a Codex rollout `.jsonl` into agents-ui messages (port of
-/// `parseCodexSessionMessages`).
+/// Parse a Codex rollout `.jsonl` into agents-ui messages.
 pub fn parse_codex_session_messages(text: &str) -> Vec<AgentsUiMessage> {
     let mut messages: Vec<AgentsUiMessage> = Vec::new();
     let mut tool_meta: HashMap<String, (String, Option<String>, Option<String>)> = HashMap::new();
@@ -376,7 +369,7 @@ fn read_session_meta(path: &std::path::Path) -> Option<(String, String)> {
     Some((id, cwd))
 }
 
-/// Codex session ids for `cwd`, newest first — matches legacy `listCodexSessionIds`.
+/// Codex session ids for `cwd`, newest first.
 pub fn list_session_ids(cwd: &str) -> Vec<String> {
     let Some(root) = codex_sessions_root() else {
         return Vec::new();

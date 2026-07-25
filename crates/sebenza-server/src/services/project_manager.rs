@@ -1,7 +1,3 @@
-//! Multi-project manager — port of `backend-legacy/src/services/project-manager.ts`
-//! plus the per-project `ProjectApp` (the state a single project's routes need).
-//! One Sebenza process serves every known project on one port, keyed by URL prefix.
-
 use crate::adapters::git::GitGateway;
 use crate::adapters::projects_registry::{ProjectEntry, ProjectsRegistry};
 use crate::adapters::tmux::TmuxGateway;

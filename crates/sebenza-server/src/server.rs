@@ -306,7 +306,7 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state);
 
     // SPA static serving: serve built frontend files, falling back to index.html
-    // for client-side routes (mirrors the legacy `globalFetch`).
+    // for client-side routes.
     if let Some(dist) = frontend_dist {
         let index = dist.join("index.html");
         let serve = ServeDir::new(dist).not_found_service(ServeFile::new(index));
@@ -1794,8 +1794,7 @@ async fn migrate_projects(
 // --- Terminal WebSocket (`/:prefix/ws/:worktree`) ---
 
 /// Inbound terminal control messages (JSON, discriminated on `type`). Parsing is
-/// lenient: an unrecognized or malformed frame yields an `error` reply, matching
-/// the legacy `parseWsMessage` returning `null`.
+/// lenient: an unrecognized or malformed frame yields an `error` reply.
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 enum WsInbound {
@@ -1818,7 +1817,7 @@ enum WsInbound {
 }
 
 /// Outbound terminal frames. Hot-path `output`/`scrollback` use a single-char
-/// prefix; the rest are JSON (mirrors the legacy `sendWs`).
+/// prefix; the rest are JSON.
 enum OutFrame {
     Output(String),
     Scrollback(String),

@@ -1,9 +1,3 @@
-//! Codex worktree conversation read path — the history-read subset of
-//! `backend-legacy/src/services/worktree-conversation-service.ts`. Reads the
-//! latest on-disk Codex rollout for the worktree cwd (no app-server needed for
-//! history). Send/interrupt/live-streaming (which DO need the Codex app-server)
-//! are NOT ported here.
-
 use crate::adapters::codex_session_log::latest_codex_session;
 use crate::domain::model::WorktreeSnapshot;
 use crate::services::agents_ui::{build_worktree_summary, AgentsUiConversationResponse, ConversationState};
