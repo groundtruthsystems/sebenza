@@ -194,32 +194,17 @@ integrations:
         # Short display label in the UI.
         alias: shared
 
-lifecycleHooks:
-  # Shell command run after a managed worktree is created and its session exists.
-  # Runs with the worktree as cwd and receives startupEnvs, allocated ports,
-  # and SEBENZA_* metadata in its environment.
-  postCreate: scripts/post-create.sh
+#lifecycleHooks:
+#  postCreate: scripts/post-create.sh
+#  preRemove: scripts/pre-remove.sh
 
-  # Shell command run before a managed worktree is removed.
-  preRemove: scripts/pre-remove.sh
-
-# Overrides the system prompt injected into oneshot-mode agent runs.
-# Omit to use the built-in default (instructs the agent to finish, commit,
-# push, and open a PR without asking for confirmation).
 oneshot:
   systemPrompt: >
     You are running in Sebenza ONESHOT mode. Drive the task to completion
     without asking for approval, then commit, push, and open a PR.
 
 auto_name:
-  # Model used when the branch field is left empty and a prompt is provided.
-  # Supported provider families currently include:
-  # - claude-*
-  # - gemini-*
-  # - gpt-*, chatgpt-*, o*
-  model: gemini
-
-  # Optional system prompt for branch-name generation.
+  model: gemini-3.5-flash-lite
   system_prompt: >
     Generate a concise git branch name from the task description.
     Return only the branch name in lowercase kebab-case.
