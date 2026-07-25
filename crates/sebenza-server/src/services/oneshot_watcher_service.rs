@@ -1,8 +1,3 @@
-//! Watches armed oneshot worktrees and fires end-of-run actions (auto-close +
-//! disarm) once the agent settles — port of
-//! `backend-legacy/src/services/oneshot-watcher-service.ts`. The decision logic
-//! (`OneshotDecision`) is pure so it can be unit-tested without git/tmux.
-
 use crate::adapters::fs::read_worktree_meta;
 use crate::domain::model::AgentLifecycle;
 use crate::services::lifecycle_service::LifecycleService;
@@ -38,7 +33,7 @@ pub enum OneshotDecision {
 }
 
 /// Decide what to do for an armed worktree given the agent lifecycle, whether it
-/// has a PR, and the current idle-timer state. Mirrors the legacy grace logic:
+/// has a PR, and the current idle-timer state. Grace logic:
 /// `stopped`/`error` fire immediately; `idle`/`closed` need the grace window;
 /// anything else resets the timer.
 pub fn decide(

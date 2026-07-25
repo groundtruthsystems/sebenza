@@ -1,5 +1,3 @@
-// Migration in progress: some ported domain/config/adapter items (persist helpers,
-// archive types, the shell helper) are wired up in later increments.
 #![allow(dead_code)]
 
 mod adapters;

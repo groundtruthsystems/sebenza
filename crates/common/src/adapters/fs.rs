@@ -216,7 +216,7 @@ pub fn ensure_worktree_storage_dirs(git_dir: &str) -> Result<WorktreeStoragePath
     Ok(paths)
 }
 
-/// Write `meta.json` (pretty-printed with a trailing newline, matching legacy).
+/// Write `meta.json` (pretty-printed with a trailing newline).
 pub fn write_worktree_meta(git_dir: &str, meta: &WorktreeMeta) -> Result<(), String> {
     let paths = ensure_worktree_storage_dirs(git_dir)?;
     let json = serde_json::to_string_pretty(meta).map_err(|e| e.to_string())?;
@@ -301,7 +301,7 @@ fn quote_env_value(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-/// Matches the legacy `SAFE_ENV_VALUE_RE` character class `[A-Za-z0-9_./:@%+=,-]`.
+/// Safe env-value character class `[A-Za-z0-9_./:@%+=,-]`.
 fn is_safe_env_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | ':' | '@' | '%' | '+' | '=' | ',' | '-')
 }

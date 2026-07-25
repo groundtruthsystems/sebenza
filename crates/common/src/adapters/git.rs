@@ -368,7 +368,7 @@ impl GitGateway {
     }
 }
 
-/// Options for `create_worktree`, mirroring the legacy discriminated union.
+/// Options for `create_worktree`.
 pub struct CreateGitWorktreeOptions {
     pub repo_root: String,
     pub worktree_path: String,
@@ -425,7 +425,7 @@ fn canonical_path(path: &str) -> String {
 fn remove_directory(path: &str) -> Result<(), String> {
     match fs::remove_dir_all(path) {
         Ok(()) => Ok(()),
-        // `force: true` in the legacy `rmSync` — a missing dir is not an error.
+        // Force removal — a missing dir is not an error.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e.to_string()),
     }

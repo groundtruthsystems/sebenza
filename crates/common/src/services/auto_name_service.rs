@@ -1,7 +1,3 @@
-//! Auto-name generation — port of `backend-legacy/src/services/auto-name-service.ts`.
-//! Asks the configured LLM CLI for a concise branch name, normalizing/validating
-//! the result. Falls back to a random name on timeout.
-
 use crate::domain::config::AutoNameConfig;
 use crate::domain::policies::{generate_fallback_branch_name, is_valid_branch_name};
 use crate::services::llm_spawn::{llm_provider_label, run_short_llm_task, RunLlmResult};
@@ -127,7 +123,7 @@ pub fn generate_branch_name(config: &AutoNameConfig, task: &str) -> Result<Strin
             normalize_generated_branch_name(output)
         }
         RunLlmResult::Timeout => {
-            // Match legacy: a timeout falls back to a random name rather than failing.
+            // A timeout falls back to a random name rather than failing.
             Ok(generate_fallback_branch_name())
         }
         RunLlmResult::SpawnError => {

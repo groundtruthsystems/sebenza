@@ -1,8 +1,3 @@
-//! Periodically persists which worktree sessions are open, so `sebenza-cli restore`
-//! can re-open them after a server restart/reboot — port of
-//! `backend-legacy/src/services/session-restore-service.ts`. The pure
-//! `compute_open_branches` is unit-tested without git/tmux.
-
 use crate::adapters::fs::write_open_sessions_state;
 use crate::adapters::git::{GitGateway, GitWorktreeEntry};
 use crate::adapters::tmux::{

@@ -1,8 +1,3 @@
-//! Claude worktree conversation read path — port of the read/attach path of
-//! `backend-legacy/src/services/claude-conversation-service.ts`. Builds the
-//! shared `AgentsUiConversationResponse` from the latest on-disk Claude session.
-//! Send/interrupt/live-streaming are NOT ported here.
-
 use crate::adapters::claude_cli::{latest_session, ClaudeCliSession};
 use crate::domain::model::WorktreeSnapshot;
 use crate::services::agents_ui::{

@@ -1,6 +1,3 @@
-// Reusable services live in `common`; re-export them under `crate::services::*`
-// so the server code keeps its existing paths. The async/runtime-holding
-// services below are server-local.
 #[allow(unused_imports)]
 pub use common::services::{
     agent_registry, agent_service, agents_ui, archive_service, auto_name_service,

@@ -1,7 +1,3 @@
-//! Lifecycle-hook runner — port of `backend-legacy/src/adapters/hooks.ts`.
-//! Runs `postCreate`/`preRemove` shell commands with the worktree runtime env,
-//! honoring direnv when a `.envrc` is present.
-
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;

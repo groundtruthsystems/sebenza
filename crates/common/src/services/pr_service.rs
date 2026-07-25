@@ -1,10 +1,3 @@
-//! GitHub PR/CI status via the `gh` CLI — port of the on-demand sync path of
-//! `backend-legacy/src/services/pr-service.ts`. Pure parsers are unit-tested;
-//! `sync_pr_status` writes per-worktree `prs.json` consumed by reconciliation.
-//!
-//! DEFERRED vs legacy: inline review comments (`gh api` + ETag cache), the
-//! stale-PR refresh pass, and the background poll monitor.
-
 use crate::adapters::fs::write_worktree_prs;
 use crate::adapters::git::GitGateway;
 use crate::domain::config::LinkedRepoConfig;

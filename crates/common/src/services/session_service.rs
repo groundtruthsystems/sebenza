@@ -1,7 +1,3 @@
-//! Session-layout planning and tmux window construction — port of
-//! `backend-legacy/src/services/session-service.ts`. `plan_session_layout` is
-//! pure (unit-testable); `ensure_session_layout` drives the tmux gateway.
-
 use crate::adapters::tmux::{
     build_project_session_name, build_worktree_window_name, TmuxGateway,
 };

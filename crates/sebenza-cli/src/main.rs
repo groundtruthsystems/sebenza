@@ -1,6 +1,5 @@
-//! Sebenza CLI (`sebenza-cli`). All commands talk to a running `sebenza-server` over
-//! HTTP. Server-lifecycle commands (`serve`, `init`, `service`, `update`,
-//! `oneshot`, `completion`) land in Phase 3.
+//! Sebenza CLI (`sebenza-cli`). Most commands talk to a running `sebenza-server`
+//! over HTTP; `serve`, `init`, `service`, `update`, and `completion` run locally.
 
 mod completions;
 mod env_files;

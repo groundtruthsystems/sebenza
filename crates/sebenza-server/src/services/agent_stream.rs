@@ -1,11 +1,3 @@
-//! Live agent conversation streaming. Claude: spawns `claude -p --output-format
-//! stream-json` and streams token deltas (port of claude-conversation-stream-
-//! service + the claude-cli sendMessage runner). Codex: spawns `codex exec
-//! [resume <id>] --json` and streams completed items (app-server-style events).
-//! Both feed a per-conversation `tokio::broadcast` consumed by the WS layer.
-//!
-//! Verified here against real `claude` and `codex`.
-
 use crate::adapters::claude_cli::parse_claude_stream_line;
 use crate::util::id::random_uuid;
 use indexmap::IndexMap;

@@ -51,3 +51,18 @@
 .md-body th,
 .md-body td { border: 1px solid var(--color-edge); padding: 0.3em 0.6em; }
 .md-body hr { border: none; border-top: 1px solid var(--color-edge); margin: 1em 0; }
+
+/* Mermaid diagram blocks (rendered from ```mermaid fences into inline SVG). */
+.md-body .mermaid-diagram {
+  margin: 0.8em 0;
+  text-align: center;
+  overflow-x: auto;
+}
+.md-body .mermaid-diagram svg {
+  max-width: 100%;
+  height: auto;
+}
+.md-body .mermaid-error {
+  color: var(--color-danger);
+  font-size: 12px;
+}

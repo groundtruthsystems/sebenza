@@ -1,7 +1,3 @@
-//! Short one-shot LLM CLI runner for auto-naming — port of
-//! `backend-legacy/src/services/llm-spawn.ts`. Spawns `claude`/`codex` with a
-//! timeout and captures stdout. `build_llm_args` is pure (unit-testable).
-
 use crate::domain::config::{AutoNameConfig, AutoNameProvider};
 use std::io::Read;
 use std::process::{Command, Stdio};

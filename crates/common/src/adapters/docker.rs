@@ -1,7 +1,3 @@
-//! Docker sandbox runtime — port of `backend-legacy/src/adapters/docker.ts`.
-//! `build_docker_run_args` is a pure `docker run` argv builder (unit + parity
-//! tested); launch/remove shell out to `docker`.
-
 use crate::domain::config::MountSpec;
 use std::collections::HashSet;
 use std::path::Path;

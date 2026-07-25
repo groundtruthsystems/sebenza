@@ -1,4 +1,4 @@
-//! Project subcommands (`ls`, `add`, `rm`). `migrate` lands in Phase 3.
+//! Project subcommands: `ls`, `add`, `rm`, `migrate`.
 
 use std::time::{Duration, Instant};
 

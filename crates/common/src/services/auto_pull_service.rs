@@ -1,7 +1,3 @@
-//! Main-branch pull — port of the pull functions in
-//! `backend-legacy/src/services/auto-pull-service.ts`. The periodic monitor is
-//! deferred; only the on-demand `/api/pull-main` path is ported here.
-
 use crate::adapters::git::GitGateway;
 use serde::Serialize;
 

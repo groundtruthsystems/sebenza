@@ -1,8 +1,3 @@
-//! Hub-level tracker + driver for on-add project setup — port of
-//! `backend-legacy/src/services/project-init-service.ts`. Records in-flight (and
-//! recently-finished) `.ai/sebenza.yaml` scaffolding jobs so the UI/CLI can poll
-//! progress via `/api/projects/inits`.
-
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

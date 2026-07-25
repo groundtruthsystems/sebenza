@@ -1,9 +1,3 @@
-//! Agent-assisted `.ai/sebenza.yaml` authoring for repos added without a config —
-//! server-side port of `backend-legacy/src/services/init-authoring.ts`. Detects
-//! the repo context, writes a starter config, and (best-effort) runs a headless
-//! agent to flesh it out. The legacy stream-parsing helpers are CLI-only (the
-//! server runs the agent to completion with no event handler) and are not ported.
-
 use crate::util::shell::{detect_project_name, run, which};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -167,7 +161,7 @@ pub struct InitAgentCommandSpec {
 }
 
 /// Build the headless-agent invocation. `unique` disambiguates the codex summary
-/// file (the legacy `Date.now()-random` suffix); the caller passes a stamp.
+/// file; the caller passes a stamp.
 pub fn build_init_agent_command(
     agent: InitAgent,
     prompt: &InitPromptSpec,
@@ -265,8 +259,7 @@ pub fn run_init_agent_command(
 }
 
 /// Write a starter `.ai/sebenza.yaml` to the repo root, then best-effort run
-/// the authoring agent to flesh it out. Mirrors the legacy `scaffold` + `analyze`
-/// deps of `runProjectInit` (agent step skipped if no CLI is available).
+/// the authoring agent to flesh it out (agent step skipped if no CLI is available).
 pub fn scaffold_config(context: &InitProjectContext) -> Result<(), String> {
     let template = build_starter_template(context);
     let dir = Path::new(&context.git_root).join(".ai");

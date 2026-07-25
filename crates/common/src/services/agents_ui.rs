@@ -1,7 +1,3 @@
-//! Shared agents-UI conversation wire types (the `AgentsUi*` schemas) + the
-//! worktree-summary builder. Used by both the Claude and Codex conversation read
-//! paths. Mirrors `backend-legacy/src/domain/agents-ui.ts` + `agents-ui-service.ts`.
-
 use crate::domain::model::{PrEntry, ServiceRuntimeState, WorktreeSnapshot};
 use serde::Serialize;
 

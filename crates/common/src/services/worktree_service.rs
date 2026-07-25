@@ -1,8 +1,3 @@
-//! Managed-worktree creation core — port of the non-tmux parts of
-//! `backend-legacy/src/services/worktree-service.ts`. `create_managed_worktree`
-//! does `git worktree add` then writes meta + runtime/control env; the tmux
-//! session is built separately by the lifecycle service.
-
 use crate::adapters::fs::{
     build_control_env_map, build_runtime_env_map, ensure_worktree_storage_dirs, load_dotenv_local,
     write_control_env, write_runtime_env, write_worktree_meta,
@@ -152,6 +147,47 @@ pub fn create_managed_worktree(
         Ok(result) => Ok(result),
         Err(e) => Err(rollback(git, &opts, e)),
     }
+}
+
+pub struct AdoptManagedWorktreeOptions {
+    pub git_dir: String,
+    pub worktree_path: String,
+    pub branch: String,
+    pub profile: String,
+    pub agent: String,
+    pub runtime: RuntimeKind,
+    pub startup_env_values: HashMap<String, String>,
+    pub allocated_ports: HashMap<String, u16>,
+    pub control_url: Option<String>,
+    pub control_token: Option<String>,
+}
+
+/// Adopt (import) an EXISTING, unmanaged worktree: write its managed artifacts
+/// (meta + runtime/control env) — the create flow minus `git worktree add`.
+/// Used when opening a worktree that has no `meta.json` yet.
+pub fn adopt_managed_worktree(
+    opts: AdoptManagedWorktreeOptions,
+) -> Result<InitializeManagedWorktreeResult, String> {
+    let dotenv_values = load_dotenv_local(&opts.worktree_path);
+    initialize_managed_worktree(InitializeManagedWorktreeOptions {
+        git_dir: opts.git_dir,
+        branch: opts.branch,
+        base_branch: None,
+        profile: opts.profile,
+        agent: opts.agent,
+        runtime: opts.runtime,
+        startup_env_values: opts.startup_env_values,
+        allocated_ports: opts.allocated_ports,
+        runtime_env_extras: HashMap::from([(
+            "SEBENZA_WORKTREE_PATH".to_string(),
+            opts.worktree_path,
+        )]),
+        dotenv_values,
+        control_url: opts.control_url,
+        control_token: opts.control_token,
+        source: Some(WorktreeSource::Ui),
+        oneshot: None,
+    })
 }
 
 /// Undo a partially-created worktree, appending any cleanup failure to `error`.

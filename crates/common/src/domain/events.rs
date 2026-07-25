@@ -1,6 +1,3 @@
-//! Runtime events posted by agents to `/api/runtime/events` — port of
-//! `backend-legacy/src/domain/events.ts`.
-
 use serde_json::Value;
 
 #[derive(Debug, Clone)]

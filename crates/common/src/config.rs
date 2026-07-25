@@ -266,8 +266,8 @@ fn parse_project_config(val: serde_yaml::Value) -> ProjectConfig {
             }
         }
 
-        // Parse auto name. NB: the legacy config reads the snake_case key
-        // `auto_name` and the snake_case `system_prompt` subkey (see parseAutoName).
+        // Parse auto name. The config uses the snake_case key `auto_name`
+        // and the snake_case `system_prompt` subkey.
         if let Some(auto_name_map) = mapping.get("auto_name").and_then(|v| v.as_mapping()) {
             let provider = match auto_name_map.get("provider").and_then(|v| v.as_str()) {
                 Some("claude") => Some(AutoNameProvider::Claude),

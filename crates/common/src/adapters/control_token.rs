@@ -1,7 +1,3 @@
-//! Persistent control token — port of `backend-legacy/src/adapters/control-token.ts`.
-//! The token authenticates agent → backend control-channel calls. Generated once
-//! and cached at `~/.config/sebenza/control-token` (mode 0600).
-
 use crate::util::id::random_uuid;
 use std::fs;
 use std::path::PathBuf;

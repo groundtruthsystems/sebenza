@@ -1,7 +1,3 @@
-//! Pure helpers for reading and transforming a worktree's tab list — port of
-//! `backend-legacy/src/services/tab-logic.ts`. All functions return new values
-//! (no mutation) so they are trivially unit-testable.
-
 use crate::domain::model::{WorktreeMeta, WorktreeTab, WorktreeTabKind, ROOT_TAB_ID};
 
 pub fn list_tabs(meta: &WorktreeMeta) -> Vec<WorktreeTab> {
@@ -76,8 +72,8 @@ pub fn remove_tab(mut meta: WorktreeMeta, tab_id: &str) -> WorktreeMeta {
     meta
 }
 
-/// Patch a single tab in place (session id and/or pane id). Mirrors the legacy
-/// `updateTab(meta, tabId, patch)` — only the fields present in `patch` change.
+/// Patch a single tab in place (session id and/or pane id) — only the fields
+/// present in `patch` change.
 pub struct TabPatch {
     pub session_id: Option<Option<String>>,
     pub pane_id: Option<Option<String>>,

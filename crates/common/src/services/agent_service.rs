@@ -1,5 +1,4 @@
-//! Agent launch-command builders — pure port of
-//! `backend-legacy/src/services/agent-service.ts`. Produces the shell command a
+//! Agent launch-command builders. Produces the shell command a
 //! tmux pane runs to source the runtime env then exec the agent (claude/codex or
 //! a custom template). Docker variants are deferred until the docker adapter lands.
 

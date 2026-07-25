@@ -217,7 +217,7 @@ auto_name:
   # - claude-*
   # - gemini-*
   # - gpt-*, chatgpt-*, o*
-  model: claude-3-5-haiku-latest
+  model: gemini
 
   # Optional system prompt for branch-name generation.
   system_prompt: >

@@ -56,8 +56,7 @@ pub fn is_valid_branch_name(raw: &str) -> bool {
     !raw.is_empty() && sanitize_branch_name(raw) == raw
 }
 
-/// Valid env-var key: `^[a-z_][a-z0-9_]*$` (case-insensitive) — port of
-/// `isValidEnvKey` (`UNSAFE_ENV_KEY_RE`).
+/// Valid env-var key: `^[a-z_][a-z0-9_]*$` (case-insensitive).
 pub fn is_valid_env_key(key: &str) -> bool {
     let mut chars = key.chars();
     match chars.next() {
@@ -67,8 +66,8 @@ pub fn is_valid_env_key(key: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Allocate the next free service-port slot across existing worktree metas —
-/// port of `allocateServicePorts` (domain/policies.ts). The first service with a
+/// Allocate the next free service-port slot across existing worktree metas.
+/// The first service with a
 /// `portStart` is the reference for slot occupancy; all allocatable services get
 /// `start + slot * step`.
 pub fn allocate_service_ports(
@@ -114,7 +113,7 @@ pub fn allocate_service_ports(
     result
 }
 
-/// `change-<8 hex>` fallback branch name (port of `generateFallbackBranchName`).
+/// `change-<8 hex>` fallback branch name.
 pub fn generate_fallback_branch_name() -> String {
     format!("change-{}", crate::util::id::random_hex(4))
 }

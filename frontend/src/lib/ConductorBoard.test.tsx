@@ -19,7 +19,13 @@ const sampleTracks = {
       type: "feature",
       description: "Agent service accounts + gateway integration",
       status: "doing",
-      phases_summary: [{ id: "phase-1", name: "Foundation", status: "done" }],
+      plan_path: "./tracks/interactive_gateway_20260720/plan.json",
+      spec_path: "./tracks/interactive_gateway_20260720/spec.md",
+      design_path: "./tracks/interactive_gateway_20260720/design.md",
+      phases_summary: [
+        { id: "phase-1", name: "Foundation", status: "done" },
+        { id: "phase-6", name: "Integration", status: "doing" },
+      ],
       progress: { total_tasks: 16, completed_tasks: 15, percentage: 94 },
     },
   ],
@@ -31,24 +37,28 @@ afterEach(() => {
 });
 
 describe("ConductorBoard", () => {
-  it("renders status columns and places a track card in its column with progress", async () => {
+  it("renders a track group with its phases as cards under status columns", async () => {
     vi.mocked(fetchConductorTracks).mockResolvedValue(sampleTracks);
 
     render(<ConductorBoard worktree={worktree} />);
 
+    // Group header shows the track description + phase completion.
     await waitFor(() =>
       expect(
         screen.getByText("Agent service accounts + gateway integration"),
       ).toBeInTheDocument(),
     );
+    expect(screen.getByText("1/2 phases")).toBeInTheDocument();
 
-    // All five kanban columns render.
+    // Status columns render, and phases appear as cards.
     for (const col of ["Backlog", "Doing", "Blocked", "Unblocked", "Done"]) {
       expect(screen.getByText(col)).toBeInTheDocument();
     }
-    // Card shows progress and a phase summary.
-    expect(screen.getByText("15/16 (94%)")).toBeInTheDocument();
     expect(screen.getByText("Foundation")).toBeInTheDocument();
+    expect(screen.getByText("Integration")).toBeInTheDocument();
+
+    // A View action is offered for the group's spec/design docs.
+    expect(screen.getByRole("button", { name: "View" })).toBeInTheDocument();
   });
 
   it("shows the empty state when there is no conductor board", async () => {

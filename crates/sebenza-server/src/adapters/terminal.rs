@@ -1,6 +1,3 @@
-//! WebSocket terminal / PTY session manager — port of
-//! `backend-legacy/src/adapters/terminal.ts`.
-//!
 //! Each attach allocates a native pseudo-terminal via `portable-pty` (no
 //! `python3`/`script` dependency) and runs the `build_attach_cmd` bash script
 //! inside it, which `exec`s `tmux attach-session -t <grouped-session>`. tmux does
@@ -114,7 +111,7 @@ impl TerminalManager {
 
     /// Spawn a PTY attached to `target`'s tmux window. Returns a receiver that
     /// yields terminal output and a final exit event. Any prior session under the
-    /// same `attach_id` is detached first (mirrors the legacy re-attach).
+    /// same `attach_id` is detached first.
     pub fn attach(
         &self,
         attach_id: &str,
