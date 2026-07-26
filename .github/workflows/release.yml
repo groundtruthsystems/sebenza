@@ -1,0 +1,122 @@
+name: Release
+
+# Publishes a GitHub Release with the `sebenza-server` (frontend embedded) and
+# `sebenza-cli` binaries for Linux and macOS whenever a `v*` tag is pushed.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# `workflow_dispatch` builds the binaries as artifacts without publishing — handy
+# for testing the pipeline.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # create the release + upload assets
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          # Native arm64 Linux build. Requires GitHub's arm64 Linux runners
+          # (public repos, or Team/Enterprise plans) — remove this entry if the
+          # `ubuntu-24.04-arm` runner label isn't available for this repo.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-13 # Intel
+            target: x86_64-apple-darwin
+          - os: macos-latest # Apple Silicon
+            target: aarch64-apple-darwin
+    steps:
+      - uses: actions/checkout@v4
+
+      # aws-lc-sys (via reqwest's rustls) builds C with cmake.
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Build the SPA first — it is embedded into the sebenza-server binary.
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build binaries
+        run: >
+          cargo build --release --locked --target ${{ matrix.target }}
+          -p sebenza-server -p sebenza-cli
+
+      - name: Package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="dev-${GITHUB_SHA:0:7}"
+          fi
+          NAME="sebenza-${VERSION}-${{ matrix.target }}"
+          BIN="target/${{ matrix.target }}/release"
+          mkdir -p "dist/${NAME}"
+          cp "${BIN}/sebenza-server" "${BIN}/sebenza-cli" "dist/${NAME}/"
+          cp README.md LICENSE "dist/${NAME}/"
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          ( cd dist && shasum -a 256 "${NAME}.tar.gz" > "${NAME}.tar.gz.sha256" )
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sebenza-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*.tar.gz
+            artifacts/*.tar.gz.sha256
+          generate_release_notes: true
+          fail_on_unmatched_files: true
