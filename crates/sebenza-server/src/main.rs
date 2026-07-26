@@ -125,15 +125,12 @@ async fn shutdown_signal() {
     }
 }
 
-/// Locate the built SPA assets: `$SEBENZA_FRONTEND_DIST`, else `<project>/frontend/dist`.
-/// Returns `None` when neither exists (API-only mode).
-fn resolve_frontend_dist(project_dir: &str) -> Option<PathBuf> {
-    if let Ok(dir) = std::env::var("SEBENZA_FRONTEND_DIST") {
-        let path = PathBuf::from(dir);
-        if path.is_dir() {
-            return Some(path);
-        }
-    }
-    let default = PathBuf::from(project_dir).join("frontend").join("dist");
-    default.is_dir().then_some(default)
+/// Optional on-disk SPA override. The frontend is embedded in the binary by
+/// default (see `server::FrontendAssets`); setting `$SEBENZA_FRONTEND_DIST` to a
+/// directory serves from disk instead (handy for iterating on a fresh build
+/// without recompiling). `None` → serve the embedded bundle.
+fn resolve_frontend_dist(_project_dir: &str) -> Option<PathBuf> {
+    let dir = std::env::var("SEBENZA_FRONTEND_DIST").ok()?;
+    let path = PathBuf::from(dir);
+    path.is_dir().then_some(path)
 }

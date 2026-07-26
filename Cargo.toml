@@ -25,6 +25,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 tokio = { version = "1.53.1", features = ["full"] }
 axum = { version = "0.8.9", features = ["ws"] }
 tower-http = { version = "0.7.0", features = ["fs", "cors", "trace"] }
+rust-embed = { version = "8", features = ["mime-guess"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
 tokio-tungstenite = "0.30.0"
 futures-util = { version = "0.3.33", default-features = false, features = ["sink", "std"] }

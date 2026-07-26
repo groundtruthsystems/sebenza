@@ -19,8 +19,9 @@ use crate::services::snapshot::build_project_snapshot;
 use crate::services::worktree_service::build_create_worktree_targets;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
+use rust_embed::RustEmbed;
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
@@ -258,7 +259,7 @@ struct BranchQuery {
 pub fn build_router(state: AppState) -> Router {
     let frontend_dist = state.frontend_dist.clone();
 
-    let mut router = Router::new()
+    let router = Router::new()
         // Hub routes (no project prefix).
         .route("/api/projects", get(list_projects).post(add_project))
         .route("/api/projects/init", get(list_project_inits))
@@ -305,15 +306,56 @@ pub fn build_router(state: AppState) -> Router {
         .route("/{prefix}/ws/{worktree}", get(ws_terminal))
         .with_state(state);
 
-    // SPA static serving: serve built frontend files, falling back to index.html
-    // for client-side routes.
-    if let Some(dist) = frontend_dist {
-        let index = dist.join("index.html");
-        let serve = ServeDir::new(dist).not_found_service(ServeFile::new(index));
-        router = router.fallback_service(serve);
+    // SPA static serving, falling back to index.html for client-side routes.
+    // Default: the frontend bundle embedded in the binary. A `SEBENZA_FRONTEND_DIST`
+    // override (via `frontend_dist`) serves from disk instead — handy for iterating
+    // on a freshly-built dist without recompiling the server.
+    match frontend_dist {
+        Some(dist) => {
+            let index = dist.join("index.html");
+            let serve = ServeDir::new(dist).not_found_service(ServeFile::new(index));
+            router.fallback_service(serve)
+        }
+        None => router.fallback(serve_embedded_frontend),
     }
+}
 
-    router
+/// The React SPA (`frontend/dist`) embedded into the binary at build time.
+#[derive(RustEmbed)]
+#[folder = "../../frontend/dist"]
+struct FrontendAssets;
+
+/// Serve an embedded frontend asset, falling back to `index.html` (200) for any
+/// unmatched path so client-side routes work.
+async fn serve_embedded_frontend(uri: Uri) -> Response {
+    let path = uri.path().trim_start_matches('/');
+    if let Some(asset) = FrontendAssets::get(path) {
+        let mime = asset.metadata.mimetype().to_string();
+        let cache = if path.starts_with("assets/") {
+            "public, max-age=31536000, immutable"
+        } else {
+            "no-cache"
+        };
+        return (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, cache.to_string()),
+            ],
+            asset.data,
+        )
+            .into_response();
+    }
+    match FrontendAssets::get("index.html") {
+        Some(index) => (
+            [
+                (header::CONTENT_TYPE, "text/html".to_string()),
+                (header::CACHE_CONTROL, "no-cache".to_string()),
+            ],
+            index.data,
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "frontend not built").into_response(),
+    }
 }
 
 async fn get_config(

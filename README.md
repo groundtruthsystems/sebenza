@@ -66,12 +66,17 @@ session survives even if you close the tab or the CLI process.
 ```bash
 git clone <repo-url> sebenza && cd sebenza
 
-# Backend (release binaries land in ./target/release/)
-cargo build --release
-
-# Frontend (produces ./frontend/dist/)
+# 1. Build the frontend first (produces ./frontend/dist/)
 cd frontend && npm install && npm run build && cd ..
+
+# 2. Build the backend — this EMBEDS ./frontend/dist into the sebenza-server
+#    binary, so the dashboard UI ships inside the executable.
+cargo build --release
 ```
+
+> Build the frontend before the backend: a release build bakes `frontend/dist`
+> into `sebenza-server`, so the server serves the UI from any directory with no
+> extra files. (Rebuild the backend after changing the frontend to re-embed it.)
 
 For convenience, put the two binaries on your `PATH`:
 
@@ -101,11 +106,12 @@ sebenza-cli serve          # starts sebenza-server + finds the built frontend
 ```
 
 Then open **http://localhost:5111** — the dashboard opens on your project. Add
-`--app` to launch it in a minimal browser window.
+`--app` to launch it in a minimal browser window. The UI is embedded in the
+binary, so this works from any directory with nothing else on disk.
 
-> Running the server binary directly instead of `sebenza-cli serve`? Point it at the
-> built SPA with `SEBENZA_FRONTEND_DIST=/path/to/sebenza/frontend/dist`, e.g.
-> `SEBENZA_FRONTEND_DIST=$PWD/frontend/dist sebenza-server serve --port 5111`.
+> **Dev override:** to serve a freshly-built SPA from disk without recompiling the
+> server, set `SEBENZA_FRONTEND_DIST=/path/to/sebenza/frontend/dist` — when set, the
+> server serves that directory instead of the embedded bundle.
 
 ### 5. Create a worktree and start working
 
@@ -162,7 +168,7 @@ Without `--port`, CLI commands target the live server for the current project
 | Machine-wide launchers | `~/.ai/sebenza.yaml` |
 | Server state (project registry, instances) | `~/.ai/sebenza/` |
 | Control token | `~/.config/sebenza/control-token` |
-| Environment | `PORT` (server port, default `5111`), `SEBENZA_FRONTEND_DIST` (SPA assets) |
+| Environment | `PORT` (server port, default `5111`); `SEBENZA_FRONTEND_DIST` (optional — serve the SPA from disk instead of the embedded bundle) |
 
 ## Development
 
