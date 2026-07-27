@@ -193,7 +193,7 @@ export default function ProjectSwitcher({ current }: { current: string }) {
                 onKeyDown={handleAddKeydown}
                 placeholder="Path to a git repo…"
                 disabled={busy}
-                className="flex-1 min-w-0 px-2 py-1 text-[12px] rounded border border-edge bg-bg text-primary placeholder:text-muted disabled:opacity-50"
+                className="flex-1 min-w-0 px-2 py-1 text-[12px] rounded border border-edge bg-surface text-primary placeholder:text-muted disabled:opacity-50"
               />
               <button
                 type="button"
@@ -212,6 +212,15 @@ export default function ProjectSwitcher({ current }: { current: string }) {
             )}
             {addError && <div className="mt-1 text-[11px] text-red-400 break-words">{addError}</div>}
           </div>
+
+          <a
+            href="/registry"
+            role="menuitem"
+            className="block px-3 py-2 text-[12px] border-t border-edge hover:bg-hover"
+          >
+            <div className="text-primary">Sebenza registry</div>
+            <div className="text-muted text-[11px]">Tracks across every registered project</div>
+          </a>
         </div>
       )}
     </>

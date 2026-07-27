@@ -17,7 +17,7 @@ import MigrationBanner from "./lib/MigrationBanner";
 import Toggle from "./lib/Toggle";
 import TabBar from "./lib/TabBar";
 import DiffDialog from "./lib/DiffDialog";
-import ConductorBoard from "./lib/ConductorBoard";
+import TracksBoard from "./lib/TracksBoard";
 import type {
   AvailableBranch,
   AppNotification,
@@ -1232,7 +1232,7 @@ export default function App() {
           />
 
           {viewMode === "tracks" && selectedWorktree ? (
-            <ConductorBoard key={selectedBranch ?? ""} worktree={selectedWorktree} />
+            <TracksBoard key={selectedBranch ?? ""} worktree={selectedWorktree} />
           ) : showWebChat ? (
             <MobileChatSurface
               key={selectedBranch ?? ""}

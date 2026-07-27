@@ -266,6 +266,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/projects/migrate", post(migrate_projects))
         .route("/api/projects/{prefix}", delete(remove_project))
         .route("/api/instances", get(fetch_instances))
+        .route("/api/registry", get(fetch_registry))
+        .route("/api/registry/file", get(fetch_registry_file))
         .route("/api/runtime/events", post(runtime_event))
         // Per-project routes, scoped under `/<prefix>`.
         .route("/{prefix}/api/config", get(get_config))
@@ -283,8 +285,8 @@ pub fn build_router(state: AppState) -> Router {
         .route("/{prefix}/api/worktrees/{name}/launch", post(launch_worktree))
         .route("/{prefix}/api/worktrees/{name}/send", post(send_worktree_prompt))
         .route("/{prefix}/api/worktrees/{name}/diff", get(fetch_worktree_diff))
-        .route("/{prefix}/api/worktrees/{name}/conductor-tracks", get(fetch_conductor_tracks))
-        .route("/{prefix}/api/worktrees/{name}/conductor-file", get(fetch_conductor_file))
+        .route("/{prefix}/api/worktrees/{name}/tracks", get(fetch_tracks))
+        .route("/{prefix}/api/worktrees/{name}/track-file", get(fetch_track_file))
         .route("/{prefix}/api/worktrees/{name}/tabs", post(create_worktree_tab))
         .route("/{prefix}/api/worktrees/{name}/shell", post(create_worktree_shell_tab))
         .route("/{prefix}/api/worktrees/{name}/tabs/{tabId}/select", post(select_worktree_tab))
@@ -1040,52 +1042,61 @@ fn worktree_path(app: &ProjectApp, branch: &str) -> Result<String, LifecycleErro
         })
 }
 
-/// Conductor kanban registry (`conductor/tracks.json`) for a worktree.
-/// Returns `null` when the worktree has no conductor board.
-async fn fetch_conductor_tracks(
+/// Sebenza track registry (`.ai/sebenza/tracks.json`) for a worktree.
+/// Returns `null` when the worktree has no Sebenza workspace.
+async fn fetch_tracks(
     State(state): State<AppState>,
     Path((prefix, name)): Path<(String, String)>,
 ) -> Result<Json<Option<serde_json::Value>>, ApiError> {
     let app = state.project(&prefix)?;
     let value = run_blocking(move || {
         let path = worktree_path(&app, &name)?;
-        Ok(crate::adapters::fs::read_conductor_tracks(&path))
+        Ok(crate::adapters::fs::read_tracks(&path))
     })
     .await?;
     Ok(Json(value))
 }
 
 #[derive(Deserialize)]
-struct ConductorFileQuery {
+struct TrackFileQuery {
     path: String,
 }
 
-/// A single file under a worktree's conductor dir (plan.json / spec.md / design.md),
+/// A single file under a worktree's `.ai/sebenza` dir (plan.json / spec.md / design.md),
 /// returned as `{ path, content }`. 400 on path traversal, 404 when absent.
-async fn fetch_conductor_file(
+async fn fetch_track_file(
     State(state): State<AppState>,
     Path((prefix, name)): Path<(String, String)>,
-    Query(query): Query<ConductorFileQuery>,
+    Query(query): Query<TrackFileQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let app = state.project(&prefix)?;
     let rel = query.path;
     let response = run_blocking(move || {
-        use crate::adapters::fs::ConductorFileError;
         let path = worktree_path(&app, &name)?;
-        match crate::adapters::fs::read_conductor_file(&path, &rel) {
-            Ok(content) => Ok(serde_json::json!({ "path": rel, "content": content })),
-            Err(ConductorFileError::Traversal) => Err(LifecycleError {
-                message: "Invalid conductor file path".to_string(),
-                status: 400,
-            }),
-            Err(ConductorFileError::NotFound) => Err(LifecycleError {
-                message: format!("Conductor file not found: {rel}"),
-                status: 404,
-            }),
-        }
+        track_file_json(crate::adapters::fs::read_track_file(&path, &rel), rel)
     })
     .await?;
     Ok(Json(response))
+}
+
+/// Shape a track-file read into `{ path, content }` or the matching HTTP error.
+/// Shared by the per-worktree and registry-scoped endpoints.
+fn track_file_json(
+    read: Result<String, crate::adapters::fs::TrackFileError>,
+    rel: String,
+) -> Result<serde_json::Value, LifecycleError> {
+    use crate::adapters::fs::TrackFileError;
+    match read {
+        Ok(content) => Ok(serde_json::json!({ "path": rel, "content": content })),
+        Err(TrackFileError::Traversal) => Err(LifecycleError {
+            message: "Invalid track file path".to_string(),
+            status: 400,
+        }),
+        Err(TrackFileError::NotFound) => Err(LifecycleError {
+            message: format!("Track file not found: {rel}"),
+            status: 404,
+        }),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1597,6 +1608,41 @@ fn to_summary(app: &ProjectApp) -> ProjectSummary {
         path: app.path.clone(),
         active: app.active.load(Ordering::Relaxed),
     }
+}
+
+/// The `sebenza` plugin's user-scoped registry (`~/.ai/sebenza/registry.json`)
+/// with each registered project's `tracks.json` resolved — the cross-project
+/// portfolio. Broken entries come back flagged rather than omitted, so this
+/// never fails because one project moved.
+async fn fetch_registry() -> Result<Json<serde_json::Value>, ApiError> {
+    let portfolio =
+        run_blocking(|| Ok(common::services::portfolio_service::load_portfolio())).await?;
+    serde_json::to_value(portfolio)
+        .map(Json)
+        .map_err(|e| ApiError::new(500, e.to_string()))
+}
+
+#[derive(Deserialize)]
+struct RegistryFileQuery {
+    /// Absolute project root, matched exactly against a registry entry.
+    project: String,
+    /// Path relative to that project's Sebenza workspace.
+    path: String,
+}
+
+/// A track artifact (plan.json / spec.md / design.md) belonging to a registered
+/// project, for portfolio drill-down.
+async fn fetch_registry_file(
+    Query(query): Query<RegistryFileQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let RegistryFileQuery { project, path: rel } = query;
+    let response = run_blocking(move || {
+        let read =
+            common::services::portfolio_service::read_registry_track_file(&project, &rel);
+        track_file_json(read, rel)
+    })
+    .await?;
+    Ok(Json(response))
 }
 
 async fn list_projects(State(state): State<AppState>) -> Json<serde_json::Value> {

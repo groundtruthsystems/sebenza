@@ -10,6 +10,7 @@ pub mod config_view;
 pub mod init_authoring;
 pub mod lifecycle_service;
 pub mod llm_spawn;
+pub mod portfolio_service;
 pub mod pr_service;
 pub mod project_runtime;
 pub mod reconciliation;

@@ -33,9 +33,11 @@ import {
   SetWorktreeLabelResponseSchema,
   ToggleEnabledRequestSchema,
   WorktreeDiffResponseSchema,
-  ConductorTracksSchema,
-  ConductorFileQuerySchema,
-  ConductorFileResponseSchema,
+  TracksSchema,
+  TrackFileQuerySchema,
+  TrackFileResponseSchema,
+  PortfolioSchema,
+  RegistryFileQuerySchema,
   WorktreeListResponseSchema,
   WorktreeNameParamsSchema,
   WorktreeTabParamsSchema,
@@ -85,8 +87,8 @@ export const apiPaths = {
   deleteWorktreeTab: "/api/worktrees/:name/tabs/:tabId",
   mergeWorktree: "/api/worktrees/:name/merge",
   fetchWorktreeDiff: "/api/worktrees/:name/diff",
-  fetchConductorTracks: "/api/worktrees/:name/conductor-tracks",
-  fetchConductorFile: "/api/worktrees/:name/conductor-file",
+  fetchTracks: "/api/worktrees/:name/tracks",
+  fetchTrackFile: "/api/worktrees/:name/track-file",
   fetchAutoNameConfig: "/api/project/auto-name",
   setAutoRemoveOnMerge: "/api/github/auto-remove-on-merge",
   pullMain: "/api/pull-main",
@@ -98,6 +100,8 @@ export const apiPaths = {
   projectInits: "/api/projects/init",
   migrateProjects: "/api/projects/migrate",
   removeProject: "/api/projects/:prefix",
+  fetchRegistry: "/api/registry",
+  fetchRegistryFile: "/api/registry/file",
 } as const;
 
 const commonErrorResponses = {
@@ -393,22 +397,22 @@ export const apiContract = c.router({
       ...commonErrorResponses,
     },
   },
-  fetchConductorTracks: {
+  fetchTracks: {
     method: "GET",
-    path: apiPaths.fetchConductorTracks,
+    path: apiPaths.fetchTracks,
     pathParams: WorktreeNameParamsSchema,
     responses: {
-      200: ConductorTracksSchema.nullable(),
+      200: TracksSchema.nullable(),
       ...commonErrorResponses,
     },
   },
-  fetchConductorFile: {
+  fetchTrackFile: {
     method: "GET",
-    path: apiPaths.fetchConductorFile,
+    path: apiPaths.fetchTrackFile,
     pathParams: WorktreeNameParamsSchema,
-    query: ConductorFileQuerySchema,
+    query: TrackFileQuerySchema,
     responses: {
-      200: ConductorFileResponseSchema,
+      200: TrackFileResponseSchema,
       ...commonErrorResponses,
     },
   },
@@ -473,6 +477,23 @@ export const apiContract = c.router({
     responses: {
       200: InstancesResponseSchema,
       500: ErrorResponseSchema,
+    },
+  },
+  fetchRegistry: {
+    method: "GET",
+    path: apiPaths.fetchRegistry,
+    responses: {
+      200: PortfolioSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  fetchRegistryFile: {
+    method: "GET",
+    path: apiPaths.fetchRegistryFile,
+    query: RegistryFileQuerySchema,
+    responses: {
+      200: TrackFileResponseSchema,
+      ...commonErrorResponses,
     },
   },
   fetchProjects: {

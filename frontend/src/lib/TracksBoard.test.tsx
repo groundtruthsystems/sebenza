@@ -1,14 +1,14 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import ConductorBoard from "./ConductorBoard";
-import type { ConductorTracks, WorktreeInfo } from "./types";
+import TracksBoard from "./TracksBoard";
+import type { Tracks, WorktreeInfo } from "./types";
 
 vi.mock("./api", () => ({
-  fetchConductorTracks: vi.fn(),
-  fetchConductorFile: vi.fn(),
+  fetchTracks: vi.fn(),
+  fetchTrackFile: vi.fn(),
 }));
 
-import { fetchConductorTracks } from "./api";
+import { fetchTracks } from "./api";
 
 const worktree = { branch: "feature/x" } as unknown as WorktreeInfo;
 
@@ -29,18 +29,18 @@ const sampleTracks = {
       progress: { total_tasks: 16, completed_tasks: 15, percentage: 94 },
     },
   ],
-} as unknown as ConductorTracks;
+} as unknown as Tracks;
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
 
-describe("ConductorBoard", () => {
+describe("TracksBoard", () => {
   it("renders a track group with its phases as cards under status columns", async () => {
-    vi.mocked(fetchConductorTracks).mockResolvedValue(sampleTracks);
+    vi.mocked(fetchTracks).mockResolvedValue(sampleTracks);
 
-    render(<ConductorBoard worktree={worktree} />);
+    render(<TracksBoard worktree={worktree} />);
 
     // Group header shows the track description + phase completion.
     await waitFor(() =>
@@ -61,13 +61,13 @@ describe("ConductorBoard", () => {
     expect(screen.getByRole("button", { name: "View" })).toBeInTheDocument();
   });
 
-  it("shows the empty state when there is no conductor board", async () => {
-    vi.mocked(fetchConductorTracks).mockResolvedValue(null);
+  it("shows the empty state when there is no Sebenza workspace", async () => {
+    vi.mocked(fetchTracks).mockResolvedValue(null);
 
-    render(<ConductorBoard worktree={worktree} />);
+    render(<TracksBoard worktree={worktree} />);
 
     await waitFor(() =>
-      expect(screen.getByText(/No conductor tracks for this worktree/i)).toBeInTheDocument(),
+      expect(screen.getByText(/No Sebenza tracks for this worktree/i)).toBeInTheDocument(),
     );
   });
 });

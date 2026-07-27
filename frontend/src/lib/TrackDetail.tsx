@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
-import type { ConductorTrack } from "./types";
+import type { Track, TrackFileFetcher } from "./types";
 import BaseDialog from "./BaseDialog";
-import ConductorMarkdown from "./ConductorMarkdown";
+import TrackMarkdown from "./TrackMarkdown";
 
 type DocsTab = "spec" | "design";
 
@@ -34,13 +34,13 @@ function TabBtn({
 
 /** Track "docs" modal — the group's `spec.md` / `design.md` (markdown + mermaid).
  *  The plan is visualized by the board itself + the per-phase detail. */
-export default function ConductorTrackDetail({
-  branch,
+export default function TrackDetail({
+  fetchFile,
   track,
   onclose,
 }: {
-  branch: string;
-  track: ConductorTrack;
+  fetchFile: TrackFileFetcher;
+  track: Track;
   onclose: () => void;
 }) {
   const hasSpec = !!track.spec_path;
@@ -70,9 +70,9 @@ export default function ConductorTrackDetail({
       </div>
 
       <div className="overflow-auto max-h-[70vh]">
-        {tab === "spec" && hasSpec && <ConductorMarkdown branch={branch} path={track.spec_path!} />}
+        {tab === "spec" && hasSpec && <TrackMarkdown fetchFile={fetchFile} path={track.spec_path!} />}
         {tab === "design" && hasDesign && (
-          <ConductorMarkdown branch={branch} path={track.design_path!} />
+          <TrackMarkdown fetchFile={fetchFile} path={track.design_path!} />
         )}
         {tab === "spec" && !hasSpec && (
           <div className="text-sm text-muted py-8 text-center">No spec.md for this track.</div>
