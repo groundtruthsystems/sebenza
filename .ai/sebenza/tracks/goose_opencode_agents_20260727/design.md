@@ -46,7 +46,7 @@ larger injection surface. Phasing is therefore still recommended, but on **imple
 grounds rather than because opencode's capabilities are unknown — **both agents target full parity.**
 
 **Scope note.** Because opencode can genuinely gate a tool call, this track also builds a Sebenza-side
-**permission approve/deny flow** for it (UC15/UC16, Application §9, Phase 3). That is the first time
+**permission approve/deny flow** for it (UC15/UC16, Application §9, Phase 4). That is the first time
 Sebenza can *enforce* a decision rather than observe one, and it is the only substantially new
 infrastructure here: a synchronous, authenticated decision channel, since every existing hook path is
 fire-and-forget.
@@ -1107,8 +1107,8 @@ above):
 | `artifact_written` / `artifact_overwritten` | which file, and whether it overwrote content that did not match the stored hash |
 | `untrusted_plugin_detected` | paths found, whether the user proceeded |
 | `shadowed_custom_agent_detected` | which custom-agent id was overridden by a builtin (see Data §7) |
-| `permission_decision` *(Phase 3)* | request id, verdict, and **resolution source** — browser session / CLI / timeout-deny. Without the source field a self-approval would be undetectable |
-| `pending_permission_cap_hit` *(Phase 3)* | session, cap value — makes a request flood visible rather than silently absorbed |
+| `permission_decision` *(Phase 4)* | request id, verdict, and **resolution source** — browser session / CLI / timeout-deny. Without the source field a self-approval would be undetectable |
+| `pending_permission_cap_hit` *(Phase 4)* | session, cap value — makes a request flood visible rather than silently absorbed |
 
 None of these carry secrets: the bypass mode is a closed enum, artifact events log filenames and a
 mismatch boolean rather than content, and paths are already classified Internal. That property must be
@@ -1178,7 +1178,7 @@ flowchart TB
 #### Findings by severity
 
 **Critical**
-0. **The permission-gate channel must not share one credential with the gated process** *(Phase 3)*. The
+0. **The permission-gate channel must not share one credential with the gated process** *(Phase 4)*. The
    agent holds `SEBENZA_CONTROL_TOKEN` via `control.env` (`fs.rs:320-330`), so a shared-token design lets
    it approve its own request — reducing the gate to protection only against a cooperative agent. *Fix:*
    asymmetric credentials (submit = control token; resolve = per-request server-minted secret delivered
@@ -1204,8 +1204,8 @@ flowchart TB
    LAN-reachability turns both from local-developer risk into anyone-on-the-network risk.
    ***Recommendation: make a loopback-default bind (with explicit opt-in for LAN) a blocking
    prerequisite for shipping `GOOSE_MODE=auto` specifically*** — the rest of Phase 1 need not wait.
-   **This scope now extends to Phase 3's two new routes**, whose whole purpose is to grant or deny code
-   execution. If the server still binds `0.0.0.0` when Phase 3 ships, any LAN host that obtains the token
+   **This scope now extends to Phase 4's two new routes**, whose whole purpose is to grant or deny code
+   execution. If the server still binds `0.0.0.0` when Phase 4 ships, any LAN host that obtains the token
    can submit or resolve permission requests for any worktree — strictly more dangerous than the
    `GOOSE_MODE=auto` case, because it subverts the mechanism advertised as enforcement. Bind those two
    routes to loopback unconditionally if the general bind decision is still outstanding.
@@ -1264,10 +1264,10 @@ outside the worktree at control-token trust tier. Loopback-default bind as a blo
 |---|---|
 | `sebenza-server/src/server.rs` | Replace 6+ string-dispatch sites with one enum-keyed table; capability-derived 409 messages; **resolve the unconditional `claude_conversation_service` calls at 1382 / ~1522** |
 | `sebenza-server/src/services/agent_stream.rs` | `StreamProvider` variants + `run_goose` / `run_opencode` |
-| `sebenza-server/src/server.rs` (Phase 3) | **New** blocking permission route + resolve route; pending-decision store; WS push. Both routes authenticated with the control token; verdicts bound to single-use request ids |
-| `frontend` (Phase 3) | Permission prompt card modelled on `AskUserQuestionCard.tsx`'s look (its plumbing is transcript-level and not reusable); wired to the resolve route |
-| `sebenza-cli` (Phase 3) | List and answer pending permission requests — CLI/UI parity |
-| `domain/config.rs` (Phase 3) | Per-profile permission-decision timeout |
+| `sebenza-server/src/server.rs` (Phase 4) | **New** submit + resolve routes, loopback-bound; pending-decision store mirroring `agent_stream.rs`'s `RunState` idiom; WS push. **Asymmetric auth** — submit uses the control token, resolve requires a per-request server-minted secret; verdicts single-use |
+| `frontend` (Phase 4) | Permission prompt card modelled on `AskUserQuestionCard.tsx`'s look (its plumbing is transcript-level and not reusable); wired to the resolve route |
+| `sebenza-cli` (Phase 4) | List and answer pending permission requests — CLI/UI parity |
+| `domain/config.rs` (Phase 4) | Per-profile permission-decision timeout |
 | `sebenza-cli/src/init.rs` | Act on the goose/opencode probes already at line 52; informational Bun/Node probe; report versions |
 | `sebenza-cli/src/oneshot.rs` | Replace the `Some("claude")` history-polling check with a capability |
 | `frontend/src/App.tsx` | `canFork` → capability; narrow `supportsWorktreeChat` fallback to fail-closed |
@@ -1285,21 +1285,25 @@ Configs written with `provider: goose` cannot be read by older Sebenza binaries 
 is a blocking prerequisite for shipping `GOOSE_MODE=auto`** (Security High #5); the rest of Phase 1
 does not wait on it. Also out of scope: `goose acp` as a deeper integration path; a Rust style guide.
 
-**Phasing.**
-- **Phase 1 — goose at full parity.** Registry/enum refactor (adding **only** the `Goose` variant),
-  unify the two builtin registries, invocation, hooks, JSONL parser with full tool-block fidelity,
-  pinned ids, docker config + session mounts, `GOOSE_MODE` via `runtime.env` with distinct disclosure,
-  git-exclude all generated artifacts, untrusted-plugin scan with stored-hash comparison, audit events,
-  `set_mode_600`, frontend capability wiring across all four hardcoded sites.
-- **Phase 2 — opencode.** Gated only on the four remaining opencode open questions (#1 blocking). Adds
-  the `Opencode` enum variant as its own exhaustiveness sweep, the import-free JS shim wired to the
-  generic `event` hook (`EventSessionCreated` → id capture, `EventSessionIdle` → idle,
+**Phasing.** *(Final order — opencode leads; see `plan.json`.)*
+- **Phase 0 — Verification & prerequisites.** The two blocking opencode checks, fixture capture, the
+  latent `claude_conversation_service` dispatch investigation, and the loopback-default bind.
+- **Phase 1 — Agent abstraction & capability model.** Registry/enum refactor carrying **only** `Claude`
+  and `Codex`, unify the two builtin registries, add the three capability fields, route every `server.rs`
+  dispatch site through the registry, and replace all four hardcoded frontend identity checks. A **pure
+  refactor** — behaviour for the existing agents must be unchanged.
+- **Phase 2 — opencode at full parity, plus the shared controls.** `Opencode` enum variant, import-free
+  JS shim on the generic `event` hook (`EventSessionCreated` → id capture, `EventSessionIdle` → idle,
   `EventSessionError` → runtime error, `tool.execute.*` → running/PR detection), history via
-  `opencode session list` + `opencode export --sanitize`, `--auto` for bypass, `--pure` as the
-  decline-path fallback, and `/root/.opencode/bin` on the docker PATH. **Scope is now comparable to
-  Phase 1, not reduced** — the earlier "capability-gated/reduced" framing was a consequence of opencode
-  being unverified and no longer reflects the evidence.
-- **Phase 3 — permission gating for opencode (UC15/UC16).** In scope for this track, sequenced last
+  `opencode session list` + `opencode export --sanitize`, `--auto` bypass, `--pure` as the decline-path
+  fallback, `~/.opencode/bin` probing. **Carries the shared security and runtime work** — git-exclusion,
+  `set_mode_600`, untrusted-plugin scan with stored-hash comparison, audit events, docker config +
+  session mounts, shadow resolution — because whichever agent lands first pays for that infrastructure,
+  and opencode's in-process JS execution needs it more than a shell hook does.
+- **Phase 3 — goose at full parity.** `Goose` variant, invocations with `-n` pinning, hooks JSON,
+  JSONL parser with full tool-block fidelity, `GOOSE_MODE` via `runtime.env` with distinct disclosure.
+  Inherits Phase 2's shared controls.
+- **Phase 4 — permission gating for opencode (UC15/UC16).** In scope for this track, sequenced last
   because it depends on Phase 2's shim and introduces the only new *infrastructure* in the design: a
   synchronous, authenticated decision channel (new control route, pending-decision store, WS push,
   dashboard card, CLI parity), plus a fail-closed timeout policy. See Application §9. Verify the
@@ -1327,7 +1331,7 @@ does not wait on it. Also out of scope: `goose acp` as a deeper integration path
   A shim that imports nothing avoids it. `~/.config/opencode/` is npm/bun-managed.
 
 **opencode — still open**
-0. **Does `permission.ask` still fire when `--auto` is passed?** Determines whether bypass and Sebenza-side gating can coexist or are mutually exclusive. Blocks Phase 3 wiring.
+0. **Does `permission.ask` still fire when `--auto` is passed?** Determines whether bypass and Sebenza-side gating can coexist or are mutually exclusive. Blocks Phase 4 wiring.
 1. Does opencode resolve a **linked git worktree** to its own `project` row, or to the parent repository's? The only row on this machine is a main checkout. **Blocks correlation** — verify against a real Sebenza worktree.
 2. Does `run --format json` echo the session id synchronously, giving a second (simpler) path to id capture besides the `event` hook?
 3. What is the `opencode export` JSON shape, and how does it map onto `AgentsUiMessage`? Needs a real authenticated session to capture (this install has 0 credentials).
