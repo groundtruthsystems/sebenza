@@ -55,34 +55,42 @@ session survives even if you close the tab or the CLI process.
 
 ### 1. Prerequisites
 
-- **Rust** — a recent stable toolchain (2024 edition, i.e. Rust **1.85+**).
-- **Node.js 20+** and **npm** — to build the frontend.
 - **git** and **tmux** — required for worktrees and terminal sessions.
 - Optional: **`gh`** (PR/CI monitoring), **`claude`** / **`codex`** CLIs (built-in
   agents), **`docker`** (sandboxed worktree runtime).
 
-### 2. Build
+Building from source additionally needs **Rust 1.85+** (2024 edition) and
+**Node.js 20+** with npm — see [Build from source](#build-from-source).
+
+### 2. Install
+
+The install script grabs the latest [GitHub Release](https://github.com/groundtruthsystems/sebenza/releases)
+build for your platform, verifies its checksum, and drops `sebenza-server` and
+`sebenza-cli` into `~/.local/bin`:
 
 ```bash
-git clone <repo-url> sebenza && cd sebenza
-
-# 1. Build the frontend first (produces ./frontend/dist/)
-cd frontend && npm install && npm run build && cd ..
-
-# 2. Build the backend — this EMBEDS ./frontend/dist into the sebenza-server
-#    binary, so the dashboard UI ships inside the executable.
-cargo build --release
+curl -fsSL https://raw.githubusercontent.com/groundtruthsystems/sebenza/main/scripts/install.sh | bash
 ```
 
-> Build the frontend before the backend: a release build bakes `frontend/dist`
-> into `sebenza-server`, so the server serves the UI from any directory with no
-> extra files. (Rebuild the backend after changing the frontend to re-embed it.)
+The dashboard UI is embedded in `sebenza-server`, so those two binaries are the
+whole install — there is nothing else to put on disk.
 
-For convenience, put the two binaries on your `PATH`:
+Prebuilt binaries cover **Linux** (x86-64, arm64) and **macOS** (Apple Silicon).
+On an Intel Mac, build from source.
+
+If `~/.local/bin` isn't on your `PATH`, the script tells you what to add to your
+shell profile. To customise the install, run the script directly:
 
 ```bash
-export PATH="$PWD/target/release:$PATH"   # sebenza-cli, sebenza-server
+curl -fsSL https://raw.githubusercontent.com/groundtruthsystems/sebenza/main/scripts/install.sh -o install.sh
+bash install.sh --dir /usr/local/bin      # where to install (default ~/.local/bin)
+bash install.sh --version v0.1.0          # pin a release (default: latest)
+bash install.sh --uninstall               # remove the binaries again
 ```
+
+Each flag has a matching environment variable — `SEBENZA_INSTALL_DIR`,
+`SEBENZA_VERSION`, `SEBENZA_REPO` — and `GITHUB_TOKEN` is used for the release
+lookup when set. Re-running the script upgrades an existing install in place.
 
 ### 3. Configure a project
 
@@ -102,7 +110,7 @@ by hand.
 From your project directory:
 
 ```bash
-sebenza-cli serve          # starts sebenza-server + finds the built frontend
+sebenza-cli serve          # starts sebenza-server with the embedded dashboard
 ```
 
 Then open **http://localhost:5111** — the dashboard opens on your project. Add
@@ -135,6 +143,32 @@ sebenza-cli project ls
 They all appear on the same dashboard, each under `/<prefix>`.
 
 ---
+
+## Build from source
+
+Needed for Intel macOS, and for hacking on Sebenza. Requires **Rust 1.85+** (2024
+edition) and **Node.js 20+** with npm.
+
+```bash
+git clone https://github.com/groundtruthsystems/sebenza.git && cd sebenza
+
+# 1. Build the frontend first (produces ./frontend/dist/)
+cd frontend && npm install && npm run build && cd ..
+
+# 2. Build the backend — this EMBEDS ./frontend/dist into the sebenza-server
+#    binary, so the dashboard UI ships inside the executable.
+cargo build --release
+```
+
+> Build the frontend before the backend: a release build bakes `frontend/dist`
+> into `sebenza-server`, so the server serves the UI from any directory with no
+> extra files. (Rebuild the backend after changing the frontend to re-embed it.)
+
+For convenience, put the two binaries on your `PATH`:
+
+```bash
+export PATH="$PWD/target/release:$PATH"   # sebenza-cli, sebenza-server
+```
 
 ## CLI overview
 
