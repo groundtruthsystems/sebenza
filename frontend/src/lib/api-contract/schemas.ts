@@ -432,24 +432,25 @@ export const WorktreeDiffResponseSchema = z.object({
   unpushedCommits: z.array(UnpushedCommitSchema),
 });
 
-// ── Conductor tracks (kanban) ────────────────────────────────────────────────
-// These model external `conductor-tracks-v1` files (snake_case, may evolve), so
-// the schemas are lenient: `.passthrough()` keeps unknown keys and unexpected
-// statuses fall back rather than failing response validation.
-export const ConductorStatusSchema = z
+// ── Sebenza tracks (kanban) ──────────────────────────────────────────────────
+// These model external `sebenza-tracks-v1` files written by the sebenza plugin
+// into `.ai/sebenza/` (snake_case, may evolve), so the schemas are lenient:
+// `.passthrough()` keeps unknown keys and unexpected statuses fall back rather
+// than failing response validation.
+export const TrackStatusSchema = z
   .enum(["backlog", "doing", "blocked", "unblocked", "done"])
   .catch("backlog");
 
-export const ConductorPhaseSummarySchema = z
+export const PhaseSummarySchema = z
   .object({
     id: z.string(),
     name: z.string(),
-    status: ConductorStatusSchema,
+    status: TrackStatusSchema,
     blocked_reason: z.string().nullable().optional(),
   })
   .passthrough();
 
-export const ConductorProgressSchema = z
+export const TrackProgressSchema = z
   .object({
     total_tasks: z.number(),
     completed_tasks: z.number(),
@@ -457,34 +458,67 @@ export const ConductorProgressSchema = z
   })
   .passthrough();
 
-export const ConductorTrackSchema = z
+export const TrackSchema = z
   .object({
     track_id: z.string(),
     type: z.string().optional(),
     description: z.string(),
-    status: ConductorStatusSchema,
+    status: TrackStatusSchema,
     blocked_reason: z.string().nullable().optional(),
     created_at: z.string().optional(),
     updated_at: z.string().optional(),
     design_path: z.string().optional(),
     spec_path: z.string().optional(),
     plan_path: z.string().optional(),
-    phases_summary: z.array(ConductorPhaseSummarySchema).default([]),
-    progress: ConductorProgressSchema,
+    phases_summary: z.array(PhaseSummarySchema).default([]),
+    progress: TrackProgressSchema,
   })
   .passthrough();
 
-export const ConductorTracksSchema = z
+export const TracksSchema = z
   .object({
     project: z.object({ name: z.string() }).passthrough().optional(),
-    tracks: z.array(ConductorTrackSchema).default([]),
+    tracks: z.array(TrackSchema).default([]),
   })
   .passthrough();
 
-export const ConductorFileQuerySchema = z.object({ path: z.string() });
-export const ConductorFileResponseSchema = z.object({
+export const TrackFileQuerySchema = z.object({ path: z.string() });
+export const TrackFileResponseSchema = z.object({
   path: z.string(),
   content: z.string(),
+});
+
+// ── Sebenza registry portfolio (`~/.ai/sebenza/registry.json`) ───────────────
+// Per the plugin's daemon spec a project whose path or tracks.json has gone
+// missing is reported, not dropped — so `tracks` is nullable and `status`
+// carries the reason.
+export const RegistryProjectStatusSchema = z
+  .enum(["ok", "missing_path", "missing_tracks", "invalid_tracks"])
+  .catch("ok");
+
+export const RegistryProjectSchema = z
+  .object({
+    name: z.string(),
+    path: z.string(),
+    tracks_file: z.string(),
+    registered_at: z.string().optional(),
+    last_synced: z.string().optional(),
+    status: RegistryProjectStatusSchema,
+    tracks: TracksSchema.nullable().default(null),
+    error: z.string().nullable().optional(),
+  })
+  .passthrough();
+
+export const PortfolioSchema = z.object({
+  registry_path: z.string(),
+  exists: z.boolean(),
+  error: z.string().nullable().optional(),
+  projects: z.array(RegistryProjectSchema).default([]),
+});
+
+export const RegistryFileQuerySchema = z.object({
+  project: z.string(),
+  path: z.string(),
 });
 
 export const ServiceConfigSchema = z.object({
@@ -709,11 +743,14 @@ export type AgentsUiConversationEvent = z.infer<typeof AgentsUiConversationEvent
 export type WorktreeListResponse = z.infer<typeof WorktreeListResponseSchema>;
 export type UnpushedCommit = z.infer<typeof UnpushedCommitSchema>;
 export type WorktreeDiffResponse = z.infer<typeof WorktreeDiffResponseSchema>;
-export type ConductorStatus = z.infer<typeof ConductorStatusSchema>;
-export type ConductorPhaseSummary = z.infer<typeof ConductorPhaseSummarySchema>;
-export type ConductorTrack = z.infer<typeof ConductorTrackSchema>;
-export type ConductorTracks = z.infer<typeof ConductorTracksSchema>;
-export type ConductorFileResponse = z.infer<typeof ConductorFileResponseSchema>;
+export type TrackStatus = z.infer<typeof TrackStatusSchema>;
+export type PhaseSummary = z.infer<typeof PhaseSummarySchema>;
+export type Track = z.infer<typeof TrackSchema>;
+export type Tracks = z.infer<typeof TracksSchema>;
+export type TrackFileResponse = z.infer<typeof TrackFileResponseSchema>;
+export type RegistryProjectStatus = z.infer<typeof RegistryProjectStatusSchema>;
+export type RegistryProject = z.infer<typeof RegistryProjectSchema>;
+export type Portfolio = z.infer<typeof PortfolioSchema>;
 export type ServiceConfig = z.infer<typeof ServiceConfigSchema>;
 export type ProfileConfig = z.infer<typeof ProfileConfigSchema>;
 export type LinkedRepoInfo = z.infer<typeof LinkedRepoInfoSchema>;

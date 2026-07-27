@@ -37,7 +37,7 @@ export default function EmptyProjects() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-bg text-primary p-6">
+    <div className="min-h-screen flex items-center justify-center bg-surface text-primary p-6">
       <div className="w-full max-w-md">
         <h1 className="text-lg font-semibold mb-2">No projects yet</h1>
         <p className="text-sm text-muted mb-4">
@@ -72,6 +72,13 @@ export default function EmptyProjects() {
           </div>
         )}
         {error && <div className="mt-2 text-sm text-red-400 break-words">{error}</div>}
+        <p className="mt-6 text-sm text-muted">
+          Already using the sebenza plugin elsewhere? The{" "}
+          <a href="/registry" className="text-accent hover:underline">
+            registry
+          </a>{" "}
+          shows tracks across every project it knows about.
+        </p>
       </div>
     </div>
   );

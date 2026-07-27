@@ -8,8 +8,9 @@ import type {
   AgentsUiSendMessageResponse,
   AgentsUiWorktreeConversationResponse,
   AppNotification,
-  ConductorTracks,
-  ConductorFileResponse,
+  Tracks,
+  TrackFileResponse,
+  Portfolio,
   FileUploadResult,
   InstanceSummary,
   ProjectInitPhase,
@@ -127,15 +128,27 @@ export function fetchWorktreeConversationHistory(branch: string): Promise<Agents
   });
 }
 
-/** Conductor kanban registry for a worktree (`conductor/tracks.json`), or null
- *  when the worktree has no conductor board. */
-export function fetchConductorTracks(branch: string): Promise<ConductorTracks | null> {
-  return api.fetchConductorTracks({ params: { name: branch } });
+/** Sebenza track registry for a worktree (`.ai/sebenza/tracks.json`), or null
+ *  when the worktree has no Sebenza workspace. */
+export function fetchTracks(branch: string): Promise<Tracks | null> {
+  return api.fetchTracks({ params: { name: branch } });
 }
 
-/** A single file under a worktree's conductor dir (plan.json / spec.md / design.md). */
-export function fetchConductorFile(branch: string, path: string): Promise<ConductorFileResponse> {
-  return api.fetchConductorFile({ params: { name: branch }, query: { path } });
+/** A single file under a worktree's `.ai/sebenza` dir (plan.json / spec.md / design.md). */
+export function fetchTrackFile(branch: string, path: string): Promise<TrackFileResponse> {
+  return api.fetchTrackFile({ params: { name: branch }, query: { path } });
+}
+
+/** The user-scoped Sebenza registry (`~/.ai/sebenza/registry.json`) with each
+ *  registered project's tracks resolved — the cross-project portfolio view. */
+export function fetchRegistry(): Promise<Portfolio> {
+  return hubApi.fetchRegistry();
+}
+
+/** A track file belonging to a *registered* project, addressed by its absolute
+ *  registry `path` rather than by worktree. */
+export function fetchRegistryFile(project: string, path: string): Promise<TrackFileResponse> {
+  return hubApi.fetchRegistryFile({ query: { project, path } });
 }
 
 export function sendWorktreeConversationMessage(
@@ -287,16 +300,20 @@ export async function removeProject(prefix: string): Promise<void> {
   await hubApi.removeProject({ params: { prefix } });
 }
 
-export type ProjectBootstrap = "ready" | "redirecting" | "no-projects";
+export type ProjectBootstrap = "ready" | "redirecting" | "no-projects" | "registry";
 
 /** Decide what to mount before the app loads, based on the URL prefix and the
  *  known projects:
+ *  - `registry`     — `/registry`, the user-scoped portfolio; not a project, so
+ *                     it must short-circuit before the redirect below.
  *  - `ready`        — the URL points at a real project; mount the dashboard.
  *  - `redirecting`  — the URL has no/unknown prefix but projects exist; a
  *                     redirect to the first project is in flight, mount nothing.
  *  - `no-projects`  — nothing is registered; mount the empty state so the
  *                     dashboard doesn't boot into 404-ing per-project calls. */
 export async function ensureProjectPrefix(): Promise<ProjectBootstrap> {
+  // `registry` is a reserved prefix server-side, so it can never be a project.
+  if (activePrefix === "registry") return "registry";
   const projects = await fetchProjects().catch((): ProjectSummary[] => []);
   if (projects.some((project) => project.prefix === activePrefix)) return "ready";
   const target = projects[0]?.prefix;

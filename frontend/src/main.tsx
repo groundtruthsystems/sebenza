@@ -2,6 +2,7 @@ import "./app.css";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import EmptyProjects from "./lib/EmptyProjects";
+import RegistryView from "./lib/RegistryView";
 import { ensureProjectPrefix } from "./lib/api";
 import { applyTheme } from "./lib/utils";
 import { loadSavedTheme } from "./lib/utils";
@@ -15,7 +16,8 @@ async function start(): Promise<void> {
   const status = await ensureProjectPrefix();
   if (status === "redirecting") return;
   const root = createRoot(target);
-  root.render(status === "no-projects" ? <EmptyProjects /> : <App />);
+  if (status === "registry") root.render(<RegistryView />);
+  else root.render(status === "no-projects" ? <EmptyProjects /> : <App />);
 }
 
 void start();

@@ -20,9 +20,13 @@ URL prefixes — and everything the dashboard does is also available from the
   Git worktrees, each on its own branch, from the UI or CLI.
 - **AI agents in the browser** — launch `claude`, `codex`, or a custom agent in a
   worktree; interact through an embedded terminal or the in-app **web chat**.
-- **Conductor Tracks board** — a per-worktree Kanban view of a project's Conductor
-  tracks (`conductor/tracks.json`): phases as cards grouped by track, drill-down into
-  tasks/subtasks, and `spec.md` / `design.md` rendered with mermaid diagrams.
+- **Tracks board** — a per-worktree Kanban view of a project's Sebenza tracks
+  (`.ai/sebenza/tracks.json`, written by the `sebenza` Claude Code plugin):
+  phases as cards grouped by track, drill-down into tasks/subtasks, and `spec.md` /
+  `design.md` rendered with mermaid diagrams.
+- **Registry portfolio** — `/registry` aggregates tracks across *every* project in
+  the plugin's user-scoped registry (`~/.ai/sebenza/registry.json`), with a
+  cross-project status rollup and every blocker in one list.
 - **PR & CI monitoring** — surfaces GitHub PR state, review comments, and CI status
   per worktree (via the `gh` CLI); optionally auto-removes a worktree when its PR
   merges.

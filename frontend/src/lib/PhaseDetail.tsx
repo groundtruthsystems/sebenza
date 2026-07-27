@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
-import type { ConductorPlan, ConductorPlanPhase, ConductorPlanTask } from "./types";
-import { fetchConductorFile } from "./api";
+import type { TrackFileFetcher, TrackPlan, TrackPlanPhase, TrackPlanTask } from "./types";
 import { errorMessage } from "./utils";
 import BaseDialog from "./BaseDialog";
-import { statusDotClass, statusLabel, statusTextClass } from "./conductorStatus";
+import { statusDotClass, statusLabel, statusTextClass } from "./trackStatus";
 
-function TaskItem({ task }: { task: ConductorPlanTask }) {
+function TaskItem({ task }: { task: TrackPlanTask }) {
   return (
     <details className="rounded-md">
       <summary className="flex items-center gap-2 px-2 py-1 cursor-pointer text-[12px]">
@@ -15,7 +14,7 @@ function TaskItem({ task }: { task: ConductorPlanTask }) {
       <div className="pl-5 pr-2 pb-2 pt-1 text-[12px] text-muted space-y-1">
         {task.description && <p>{task.description}</p>}
         {task.blocked_reason && <p className="text-danger">Blocked: {task.blocked_reason}</p>}
-        {task.commit && <p className="font-mono text-[11px]">commit {task.commit}</p>}
+        {task.commit_sha && <p className="font-mono text-[11px]">commit {task.commit_sha}</p>}
         {task.notes && <p className="italic">{task.notes}</p>}
         {(task.subtasks ?? []).length > 0 && (
           <ul className="mt-1 space-y-0.5">
@@ -34,20 +33,20 @@ function TaskItem({ task }: { task: ConductorPlanTask }) {
 
 /** Modal showing a single phase's tasks → subtasks, read from the track's
  *  `plan.json` and matched by phase id. */
-export default function ConductorPhaseDetail({
-  branch,
+export default function PhaseDetail({
+  fetchFile,
   planPath,
   phaseId,
   phaseName,
   onclose,
 }: {
-  branch: string;
+  fetchFile: TrackFileFetcher;
   planPath: string | undefined;
   phaseId: string;
   phaseName: string;
   onclose: () => void;
 }) {
-  const [phase, setPhase] = useState<ConductorPlanPhase | null>(null);
+  const [phase, setPhase] = useState<TrackPlanPhase | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -59,11 +58,11 @@ export default function ConductorPhaseDetail({
     let cancelled = false;
     setLoading(true);
     setError("");
-    fetchConductorFile(branch, planPath)
+    fetchFile(planPath)
       .then((res) => {
         if (cancelled) return;
         try {
-          const plan = JSON.parse(res.content) as ConductorPlan;
+          const plan = JSON.parse(res.content) as TrackPlan;
           setPhase(plan.phases.find((p) => p.id === phaseId) ?? null);
         } catch {
           setError("Could not parse plan.json");
@@ -78,7 +77,7 @@ export default function ConductorPhaseDetail({
     return () => {
       cancelled = true;
     };
-  }, [branch, planPath, phaseId]);
+  }, [fetchFile, planPath, phaseId]);
 
   return (
     <BaseDialog onclose={onclose} wide maxWidth="80vw">

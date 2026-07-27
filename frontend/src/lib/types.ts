@@ -4,6 +4,7 @@ import type {
   OneshotConfig,
   PrEntry,
   ServiceStatus,
+  TrackFileResponse,
   WorktreeCreationPhase,
   WorktreeSource,
   WorktreeTab,
@@ -63,43 +64,55 @@ export type {
   WorktreeListResponse,
   WorktreeSource,
   WorktreeTab,
-  ConductorStatus,
-  ConductorPhaseSummary,
-  ConductorTrack,
-  ConductorTracks,
-  ConductorFileResponse,
+  TrackStatus,
+  PhaseSummary,
+  Track,
+  Tracks,
+  TrackFileResponse,
+  RegistryProjectStatus,
+  RegistryProject,
+  Portfolio,
 } from "./api-contract";
 export type { AgentsSendMessageRequest as AgentsUiSendMessageRequest } from "./api-contract";
 
 // Parsed `plan.json` (via a track's plan_path) — fetched as raw text through the
-// conductor-file endpoint and JSON.parsed client-side, so it's a frontend shape.
-export interface ConductorPlanSubtask {
+// track-file endpoint and JSON.parsed client-side, so it's a frontend shape.
+// Field names follow the plugin's `sebenza-plan-v1` schema.
+export interface TrackPlanSubtask {
   id: string;
   name: string;
   status: string;
   blocked_reason?: string | null;
 }
-export interface ConductorPlanTask {
+export interface TrackPlanTask {
   id: string;
   name: string;
   description?: string;
   status: string;
   blocked_reason?: string | null;
-  commit?: string;
+  /** Short SHA recorded by `sebenza-implement` when the task is completed. */
+  commit_sha?: string;
   notes?: string;
-  subtasks?: ConductorPlanSubtask[];
+  subtasks?: TrackPlanSubtask[];
 }
-export interface ConductorPlanPhase {
+export interface TrackPlanPhase {
   id: string;
   name: string;
   status: string;
   blocked_reason?: string | null;
-  tasks?: ConductorPlanTask[];
+  /** Short SHA of the phase checkpoint commit. */
+  checkpoint_sha?: string;
+  tasks?: TrackPlanTask[];
 }
-export interface ConductorPlan {
+export interface TrackPlan {
   track_id?: string;
-  phases: ConductorPlanPhase[];
+  phases: TrackPlanPhase[];
 }
+
+/** Reads a path relative to a Sebenza workspace root. Lets the track detail
+ *  views work against either a worktree (`fetchTrackFile`) or a registered
+ *  project (`fetchRegistryFile`). Callers must keep the reference stable. */
+export type TrackFileFetcher = (path: string) => Promise<TrackFileResponse>;
 
 export interface FileUploadResult {
   files: Array<{ path: string }>;

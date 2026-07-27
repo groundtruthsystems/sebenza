@@ -150,54 +150,60 @@ pub fn load_dotenv_local(worktree_path: &str) -> HashMap<String, String> {
     }
 }
 
-/// Why a conductor file read failed, so callers can pick the right HTTP status.
+/// Why a track file read failed, so callers can pick the right HTTP status.
 #[derive(Debug)]
-pub enum ConductorFileError {
-    /// The requested path escaped the conductor directory.
+pub enum TrackFileError {
+    /// The requested path escaped the Sebenza workspace directory.
     Traversal,
-    /// No conductor directory, or the file is absent.
+    /// No Sebenza workspace directory, or the file is absent.
     NotFound,
 }
 
-/// Resolve the conductor directory for a worktree: prefer `<worktree>/conductor`,
-/// falling back to `<worktree>/.sebenza/conductor`. `None` if neither exists.
-pub fn resolve_conductor_dir(worktree_path: &str) -> Option<PathBuf> {
-    let primary = Path::new(worktree_path).join("conductor");
-    if primary.is_dir() {
-        return Some(primary);
-    }
-    let fallback = Path::new(worktree_path).join(".sebenza").join("conductor");
-    if fallback.is_dir() {
-        return Some(fallback);
-    }
-    None
+/// Resolve the Sebenza workspace directory for a worktree: `<worktree>/.ai/sebenza`,
+/// the layout written by the `sebenza` Claude Code plugin (`sebenza-setup`). `None`
+/// when the worktree has no workspace.
+///
+/// Not to be confused with [`get_worktree_storage_paths`], which uses
+/// `<git_dir>/.ai/sebenza` — the same suffix under a *different* root (`.git/` or
+/// `.git/worktrees/<name>/`) for this app's own runtime state. The two never collide.
+pub fn resolve_tracks_dir(worktree_path: &str) -> Option<PathBuf> {
+    let dir = Path::new(worktree_path).join(".ai").join("sebenza");
+    dir.is_dir().then_some(dir)
 }
 
-/// Read `<conductor_dir>/tracks.json` as parsed JSON. `None` when there is no
-/// conductor dir, the file is absent, or it doesn't parse.
-pub fn read_conductor_tracks(worktree_path: &str) -> Option<serde_json::Value> {
-    let dir = resolve_conductor_dir(worktree_path)?;
+/// Read `<worktree>/.ai/sebenza/tracks.json` (`sebenza-tracks-v1`) as parsed JSON.
+/// `None` when there is no workspace, the file is absent, or it doesn't parse.
+pub fn read_tracks(worktree_path: &str) -> Option<serde_json::Value> {
+    let dir = resolve_tracks_dir(worktree_path)?;
     let content = fs::read_to_string(dir.join("tracks.json")).ok()?;
     serde_json::from_str(&content).ok()
 }
 
-/// Read a text file at `<conductor_dir>/<rel>` (e.g. `tracks/<id>/plan.json`).
-/// Guards against path traversal: `rel` may not be absolute or contain `..`, and
-/// the canonicalized target must stay within the conductor dir (defends against
-/// symlink escapes).
-pub fn read_conductor_file(worktree_path: &str, rel: &str) -> Result<String, ConductorFileError> {
-    let dir = resolve_conductor_dir(worktree_path).ok_or(ConductorFileError::NotFound)?;
+/// Read a text file at `<workspace_dir>/<rel>` (e.g. `tracks/<id>/plan.json`) — the
+/// track `design_path` / `spec_path` / `plan_path` values are relative to the
+/// workspace root. Guards against path traversal: `rel` may not be absolute or
+/// contain `..`, and the canonicalized target must stay within the workspace dir
+/// (defends against symlink escapes).
+pub fn read_track_file(worktree_path: &str, rel: &str) -> Result<String, TrackFileError> {
+    let dir = resolve_tracks_dir(worktree_path).ok_or(TrackFileError::NotFound)?;
+    read_track_file_in(&dir, rel)
+}
+
+/// Traversal-guarded read of `<dir>/<rel>`, where `dir` is an already-resolved
+/// Sebenza workspace. Split out so the registry portfolio can reuse the guard for
+/// projects that aren't worktrees of the active project.
+pub fn read_track_file_in(dir: &Path, rel: &str) -> Result<String, TrackFileError> {
     let rel_path = Path::new(rel.trim_start_matches("./"));
     if rel_path.is_absolute() || rel_path.components().any(|c| matches!(c, Component::ParentDir)) {
-        return Err(ConductorFileError::Traversal);
+        return Err(TrackFileError::Traversal);
     }
-    let canon_dir = fs::canonicalize(&dir).map_err(|_| ConductorFileError::NotFound)?;
+    let canon_dir = fs::canonicalize(dir).map_err(|_| TrackFileError::NotFound)?;
     match fs::canonicalize(dir.join(rel_path)) {
         Ok(target) if target.starts_with(&canon_dir) => {
-            fs::read_to_string(&target).map_err(|_| ConductorFileError::NotFound)
+            fs::read_to_string(&target).map_err(|_| TrackFileError::NotFound)
         }
-        Ok(_) => Err(ConductorFileError::Traversal),
-        Err(_) => Err(ConductorFileError::NotFound),
+        Ok(_) => Err(TrackFileError::Traversal),
+        Err(_) => Err(TrackFileError::NotFound),
     }
 }
 
@@ -337,65 +343,64 @@ mod tests {
 
     fn temp_worktree() -> PathBuf {
         let dir = std::env::temp_dir()
-            .join(format!("sebenza-conductor-test-{}", crate::util::id::random_hex(8)));
+            .join(format!("sebenza-tracks-test-{}", crate::util::id::random_hex(8)));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
 
     #[test]
-    fn resolve_conductor_dir_prefers_conductor_then_sebenza() {
+    fn resolve_tracks_dir_finds_ai_sebenza_only() {
         let wt = temp_worktree();
-        assert!(resolve_conductor_dir(&wt.to_string_lossy()).is_none());
+        assert!(resolve_tracks_dir(&wt.to_string_lossy()).is_none());
 
-        // Fallback: .sebenza/conductor
-        let fallback = wt.join(".sebenza").join("conductor");
-        fs::create_dir_all(&fallback).unwrap();
-        assert_eq!(resolve_conductor_dir(&wt.to_string_lossy()), Some(fallback));
+        // The retired Conductor layouts are no longer recognized.
+        fs::create_dir_all(wt.join("conductor")).unwrap();
+        fs::create_dir_all(wt.join(".sebenza").join("conductor")).unwrap();
+        assert!(resolve_tracks_dir(&wt.to_string_lossy()).is_none());
 
-        // Primary wins once conductor/ exists.
-        let primary = wt.join("conductor");
-        fs::create_dir_all(&primary).unwrap();
-        assert_eq!(resolve_conductor_dir(&wt.to_string_lossy()), Some(primary));
+        let workspace = wt.join(".ai").join("sebenza");
+        fs::create_dir_all(&workspace).unwrap();
+        assert_eq!(resolve_tracks_dir(&wt.to_string_lossy()), Some(workspace));
 
         fs::remove_dir_all(&wt).ok();
     }
 
     #[test]
-    fn read_conductor_tracks_present_and_absent() {
+    fn read_tracks_present_and_absent() {
         let wt = temp_worktree();
         let wt_str = wt.to_string_lossy().to_string();
-        assert!(read_conductor_tracks(&wt_str).is_none());
+        assert!(read_tracks(&wt_str).is_none());
 
-        let dir = wt.join("conductor");
+        let dir = wt.join(".ai").join("sebenza");
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("tracks.json"), r#"{"tracks":[{"track_id":"x"}]}"#).unwrap();
-        let tracks = read_conductor_tracks(&wt_str).unwrap();
+        let tracks = read_tracks(&wt_str).unwrap();
         assert_eq!(tracks["tracks"][0]["track_id"], "x");
 
         fs::remove_dir_all(&wt).ok();
     }
 
     #[test]
-    fn read_conductor_file_guards_traversal() {
+    fn read_track_file_guards_traversal() {
         let wt = temp_worktree();
         let wt_str = wt.to_string_lossy().to_string();
-        let dir = wt.join("conductor");
+        let dir = wt.join(".ai").join("sebenza");
         fs::create_dir_all(dir.join("tracks").join("t_1")).unwrap();
         fs::write(dir.join("tracks").join("t_1").join("plan.json"), "{}").unwrap();
-        // Secret file outside the conductor dir, to attempt to reach via `..`.
+        // Secret file outside the workspace dir, to attempt to reach via `..`.
         fs::write(wt.join("secret.txt"), "nope").unwrap();
 
         // Nested read works (leading "./" tolerated).
-        assert_eq!(read_conductor_file(&wt_str, "./tracks/t_1/plan.json").unwrap(), "{}");
+        assert_eq!(read_track_file(&wt_str, "./tracks/t_1/plan.json").unwrap(), "{}");
         // Traversal is rejected.
         assert!(matches!(
-            read_conductor_file(&wt_str, "../secret.txt"),
-            Err(ConductorFileError::Traversal)
+            read_track_file(&wt_str, "../../secret.txt"),
+            Err(TrackFileError::Traversal)
         ));
         // Absent file → NotFound.
         assert!(matches!(
-            read_conductor_file(&wt_str, "tracks/t_1/missing.md"),
-            Err(ConductorFileError::NotFound)
+            read_track_file(&wt_str, "tracks/t_1/missing.md"),
+            Err(TrackFileError::NotFound)
         ));
 
         fs::remove_dir_all(&wt).ok();

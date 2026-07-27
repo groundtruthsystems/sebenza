@@ -120,7 +120,7 @@ pub fn generate_fallback_branch_name() -> String {
 
 /// Path segments owned by the server's hub routes — a project prefix must not
 /// collide with these or `/<prefix>` would shadow them.
-const RESERVED_PROJECT_PREFIXES: [&str; 3] = ["api", "ws", "assets"];
+const RESERVED_PROJECT_PREFIXES: [&str; 4] = ["api", "ws", "assets", "registry"];
 
 /// Slug a string into a URL-path-friendly prefix (lowercase, hyphenated,
 /// alphanumeric only). Empty if nothing usable remains.
@@ -190,5 +190,16 @@ mod tests {
         assert!(!is_valid_branch_name("has space"));
         assert!(!is_valid_branch_name("bad~char"));
         assert!(!is_valid_branch_name("-leading"));
+    }
+
+    /// A repo whose basename matches a hub route must not be able to shadow it
+    /// — `/registry` serves the portfolio, so it is reserved alongside api/ws.
+    #[test]
+    fn project_prefixes_never_shadow_hub_routes() {
+        for reserved in ["api", "ws", "assets", "registry"] {
+            let prefix = derive_project_prefix(&format!("/home/dev/{reserved}"), []);
+            assert_eq!(prefix, format!("{reserved}-2"), "{reserved} must be reserved");
+        }
+        assert_eq!(derive_project_prefix("/home/dev/my-app", []), "my-app");
     }
 }

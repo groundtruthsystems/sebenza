@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Marked, type Tokens } from "marked";
-import { fetchConductorFile } from "./api";
+import type { TrackFileFetcher } from "./types";
 import { errorMessage } from "./utils";
 
 // Lazy-load mermaid (large) only when a markdown doc is viewed, so it stays out
@@ -19,12 +19,18 @@ function loadMermaid() {
 // Unique id per rendered diagram (mermaid.render requires a unique DOM id).
 let mermaidSeq = 0;
 
-/** Renders a conductor markdown file (spec.md / design.md), rendering ```mermaid
+/** Renders a track markdown file (spec.md / design.md), rendering ```mermaid
  *  fenced blocks to inline SVG. Mermaid is rendered to SVG *before* the HTML is
  *  set, so the diagram is part of the one-shot `dangerouslySetInnerHTML` and
  *  React never clobbers it on re-render. Content is the user's own local
  *  worktree file (trusted). */
-export default function ConductorMarkdown({ branch, path }: { branch: string; path: string }) {
+export default function TrackMarkdown({
+  fetchFile,
+  path,
+}: {
+  fetchFile: TrackFileFetcher;
+  path: string;
+}) {
   const [html, setHtml] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -36,7 +42,7 @@ export default function ConductorMarkdown({ branch, path }: { branch: string; pa
 
     void (async () => {
       try {
-        const res = await fetchConductorFile(branch, path);
+        const res = await fetchFile(path);
 
         // Collect ```mermaid blocks and leave placeholders; other markdown +
         // code blocks render via marked's default renderer (return false).
@@ -83,7 +89,7 @@ export default function ConductorMarkdown({ branch, path }: { branch: string; pa
     return () => {
       cancelled = true;
     };
-  }, [branch, path]);
+  }, [fetchFile, path]);
 
   if (loading) return <div className="text-sm text-muted py-8 text-center">Loading…</div>;
   if (error) return <div className="text-sm text-danger py-8 text-center">{error}</div>;

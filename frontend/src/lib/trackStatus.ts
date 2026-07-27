@@ -1,7 +1,7 @@
-import type { ConductorStatus } from "./types";
+import type { TrackStatus } from "./types";
 
 /** Kanban columns, in board order. */
-export const CONDUCTOR_COLUMNS: { key: ConductorStatus; label: string }[] = [
+export const TRACK_COLUMNS: { key: TrackStatus; label: string }[] = [
   { key: "backlog", label: "Backlog" },
   { key: "doing", label: "Doing" },
   { key: "blocked", label: "Blocked" },
