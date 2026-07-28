@@ -98,19 +98,21 @@
           "id": "phase-1-task-5",
           "name": "Write tests for unified builtin registry",
           "description": "FR-1.2. Failing tests asserting config_view.rs's agent summaries derive from agent_registry.rs - one builtin list, one capability struct - and that build_app_config exposes the same agents and capabilities as list_agent_details.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "5c7f8b0"
         },
         {
           "id": "phase-1-task-6",
           "name": "Unify the duplicate builtin agent registries",
           "description": "FR-1.2. config_view.rs:25-48 currently defines its own builtin_agent_summaries(), its own AgentCapabilities struct and its own shadow filter, and server.rs:366 serves it as build_app_config - which is what populates config.agents and therefore the Create Worktree picker. Derive it from agent_registry.rs so new agents and capabilities cannot silently drift between the two.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "5c7f8b0"
         },
         {
           "id": "phase-1-task-7",
           "name": "Write tests for registry-resolved server dispatch",
           "description": "FR-1.5. Failing tests asserting refresh_agent_terminal, agents_conversation, prepare_agent_send and submit_delay_for_branch resolve the agent via get_agent_definition and match on BuiltinAgentId rather than on raw strings.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-8",
