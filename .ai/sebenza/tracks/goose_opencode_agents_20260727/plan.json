@@ -58,7 +58,7 @@
           "commit_sha": "afa558a"
         }
       ],
-      "checkpoint_sha": "afa558a"
+      "checkpoint_sha": "1fda650"
     },
     {
       "id": "phase-1",
@@ -144,7 +144,7 @@
           "commit_sha": "f7dc21f"
         }
       ],
-      "checkpoint_sha": "f7dc21f"
+      "checkpoint_sha": "acc1b93"
     },
     {
       "id": "phase-2",
@@ -266,7 +266,7 @@
           "commit_sha": "ca3359e"
         }
       ],
-      "checkpoint_sha": "ca3359e"
+      "checkpoint_sha": "f00fba0"
     },
     {
       "id": "phase-3",

@@ -10,6 +10,7 @@
   Deliberately retains the goose research as input to the deferred track.
 - [Spec](./spec.md) — requirements, NFRs, acceptance criteria, out of scope
 - [Plan](./plan.json) — 4 phases, 44 tasks
+- [Track history](./TRACK-HISTORY.md) — task summaries and the four phase verification reports
 - [Metadata](./metadata.json)
 
 ## Summary
