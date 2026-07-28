@@ -41,7 +41,7 @@ the *stronger* integration target on the dimension that matters most for safety.
 | Hook mechanism | Shell commands via the **Open Plugins** spec; project-scope auto-discovery at `<worktree>/.agents/plugins/<name>/hooks/hooks.json`; no enable flag | **JS/TS plugin loaded in-process** from `.opencode/plugins/`; `~/.config/opencode/` is npm/bun-managed (`package.json`, `bun.lock`, `node_modules/@opencode-ai/plugin`) |
 | Events | `SessionStart`, `SessionEnd`, `Stop`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `BeforeReadFile`, `AfterFileEdit`, `BeforeShellExecution`, `AfterShellExecution` | Named hooks `permission.ask`, `tool.execute.before/after`, `tool.definition`, `chat.message/params/headers`, `command.execute.before`, `shell.env`, `experimental.*`, `dispose`, `config`, `auth`, `provider` — **plus a generic `event` hook** carrying the full SDK Event union, incl. `EventSessionCreated`, `EventSessionIdle`, `EventSessionError`, and reasoning/prompt deltas |
 | **Can gate a tool call?** | **No** — hooks are observe-only and non-blocking | **YES** — `permission.ask?: (input: Permission, output: { status: "ask" \| "deny" \| "allow" })`. The output is **mutable**, so a plugin can allow or deny. Stronger than goose *and* than codex, whose `PermissionRequest` handler only signals `idle` |
-| Session history | `~/.local/share/goose/sessions/<id>.jsonl`; line 1 header `{working_dir, description, message_count, total_tokens, …}`, then `{id, role, content, created}` where **`content` is a structured block array** (`text`, `toolRequest{id,toolCall}`, `toolResponse{id,toolResult{status}}`) — analogous to Claude's content blocks | SQLite `opencode.db`, **`journal_mode = wal`** (concurrent read-only is safe). No JSON `storage/` dir exists in this version. **But direct DB access is unnecessary** — `opencode session list` and `opencode export [sessionID] --sanitize` are stable CLI surfaces, and `--sanitize` provides **built-in secret redaction** |
+| Session history | `~/.local/share/goose/sessions/<id>.jsonl`; line 1 header `{working_dir, description, message_count, total_tokens, …}`, then `{id, role, content, created}` where **`content` is a structured block array** (`text`, `toolRequest{id,toolCall}`, `toolResponse{id,toolResult{status}}`) — analogous to Claude's content blocks | SQLite `opencode.db`, **`journal_mode = wal`** (concurrent read-only is safe). No JSON `storage/` dir exists in this version. **But direct DB access is unnecessary** — `opencode export <id>` is a stable CLI surface. ⚠ **Use it PLAIN, not `--sanitize`** (corrected 2026-07-28: `--sanitize` redacts text, tool input, output and metadata, making it useless as chat history). `session list` is project-scoped with no directory column |
 | Session correlation | Header `working_dir`, exact match | **`session.directory`** — the exact worktree path (verified). `project_id` is **per-repository, NOT per-worktree** (corrected 2026-07-28); `project.worktree` records only the first-seen directory and `project_directory` accumulates siblings. Session rows also carry `parent_id` (fork lineage), `title`, `slug`, `permission`, `agent`, `model` |
 | Pinnable session id | **Yes** — `goose session -n NAME` | No pin flag, but **`EventSessionCreated` delivers the id at creation** via the plugin `event` hook → no polling needed either |
 | One-shot mode | `goose run -t TEXT --system TEXT --no-session` | `opencode run [message] --format json` (raw JSON events), `--title`, `--agent`, `--model`, `--dir`, `-f/--file` |
@@ -190,7 +190,7 @@ flowchart TB
 
   subgraph NEW["To add"]
     GLOG["goose_session_log<br/>JSONL, working_dir header"]
-    OLOG["opencode_session_log<br/>via session list + export --sanitize<br/>NOT the SQLite db"]
+    OLOG["opencode_session_log<br/>via plain export (NOT --sanitize)<br/>NOT the SQLite db"]
     GHOOK[".agents/plugins/sebenza/hooks/hooks.json<br/>full overwrite, no merge"]
     OPLUG[".opencode/plugins/sebenza.js<br/>import-free shim → sebenza-agentctl<br/>event hook: SessionCreated/Idle/Error"]
   end
@@ -872,14 +872,17 @@ JSON `storage/` layout no longer exists. Tables include `session`, `message`, `p
 preferable:
 
 - **`opencode session list`** — enumeration, no schema coupling.
-- **`opencode export [sessionID]`** — full session as JSON, with an **`--sanitize` flag that redacts
-  sensitive transcript and file data**. That is a materially better answer to the secrets-adjacency
-  problem than anything Sebenza could implement itself, and it is the agent's own definition of what is
-  sensitive.
+- **`opencode export <id>`** — full session as JSON. Use it **plain**.
+  ⚠ **Corrected 2026-07-28:** an earlier draft here claimed `--sanitize` was "a materially better answer to
+  the secrets-adjacency problem than anything Sebenza could implement itself." That is **wrong for this use
+  case.** Verified: `--sanitize` redacts message text, tool input, tool output *and* metadata, yielding
+  `[redacted:…]` placeholders. It is a transcript-**sharing** feature. **opencode therefore provides no
+  usable redaction for Sebenza's read path**, and the secrets-adjacency risk stands unmitigated — the same
+  position as claude and codex, not better.
 
 Parsing `opencode.db` directly would couple Sebenza to an undocumented, fast-moving internal schema
 for no benefit. Use the CLI; treat direct DB access as a rejected alternative. If a future need forces
-it, WAL mode makes read-only access viable — but that path also forfeits `--sanitize`.
+it, WAL mode makes read-only access viable.
 
 **Retained caution:** `opencode export`'s JSON shape is itself a contract that could change, so the
 parser must still tolerate unknown fields, and a version probe should still gate the capability.
@@ -1078,7 +1081,7 @@ eliminating the surface rather than escaping it. Never accept a free-form string
 | claude | `--dangerously-skip-permissions` | Claude's own prompts | Yes | No |
 | codex | `--yolo` | Codex's approval prompts | Yes — incl. `PermissionRequest` | No — the handler only emits `idle`; approve/deny happens in codex's own PTY UI |
 | **goose** | `GOOSE_MODE=auto` (env) | goose's permission inspector, annotations, **and LLM detection — every tool call allowed, no prompt** | Yes, after the fact (hooks still fire) | **No, categorically** — hooks cannot deny, with or without bypass |
-| **opencode** | `--auto` (flag) | Auto-approves permissions "not explicitly denied" — so a **deny rule still wins** | Yes — generic `event` hook | **YES** — `permission.ask` returns a mutable `status: "ask" \| "deny" \| "allow"` |
+| **opencode** | `--auto` (flag) | Auto-approves permissions "not explicitly denied" — so a **deny rule still wins**. ⚠ Verified 2026-07-28: `--auto` also **bypasses `permission.ask` entirely** | Yes — generic `event` hook | **Type-level yes, runtime unconfirmed** — `permission.ask` returns a mutable `status`, but it is ruleset-gated and was not observed firing in `run` mode. Gated behind `phase-3-task-1` |
 
 The critical asymmetry: **even with no bypass, goose hooks cannot intercept a permission request** —
 that capability does not exist in the Open Plugins spec. So goose's toggle is not "skip prompts
@@ -1283,7 +1286,7 @@ outside the worktree at control-token trust tier. Loopback-default bind as a blo
 | `adapters/agent_runtime.rs` | `goose_hook_settings()` (overwrite, no merge); `opencode_plugin_source()` (static TS); generalise git-exclude to a path list; pre-launch untrusted-plugin scan; artifact integrity check |
 | `adapters/session_discovery.rs` | Two new `DiscoverableAgentKind` variants |
 | `adapters/goose_session_log.rs` | **New** — JSONL parser: block-array mapping, `working_dir` exact match, `message_count` zero-vs-nonzero only |
-| `adapters/opencode_session_log.rs` | **New** — shells out to `opencode session list` / `opencode export <id> --sanitize`; **does not touch `opencode.db`** |
+| `adapters/opencode_session_log.rs` | **New** — shells out to plain `opencode export <id>` (**not** `--sanitize`); **does not touch `opencode.db`**. Maps `text`/`reasoning`/`tool` parts to `AgentsUiMessage`, with `exit_code` from `state.metadata.exit` |
 | `adapters/docker.rs` | Mount `~/.config/{goose,opencode}` **and** the session-data dirs (`~/.local/share/goose/sessions`, `~/.local/share/opencode`); add `/root/.opencode/bin` to `DOCKER_PATH_FALLBACK` |
 | `adapters/fs.rs` | `set_mode_600` on `control.env`/`runtime.env` |
 | `adapters/testdata/sebenza-agentctl.py` | `goose-*` / `opencode-*` subcommands over the 3 existing primitives |
@@ -1327,7 +1330,7 @@ does not wait on it. Also out of scope: `goose acp` as a deeper integration path
 - **Phase 2 — opencode at full parity, plus the shared controls.** `Opencode` enum variant, import-free
   JS shim on the generic `event` hook (`EventSessionCreated` → id capture, `EventSessionIdle` → idle,
   `EventSessionError` → runtime error, `tool.execute.*` → running/PR detection), history via
-  `opencode session list` + `opencode export --sanitize`, `--auto` bypass, `--pure` as the decline-path
+  plain `opencode export <id>`, `--auto` bypass, `--pure` as the decline-path
   fallback, `~/.opencode/bin` probing. **Carries the shared security and runtime work** — git-exclusion,
   `set_mode_600`, untrusted-plugin scan with stored-hash comparison, audit events, docker config +
   session mounts, shadow resolution — because whichever agent lands first pays for that infrastructure,
@@ -1347,16 +1350,19 @@ does not wait on it. Also out of scope: `goose acp` as a deeper integration path
 
 **opencode — resolved by direct verification against v1.18.7 (installed 2026-07-27)**
 - ~~Bundles its own JS runtime?~~ **Yes** — 171 MB self-contained ELF. No system Bun/Node needed.
-- ~~Can a plugin deny a tool call?~~ **Yes** — `permission.ask` output `status` is mutable
-  (`"ask" | "deny" | "allow"`). The only agent of the four that can.
+- ~~Can a plugin deny a tool call?~~ **Type-level yes, runtime UNCONFIRMED.** `permission.ask`'s output
+  `status` is a mutable `"ask" | "deny" | "allow"` in the shipped plugin types, and no other agent has an
+  equivalent. But phase-0-task-2 could not observe the hook firing: `--auto` bypasses it, the default
+  ruleset wildcard-allows, and an `ask` rule hangs non-interactive `run`. **Treated as a hard gate
+  (`phase-3-task-1`) rather than an established capability.**
 - ~~One-shot mode?~~ **Yes** — `opencode run [message] --format json`, plus `--title`, `--agent`,
   `--model`, `--dir`, `-f`.
 - ~~Project-id derivation?~~ **Per repository, NOT per worktree** (corrected by phase-0-task-1). All
   worktrees of a repo share one `project_id`. Correlate on `session.directory` /
   `export`→`info.directory` instead; never on `project_id`.
-- ~~WAL mode? Stable export path?~~ **`journal_mode = wal`**, and `opencode session list` +
-  `opencode export --sanitize` make direct DB access unnecessary. `--sanitize` redacts sensitive
-  transcript/file data.
+- ~~WAL mode? Stable export path?~~ **`journal_mode = wal`**, and plain `opencode export <id>` makes
+  direct DB access unnecessary. **`--sanitize` must NOT be used** — it redacts the message text and tool
+  output the chat UI needs (corrected by phase-0-task-3).
 - ~~Session id pinnable?~~ No pin flag, but `EventSessionCreated` via the plugin `event` hook returns
   the id at creation — no polling.
 - ~~Bypass mechanism?~~ **`--auto`**, a flag. Auto-approves only what is not explicitly denied.

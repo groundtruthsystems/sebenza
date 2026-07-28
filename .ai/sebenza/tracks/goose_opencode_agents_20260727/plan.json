@@ -18,15 +18,15 @@
         {
           "id": "phase-0-task-2",
           "name": "Verify permission.ask behaviour under --auto",
-          "description": "FR-0.2. Determine whether the permission.ask plugin hook still fires when opencode is launched with --auto. Record whether bypass and Sebenza-side gating can coexist or are mutually exclusive. BLOCKING for phase-3 wiring.",
-          "status": "blocked",
-          "blocked_reason": "permission.ask could not be observed firing. --auto bypasses it entirely; the default config wildcard-allows bash so no ask occurs; and `permission: {bash: \"ask\"}` makes non-interactive `opencode run` hang at init. Verifying whether permission.ask fires and its status is honoured requires a TUI or `opencode serve` harness rather than another `run` variant. Blocks phase-3 only; phases 0-2 unaffected. Partial findings recorded in spec.md."
+          "description": "FR-0.2. Determine whether the permission.ask plugin hook still fires when opencode is launched with --auto. Record whether bypass and Sebenza-side gating can coexist or are mutually exclusive. BLOCKING for phase-3 wiring. [OUTCOME 2026-07-28: partially resolved. --auto bypasses permission.ask; the hook is config-ruleset-gated, not per-tool-call; an `ask` rule hangs non-interactive `run`. Findings in spec.md FR-0.2. Residual question - can permission.ask fire and be honoured at all - moved to phase-3-task-1 as a hard gate.]",
+          "status": "done",
+          "commit_sha": "f055c7f"
         },
         {
           "id": "phase-0-task-3",
           "name": "Capture an opencode export fixture",
           "description": "FR-0.3. Commit a real `opencode export <id>` JSON payload as testdata/. This is the basis for all history parser tests and cannot be invented from documentation. Requires an authenticated opencode.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-0-task-4",
@@ -236,64 +236,70 @@
       "id": "phase-3",
       "name": "Permission gating for opencode",
       "status": "backlog",
-      "blocked_reason": "Depends on phase-0-task-2, which is blocked.",
+      "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
+          "name": "Spike: verify permission.ask can fire and be honoured",
+          "description": "Residue of phase-0-task-2, which established that --auto bypasses permission.ask, that permission.ask is config-ruleset-gated rather than per-tool-call, and that `permission: {bash: \"ask\"}` hangs non-interactive `opencode run`. What remains unproven is whether permission.ask fires AT ALL and whether mutating output.status is honoured. Build a harness matching how Sebenza actually launches agents - an interactive TUI in a tmux pane - and/or `opencode serve` + a scripted client. Set a project permission rule evaluating to `ask`, install a probe plugin that logs the call and sets status, and confirm the tool is allowed or denied accordingly. HARD GATE: if permission.ask cannot be driven this way, the remaining phase-3 tasks are not buildable as designed and the phase must be redesigned or descoped. Do not begin phase-3-task-2 until this resolves.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-2",
           "name": "Write tests for the asymmetric credential model",
           "description": "FR-4.2. Failing tests asserting the resolve route REJECTS a verdict presented with only the control token; that it requires a per-request resolver secret minted server-side; that the secret never appears in control.env, runtime.env or any worktree-readable file; and that a verdict is single-use and bound to session plus request id. This closes the flaw where the gated process, which holds SEBENZA_CONTROL_TOKEN, could approve its own request.",
           "status": "backlog"
         },
         {
-          "id": "phase-3-task-2",
+          "id": "phase-3-task-3",
           "name": "Implement the pending-decision store and resolver secrets",
           "description": "FR-4.2, FR-4.3. Mirror agent_stream.rs's AgentStreamManager/RunState idiom: a concurrent map of request ids to oneshot senders resolved by a side-channel call. In-memory, not durable across restart. Mint per-request resolver secrets delivered only via the WS push payload and the CLI response.",
           "status": "backlog"
         },
         {
-          "id": "phase-3-task-3",
+          "id": "phase-3-task-4",
           "name": "Write tests for submit/resolve routes, fail-closed paths and the cap",
           "description": "FR-4.4 to FR-4.8, FR-4.11. Failing tests for: the submit handler awaiting a oneshot receiver with no lock held across the await; timeout, HTTP error and connection reset all resolving to deny; the server timeout being authoritative; the per-session and global pending cap with auto-deny beyond it; timeout enforcement independent of WS delivery; and both routes bound to loopback.",
           "status": "backlog"
         },
         {
-          "id": "phase-3-task-4",
+          "id": "phase-3-task-5",
           "name": "Implement the submit and resolve routes",
           "description": "FR-4.4 to FR-4.8, FR-4.11, FR-5.8. Loopback-bound routes with the asymmetric auth model, fail-closed on every failure mode, server-authoritative timeout, pending cap with auto-deny, and the permission_decision (including resolution source) and pending_permission_cap_hit audit events. Never block the async runtime.",
           "status": "backlog"
         },
         {
-          "id": "phase-3-task-5",
+          "id": "phase-3-task-6",
           "name": "Write tests for the shim permission.ask round-trip",
           "description": "FR-4.1, FR-4.5. Failing tests asserting the shim calls permission.ask, awaits a verdict via fetch (a runtime global under opencode's bundled Bun, so the import-free constraint from phase-2 still holds), writes it into output.status, and fails closed on timeout or error.",
           "status": "backlog"
         },
         {
-          "id": "phase-3-task-6",
+          "id": "phase-3-task-7",
           "name": "Implement permission.ask in the generated shim",
           "description": "FR-4.1. Extend the phase-2 shim to submit the request, await the verdict, and set output.status. Apply the phase-0-task-2 finding: if permission.ask does not fire under --auto, the two features are mutually exclusive and the UI must prevent enabling both.",
           "status": "backlog"
         },
         {
-          "id": "phase-3-task-7",
+          "id": "phase-3-task-8",
           "name": "Implement the dashboard permission prompt and WS push",
           "description": "FR-4.9. Push pending requests over the existing WS event stream carrying the resolver secret, and render a prompt card modelled on AskUserQuestionCard's look - its plumbing is transcript-level with no backend counterpart and is not reusable.",
           "status": "backlog"
         },
         {
-          "id": "phase-3-task-8",
+          "id": "phase-3-task-9",
           "name": "Implement CLI parity for pending permission requests",
           "description": "FR-4.9. sebenza-cli commands to list and answer pending requests, per Guiding Principle 8. This is also the designed fallback when a WS push is missed.",
           "status": "backlog"
         },
         {
-          "id": "phase-3-task-9",
+          "id": "phase-3-task-10",
           "name": "Implement per-profile timeout and visible timeout denial",
           "description": "FR-4.6, FR-4.10. Add a configurable per-profile decision timeout. A timeout-caused denial must be visible in the transcript and worktree status so a stalled worktree reads as 'waited for you, then denied' rather than as a hung agent.",
           "status": "backlog"
         },
         {
-          "id": "phase-3-task-10",
+          "id": "phase-3-task-11",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md. Manual verification must cover: approving a tool call, denying one, letting one time out and confirming the denial is visible, and confirming the resolve route rejects a control-token-only verdict.",
           "status": "backlog"

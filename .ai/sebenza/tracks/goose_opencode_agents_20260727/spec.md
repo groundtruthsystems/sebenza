@@ -97,7 +97,31 @@ hang. **Confirming this needs a TUI or server harness, not another `run` variant
 
 **Impact:** Phases 0, 1 and 2 are unaffected. **Phase 3 is at risk** until this is answered — if
 `permission.ask` cannot be driven from the way Sebenza launches opencode, the gating feature is not
-buildable as designed.
+buildable as designed. Tracked as `phase-3-task-1`, a hard gate at the head of that phase.
+
+### FR-0.3 — export fixture and message mapping *(phase-0-task-3, resolved 2026-07-28)*
+
+Fixture committed at `crates/common/src/adapters/testdata/opencode_export.json` (absolute paths
+neutralised to `/repo/worktrees/example-branch` for portability). It covers a real turn with a `bash` tool
+call, so it exercises every part type: `text`, `reasoning`, `tool`, `step-start`, `step-finish`.
+
+**`--sanitize` must NOT be used for history.** It redacts message text, tool input, tool output *and*
+metadata:
+
+```
+sanitized: text='[redacted:text:prt_…]'  tool.output='[redacted:tool-output:prt_…]'
+plain:     text='hello-from-tool'        tool.output='hello-from-tool\n'
+                                         tool.metadata={'output':…,'exit':0,'truncated':False}
+```
+
+This **reverses a design claim.** The design stated `--sanitize` "gives upstream-defined secret redaction,
+preferable to anything Sebenza would implement itself." That is wrong for this use case: it redacts exactly
+the payload the chat UI must display. `--sanitize` is a transcript-*sharing* feature. Consequently
+**opencode provides no usable redaction for Sebenza's read path**, and the secrets-adjacency risk in the
+Data classification stands unmitigated — the same position as claude and codex, not better.
+
+Useful side effect: `state.metadata.exit` gives a real **exit code**, so opencode tool results can populate
+`AgentsUiMessage.exit_code` directly, with no Codex-style string scraping. See FR-3.5a for the full map.
 
 ---
 
@@ -168,11 +192,26 @@ track can reclaim it.
   `EventSessionIdle` → idle/agent-stopped; `EventSessionError` → runtime error;
   `tool.execute.before` → running; `tool.execute.after` → PR detection via the existing
   `maybe_send_pr_opened`.
-- **FR-3.5** Read history via **`opencode export <id> --sanitize`**. **Do not read `opencode.db`.**
-  Tolerate unknown fields in the export JSON. Note `opencode session list` is **project-scoped and has no
-  directory column**, so it cannot correlate a session to a worktree on its own — it is an enumeration
-  aid only (see FR-3.6). `export` returns `{info, messages}` where `info` carries `id`, `slug`,
-  `projectID`, `directory`, `title`, `agent`, `model`, `version`, `permission`, `time`, `cost`, `tokens`.
+- **FR-3.5** Read history via **plain `opencode export <id>` — NOT `--sanitize`.**
+  *(Revised per the FR-0.3 finding: `--sanitize` redacts message text, tool input, tool output **and**
+  metadata, so a sanitized export renders as `[redacted:…]` placeholders and is useless as chat history.
+  It is a transcript-**sharing** feature, not a read path.)*
+  **Do not read `opencode.db`.** Tolerate unknown fields. `opencode session list` is **project-scoped with
+  no directory column**, so it cannot correlate on its own — enumeration aid only (see FR-3.6).
+  `export` returns `{info, messages}`; `info` carries `id`, `slug`, `projectID`, `directory`, `title`,
+  `agent`, `model`, `version`, `permission`, `time`, `cost`, `tokens`, `summary`, `path`.
+- **FR-3.5a** Map export parts onto `AgentsUiMessage` as follows (verified against the committed fixture
+  `crates/common/src/adapters/testdata/opencode_export.json`). Each entry in `messages` is
+  `{info, parts}` with `info.role` ∈ `user` | `assistant`:
+
+  | export part | `AgentsUiMessage` |
+  |---|---|
+  | `text` | `kind: "text"`, `text` |
+  | `reasoning` | `kind: "thinking"` |
+  | `tool` | `kind: "toolUse"` from `state.input` **and** `kind: "toolResult"` from `state.output`; `tool_name` ← `part.tool`; `command` ← `state.input.command`; `exit_code` ← `state.metadata.exit`; `status` ← `state.status` (e.g. `"completed"`) |
+  | `step-start` / `step-finish` | turn boundaries — use for `turn_id`, do not render |
+
+  `state.metadata` also carries `truncated`, which should suppress a misleading "complete output" display.
 - **FR-3.6** **Correlate on the session id Sebenza itself created — not by discovery.**
   *(Revised per the FR-0.1 finding; see "Verified findings" below.)*
   - **Primary path:** capture the session id at launch (`run --format json` echoes `sessionID` on every
