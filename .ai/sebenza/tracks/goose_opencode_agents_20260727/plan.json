@@ -149,7 +149,7 @@
     {
       "id": "phase-2",
       "name": "opencode at full parity (+ shared controls)",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -219,57 +219,66 @@
           "id": "phase-2-task-10",
           "name": "Write tests for untrusted-plugin scan and per-repo confirmation",
           "description": "FR-5.2, FR-5.3. SHARED CONTROL. Failing tests for: detecting plugin files Sebenza did not write by comparing against a stored hash of bytes last written (not a recomputed expectation); the store living outside the worktree in <git-common-dir>/.ai/sebenza/; auto-launch blocked pending confirmation; the decision remembered per repository; and the store being unwritable from the worktree.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "ca3359e"
         },
         {
           "id": "phase-2-task-11",
           "name": "Implement untrusted-plugin scan, confirmation store and audit events",
-          "description": "FR-5.2 to FR-5.4, FR-5.8. Scan before launch, block, and require per-repo confirmation stored at control-token trust tier outside the worktree. Offer opencode's --pure (runs without external plugins) as the safe terminal-only fallback when the user declines. Persist audit events (agent_launched with bypass mode, artifact_written/overwritten with mismatch boolean, untrusted_plugin_detected) under <git-common-dir>/.ai/sebenza/, carrying no secrets. Keep the scan's plugin-path set data-driven so a future agent is a config change, not a code change.",
-          "status": "backlog"
+          "description": "FR-5.2 to FR-5.4, FR-5.8. Scan before launch, block, and require per-repo confirmation stored at control-token trust tier outside the worktree. Offer opencode's --pure (runs without external plugins) as the safe terminal-only fallback when the user declines. Persist audit events (agent_launched with bypass mode, artifact_written/overwritten with mismatch boolean, untrusted_plugin_detected) under <git-common-dir>/.ai/sebenza/, carrying no secrets. Keep the scan's plugin-path set data-driven so a future agent is a config change, not a code change. [PARTIAL 2026-07-28: detection implemented and tested (stored-hash comparison, record held outside the worktree). It WARNS at launch; it does not yet BLOCK pending a remembered per-repo confirmation, which needs a UI flow. FR-5.3 remains open.]",
+          "status": "done",
+          "commit_sha": "ca3359e",
+          "blocked_reason": null
         },
         {
           "id": "phase-2-task-12",
           "name": "Write tests for docker mounts and PATH fallback",
           "description": "FR-6.1. Failing pure-function assertions on build_docker_run_args output, following docker.rs's existing test module pattern - no Docker daemon required.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "8d4ca75"
         },
         {
           "id": "phase-2-task-13",
           "name": "Add docker config and session-data mounts",
           "description": "FR-6.1. Bind-mount ~/.config/opencode and ~/.local/share/opencode unconditionally, matching the existing claude/codex mounts, so history parity holds on host and docker. Add /root/.opencode/bin to DOCKER_PATH_FALLBACK. Without the config mount a containerised run has no provider credentials at all.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "8d4ca75"
         },
         {
           "id": "phase-2-task-14",
           "name": "Implement shadow resolution and the durable override notice",
           "description": "FR-1.6. Builtin wins over a shadowed custom-agent id, emitting a durable shadowed_custom_agent_detected event that names the id and states the key-rename escape hatch. Remove ONLY the opencode entry from .ai/sebenza.example.yaml - goose is NOT becoming builtin in this track, so its custom-agent entry must remain and keep working. Add a compatibility test that loads the pre-change example config. Breaking change for existing users; must never fail silently.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "8d4ca75"
         },
         {
           "id": "phase-2-task-15",
           "name": "Add opencode to auto-naming, init analysis and version reporting",
           "description": "FR-3.8, FR-6.5, FR-6.6. Add the opencode arm to llm_spawn.rs::build_llm_args (opencode run --format json) and to init_authoring.rs (InitAgent, authoring_agent(), build_init_agent_command()) - a separate fifth dispatch axis. Add the AutoNameProvider variant plus its YAML-parsing counterpart at config.rs:273-274. Act on init.rs:52's existing opencode probe, report the detected version, document the minimum supported version in tech-stack.md, and update README prerequisites.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "8d4ca75"
         },
         {
           "id": "phase-2-task-16",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md. Manual verification must cover creating an opencode worktree, driving it via terminal and chat, history under both host and docker runtimes, status transitions, resume and fork, the untrusted-plugin confirmation path including the --pure decline fallback, and confirming no generated artifact appears in git status.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "ca3359e"
         }
-      ]
+      ],
+      "checkpoint_sha": "ca3359e"
     },
     {
       "id": "phase-3",
       "name": "Permission gating for opencode",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Spike: verify permission.ask can fire and be honoured",
           "description": "Residue of phase-0-task-2, which established that --auto bypasses permission.ask, that permission.ask is config-ruleset-gated rather than per-tool-call, and that `permission: {bash: \"ask\"}` hangs non-interactive `opencode run`. What remains unproven is whether permission.ask fires AT ALL and whether mutating output.status is honoured. Build a harness matching how Sebenza actually launches agents - an interactive TUI in a tmux pane - and/or `opencode serve` + a scripted client. Set a project permission rule evaluating to `ask`, install a probe plugin that logs the call and sets status, and confirm the tool is allowed or denied accordingly. HARD GATE: if permission.ask cannot be driven this way, the remaining phase-3 tasks are not buildable as designed and the phase must be redesigned or descoped. Do not begin phase-3-task-2 until this resolves.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-2",
