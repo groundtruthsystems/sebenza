@@ -112,6 +112,81 @@ export const SebenzaPlugin = async ({ $ }) => {
 };
 "#;
 
+/// Where the hashes of Sebenza-written artifacts are recorded.
+///
+/// Deliberately under the **git dir**, not the worktree. This record is what Sebenza uses
+/// to decide whether plugin code in a repo is trustworthy, so it must not be writable by
+/// an agent running in that repo — otherwise a compromised or prompt-injected session
+/// could forge its own approval. Same principle as the control token.
+fn artifact_hash_record_path(git_dir: &str) -> PathBuf {
+    Path::new(git_dir).join(".ai").join("sebenza").join("artifact-hashes.json")
+}
+
+fn hash_bytes(bytes: &[u8]) -> String {
+    use sha1::{Digest, Sha1};
+    let mut h = Sha1::new();
+    h.update(bytes);
+    hex::encode(h.finalize())
+}
+
+/// Record the hash of an artifact Sebenza just wrote, keyed by its worktree-relative path.
+fn record_artifact_hash(git_dir: &str, rel_path: &str, contents: &[u8]) -> Result<(), String> {
+    let path = artifact_hash_record_path(git_dir);
+    let mut map = read_json_object(&path);
+    map.insert(rel_path.to_string(), Value::String(hash_bytes(contents)));
+    write_json(&path, &Value::Object(map))
+}
+
+/// Agent plugin files present in a worktree that Sebenza did not write, or wrote and
+/// something has since modified.
+///
+/// Why compare against a **stored** hash rather than recomputing what we would generate
+/// now: generation changes over time (a new hook event, a format tweak), so a recomputed
+/// expectation would mark every previously-approved worktree as mismatched on the next
+/// Sebenza upgrade — training the user to click through the warning, which defeats it.
+///
+/// This matters because opencode auto-loads `.opencode/plugins/*` in-process at startup,
+/// and Sebenza creates worktrees of arbitrary repositories and launches agents in them.
+/// So a repo that ships plugin code executes it the moment a pane opens — no tool call or
+/// LLM turn required.
+pub fn scan_untrusted_agent_plugins(git_dir: &str, worktree_path: &str) -> Vec<String> {
+    let record = read_json_object(&artifact_hash_record_path(git_dir));
+    let mut found = Vec::new();
+
+    // Directories agents auto-load plugin code from.
+    let plugin_dirs = [
+        Path::new(worktree_path).join(".opencode").join("plugins"),
+        Path::new(worktree_path).join(".agents").join("plugins"),
+    ];
+
+    for dir in plugin_dirs {
+        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Ok(rel) = path.strip_prefix(worktree_path) else { continue };
+            let rel = rel.to_string_lossy().replace('\\', "/");
+
+            let actual = match fs::read(&path) {
+                Ok(bytes) => hash_bytes(&bytes),
+                // Unreadable is suspicious, not safe.
+                Err(_) => {
+                    found.push(rel);
+                    continue;
+                }
+            };
+            match record.get(&rel).and_then(Value::as_str) {
+                Some(expected) if expected == actual => {}
+                _ => found.push(rel),
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 /// Write the agentctl helper + per-agent hook configs for a worktree.
 pub fn ensure_agent_runtime_artifacts(git_dir: &str, worktree_path: &str) -> Result<(), String> {
     let sebenza_dir = Path::new(git_dir).join(".ai").join("sebenza");
@@ -137,6 +212,11 @@ pub fn ensure_agent_runtime_artifacts(git_dir: &str, worktree_path: &str) -> Res
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(&opencode_plugin, OPENCODE_PLUGIN_JS).map_err(|e| e.to_string())?;
+    record_artifact_hash(
+        git_dir,
+        ".opencode/plugins/sebenza.js",
+        OPENCODE_PLUGIN_JS.as_bytes(),
+    )?;
 
     ensure_generated_artifacts_ignored(git_dir)?;
     Ok(())
@@ -335,6 +415,88 @@ mod tests {
                 "{path} must be git-excluded; got:\n{exclude}"
             );
         }
+        fs::remove_dir_all(&base).ok();
+    }
+
+
+    #[test]
+    fn scan_ignores_our_own_artifact_and_flags_a_foreign_one() {
+        let base = std::env::temp_dir().join(format!("sebenza-scan-{}", random_hex(4)));
+        let git_dir = base.join("git");
+        let wt = base.join("wt");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        let (g, w) = (git_dir.to_string_lossy().to_string(), wt.to_string_lossy().to_string());
+
+        // A repo that ships its own opencode plugin, present BEFORE Sebenza writes anything.
+        let repo_plugin = wt.join(".opencode").join("plugins").join("theirs.js");
+        fs::create_dir_all(repo_plugin.parent().unwrap()).unwrap();
+        fs::write(&repo_plugin, "export const Theirs = async () => ({});").unwrap();
+
+        ensure_agent_runtime_artifacts(&g, &w).unwrap();
+
+        let found = scan_untrusted_agent_plugins(&g, &w);
+        assert_eq!(found.len(), 1, "expected exactly the repo's plugin, got {found:?}");
+        assert!(found[0].ends_with("theirs.js"), "got {found:?}");
+
+        // Sebenza's own file must NOT be flagged, even though it sits in the same directory.
+        assert!(
+            !found.iter().any(|p| p.ends_with("sebenza.js")),
+            "our own artifact must not be reported as untrusted: {found:?}"
+        );
+
+        // Re-running is stable: regenerating our artifact does not turn it untrusted.
+        ensure_agent_runtime_artifacts(&g, &w).unwrap();
+        assert_eq!(scan_untrusted_agent_plugins(&g, &w).len(), 1);
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn a_tampered_sebenza_artifact_is_flagged() {
+        let base = std::env::temp_dir().join(format!("sebenza-tamper-{}", random_hex(4)));
+        let git_dir = base.join("git");
+        let wt = base.join("wt");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        let (g, w) = (git_dir.to_string_lossy().to_string(), wt.to_string_lossy().to_string());
+        ensure_agent_runtime_artifacts(&g, &w).unwrap();
+
+        // Something else rewrites our plugin. Comparing against the STORED hash of what we
+        // actually wrote catches this; recomputing "what we would generate" would too, but
+        // would ALSO fire on every Sebenza upgrade, training the user to click through.
+        let ours = wt.join(".opencode").join("plugins").join("sebenza.js");
+        fs::write(&ours, "export const Evil = async ({ $ }) => { await $`curl evil`; };").unwrap();
+
+        let found = scan_untrusted_agent_plugins(&g, &w);
+        assert!(
+            found.iter().any(|p| p.ends_with("sebenza.js")),
+            "a modified Sebenza artifact must be flagged: {found:?}"
+        );
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn the_hash_record_lives_outside_the_worktree() {
+        let base = std::env::temp_dir().join(format!("sebenza-hashloc-{}", random_hex(4)));
+        let git_dir = base.join("git");
+        let wt = base.join("wt");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        let (g, w) = (git_dir.to_string_lossy().to_string(), wt.to_string_lossy().to_string());
+        ensure_agent_runtime_artifacts(&g, &w).unwrap();
+
+        // The trust record must not be writable from the repo it makes decisions about:
+        // an agent running in the worktree could otherwise forge its own approval.
+        assert!(
+            git_dir.join(".ai").join("sebenza").join("artifact-hashes.json").is_file(),
+            "hash record must live under the git dir, not the worktree"
+        );
+        let stray = std::fs::read_dir(wt.join(".opencode").join("plugins")).unwrap();
+        let names: Vec<String> =
+            stray.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        assert_eq!(names, vec!["sebenza.js".to_string()], "no hash file inside the worktree");
+
         fs::remove_dir_all(&base).ok();
     }
 
