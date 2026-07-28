@@ -21,21 +21,47 @@ So this is either a binary/types skew or a path the hook no longer serves.
 generic "waiting"; `permission.replied` clears it. `permission_interception` is `false` for
 all four agents.
 
-**If upstream restores it**, the design for a full approve/deny channel is already written up
-in the track's `design.md` (Application §9) — including the part that is easy to get wrong:
-the gated agent holds `SEBENZA_CONTROL_TOKEN` via `control.env`, so a single shared
-credential would let it approve its own request. Submit and resolve need **asymmetric**
-credentials, with the resolver secret delivered only over the WS push or CLI response.
+**If upstream restores it**, here is the design, including the part that is easy to get
+wrong. (Inlined from the completed track's `design.md`, which has since been deleted.)
+
+> **The obvious credential model is broken — split it.**
+>
+> `build_control_env_map` writes `SEBENZA_CONTROL_TOKEN` in plaintext into `control.env`,
+> which the agent pane sources — that is precisely how `sebenza-agentctl` authenticates.
+> **So the gated opencode process holds the control token.**
+>
+> If one shared token authenticates both *submitting* and *resolving* a permission request,
+> the process being gated can **approve its own request**: it has the token, and it knows
+> the request id it just created. A prompt-injected tool call, or a tainted binary, calls
+> `resolve(request_id, "allow")` and it is indistinguishable from a dashboard click. That
+> reduces the control to one holding only against a *cooperative* agent — i.e. not a
+> security boundary against the threats that motivate it.
+>
+> **Required: asymmetric credentials.**
+> - **Submit** may use the existing control token (the pane legitimately needs it).
+> - **Resolve** must require a **per-request resolver secret minted server-side and
+>   delivered only in the WS push payload or the CLI response** — never written to
+>   `control.env`, `runtime.env`, or any file the agent process can read. Or: accept
+>   resolutions only over the authenticated WS connection that received the push.
+>
+> Same tamper principle as the untrusted-plugin scan: *state Sebenza uses to make a trust
+> decision must not be reachable by the process it is deciding about.*
+
+Other pieces the design settled: fail **closed** on timeout/error/disconnect (a gate that
+fails open is worse than none); the server's timeout is authoritative, not the plugin's; cap
+concurrent pending requests per session; and mirror `agent_stream.rs`'s
+`AgentStreamManager`/`RunState` idiom (a map of ids to `oneshot` senders) rather than
+inventing a pending-decision store.
 
 **Check on an opencode upgrade:** re-run the tmux probe. If `permission.ask` fires, the
 gating work becomes viable and `permission_interception` can flip to true.
 
 ## goose as a built-in agent — investigate later (deferred)
 
-goose was researched and verified (v1.8.0) as part of the opencode track
-(`.ai/sebenza/tracks/goose_opencode_agents_20260727/`), then **descoped**. opencode ships
-first; goose is deferred to its own track. The full findings are preserved in that
-track's `design.md` — start there rather than re-researching.
+goose was researched and verified (v1.8.0) as part of the opencode track, then
+**descoped**; opencode shipped first. That track is complete and its folder has been
+deleted, so **everything needed to start is below** — it is the record, not a pointer to
+one. Verified by direct observation against goose 1.8.0, not from documentation.
 
 **What was already established (verified by direct observation, not docs):**
 
@@ -79,7 +105,7 @@ opencode **cannot** be extended to goose. Any goose track must decide whether to
 - Does goose honour XDG on macOS, or use `~/Library/Application Support`?
 - Root cause of the `message_count` drift (interrupt handling? retries?).
 
-**What the opencode track leaves ready:** the `BuiltinAgentId` enum and capability model,
+**What the completed opencode track leaves ready:** the `BuiltinAgentId` enum and capability model,
 the unified builtin registry, registry-resolved dispatch, capability-driven frontend gating,
 git-exclusion as a path list, `0600` env files, the untrusted-plugin scan (data-driven path
 set), and the docker mount pattern. Adding goose should be an adapter, not a fork. Note

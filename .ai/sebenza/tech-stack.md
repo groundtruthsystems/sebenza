@@ -51,6 +51,30 @@ that breaks history can be diagnosed against the version actually installed rath
 guessed at. opencode moves fast — 1.18.7 → 1.18.9 was observed within a day — so the
 adapter tolerates unknown fields and degrades rather than failing.
 
+### Verified opencode integration constraints
+
+Established by direct observation during the opencode track (1.18.7/1.18.9). Each one
+contradicted a reasonable assumption, so they are recorded here rather than left to be
+rediscovered:
+
+- **`project_id` is per-REPOSITORY, not per-worktree.** Every worktree of a repo shares one
+  opencode project; `project.worktree` records only the first-seen directory. Correlate on
+  `session.directory` (via `export` → `info.directory`), **never** on `project_id`.
+- **`opencode session list` is project-scoped and has no directory column**, so it cannot
+  identify which session belongs to a worktree. Sebenza instead records the id the agent
+  reports at creation (`session.created` → `conversation_started`).
+- **Never pass `--sanitize` when reading history.** It redacts message text, tool input,
+  tool output *and* metadata, yielding `[redacted:…]` placeholders. It is a
+  transcript-*sharing* feature.
+- **`permission.ask` does not fire** (1.18.9). Only the observational `permission.asked` /
+  `permission.replied` events arrive, on the generic `event` hook. See `TODO.md`.
+- **`tool.execute.before` fires *before* the permission decision**, so it means "a tool was
+  proposed", not "a tool is running".
+- **No system-prompt flag.** A per-launch system prompt cannot be passed to an interactive
+  session and is dropped.
+- **goose's `message_count` header is only safe as a zero-vs-nonzero check** — 19 of 99 real
+  sessions under-count. Exact matching misclassifies ~1 in 5 as broken.
+
 `goose` is detected by `init` but is **not** a built-in agent; it remains usable as a custom
 (terminal-only) agent. See `TODO.md`.
 
