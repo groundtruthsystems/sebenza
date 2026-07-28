@@ -84,19 +84,21 @@
           "id": "phase-1-task-3",
           "name": "Write tests for new capability fields and wire contract",
           "description": "FR-1.3. Failing tests for fork, pinnable_session_id and permission_interception on AgentCapabilities and AgentCapabilitiesWire, including explicit false for custom agents so schema parse does not break.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "db25c52"
         },
         {
           "id": "phase-1-task-4",
           "name": "Add capability fields and widen Zod schemas",
           "description": "FR-1.3, FR-6.3. Add the three fields to both Rust structs and to AgentCapabilitiesSchema. Widen BuiltInAgentIdSchema (schemas.ts:22), AutoNameProviderSchema (217) and WorktreeConversationProviderSchema (289 plus literals at 292, 300). permission_interception is wire-visible.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "db25c52"
         },
         {
           "id": "phase-1-task-5",
           "name": "Write tests for unified builtin registry",
           "description": "FR-1.2. Failing tests asserting config_view.rs's agent summaries derive from agent_registry.rs - one builtin list, one capability struct - and that build_app_config exposes the same agents and capabilities as list_agent_details.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-6",
