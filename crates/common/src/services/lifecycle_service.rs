@@ -1,4 +1,4 @@
-use crate::adapters::agent_runtime::ensure_agent_runtime_artifacts;
+use crate::adapters::agent_runtime::{ensure_agent_runtime_artifacts, scan_untrusted_agent_plugins};
 use crate::adapters::control_token::load_control_token;
 use crate::adapters::docker::{launch_container, LaunchContainerOpts};
 use crate::adapters::fs::{
@@ -25,7 +25,7 @@ use crate::domain::policies::{
 use crate::adapters::session_discovery::{
     capture_new_session_id, list_session_ids, DiscoverableAgentKind,
 };
-use crate::services::agent_registry::{get_agent_definition, AgentDefinition, AgentImplementation};
+use crate::services::agent_registry::{get_agent_definition, AgentDefinition, AgentImplementation, BuiltinAgentId};
 use crate::services::tab_logic::{
     active_tab_id as read_active_tab_id, append_tab, build_agent_tab, build_fork_tab, find_tab,
     list_tabs, next_agent_ordinal, next_fork_seq, remove_tab, root_tab, set_active_tab,
@@ -214,6 +214,27 @@ impl TabSlot {
     }
 }
 
+/// Report agent plugin code in a worktree that Sebenza did not write.
+///
+/// opencode auto-loads `.opencode/plugins/*` in-process at startup, and Sebenza creates
+/// worktrees of arbitrary repositories and launches agents in them — so a repo that ships
+/// plugin code executes it as soon as a pane opens, with no tool call or LLM turn involved.
+///
+/// This WARNS; it does not block. Blocking needs a user-facing confirmation flow and a
+/// remembered per-repo decision (spec FR-5.3, still open). Warning at least makes the
+/// exposure visible rather than silent.
+fn warn_on_untrusted_agent_plugins(git_dir: &str, worktree_path: &str) {
+    let found = scan_untrusted_agent_plugins(git_dir, worktree_path);
+    if found.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        "{worktree_path}: agent plugin file(s) NOT written by Sebenza are present and will be \
+         executed by the agent at startup: {}. Review them before trusting this worktree.",
+        found.join(", ")
+    );
+}
+
 /// The built-in agent kind (`claude`/`codex`) whose sessions we can discover.
 fn discoverable_agent_kind(agent: &AgentDefinition) -> Option<DiscoverableAgentKind> {
     match &agent.implementation {
@@ -343,6 +364,7 @@ impl LifecycleService {
         };
 
         op(ensure_agent_runtime_artifacts(&resolved.git_dir, &resolved.entry.path))?;
+        warn_on_untrusted_agent_plugins(&resolved.git_dir, &resolved.entry.path);
         // NOTE: codex resume-conversation-id on open is still deferred.
         self.materialize_runtime_session(
             branch,
@@ -726,6 +748,7 @@ impl LifecycleService {
             let meta = initialized.meta.clone();
             initialized = self.refresh_managed_artifacts_from_meta(&git_dir, &meta, &worktree_path)?;
             op(ensure_agent_runtime_artifacts(&initialized.paths.git_dir, &worktree_path))?;
+            warn_on_untrusted_agent_plugins(&initialized.paths.git_dir, &worktree_path);
             self.materialize_runtime_session(
                 branch,
                 &profile,

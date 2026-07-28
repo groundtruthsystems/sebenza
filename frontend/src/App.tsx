@@ -1264,6 +1264,7 @@ export default function App() {
             <MobileChatSurface
               key={selectedBranch ?? ""}
               worktree={selectedWorktree!}
+              supportsChat={supportsWorktreeChat(selectedWorktree)}
               onConversationMessageSent={() => void refresh()}
             />
           ) : canConnect ? (

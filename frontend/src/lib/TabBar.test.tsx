@@ -30,6 +30,8 @@ function agent(id: string, label: string, kind: "builtin" | "custom"): AgentSumm
       interrupt: kind === "builtin",
       resume: kind === "builtin",
       fork: kind === "builtin",
+      pinnableSessionId: kind === "builtin",
+      permissionInterception: false,
     },
   };
 }

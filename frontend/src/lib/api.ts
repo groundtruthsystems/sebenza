@@ -46,6 +46,11 @@ function mapAgentStatus(status: string): string {
       return "working";
     case "idle":
       return "waiting";
+    // Blocked on a permission prompt in the agent's own UI. Shares `waiting`'s visual
+    // treatment (it needs you either way) but keeps its own value so the label can say
+    // WHAT kind of attention it needs. Sebenza cannot answer the prompt for you.
+    case "awaiting_permission":
+      return "awaiting-permission";
     case "stopped":
       return "done";
     case "error":

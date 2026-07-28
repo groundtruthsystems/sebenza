@@ -64,7 +64,7 @@ export function countAgentStatusesIn(
   branches: Set<string>,
   notifiedBranches: Set<string> = new Set(),
 ): Record<OverflowStatusBarStatus, number> {
-  const counts: Record<OverflowStatusBarStatus, number> = { waiting: 0, error: 0, "done-unread": 0 };
+  const counts: Record<OverflowStatusBarStatus, number> = { waiting: 0, "awaiting-permission": 0, error: 0, "done-unread": 0 };
   for (const { worktree } of rows) {
     if (!branches.has(worktree.branch)) continue;
     const status = overflowStatusOf(worktree, notifiedBranches);

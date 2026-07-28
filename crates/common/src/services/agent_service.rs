@@ -447,6 +447,8 @@ mod tests {
                 interrupt: false,
                 resume: false,
                 fork: false,
+                pinnable_session_id: false,
+                permission_interception: false,
             },
             implementation: AgentImplementation::Custom(crate::domain::config::CustomAgentConfig {
                 label: "Goose".to_string(),

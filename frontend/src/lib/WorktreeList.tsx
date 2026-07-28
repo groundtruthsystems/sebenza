@@ -19,6 +19,7 @@ const BAR_OFFSET = 8;
 
 const statusLabels: Record<OverflowStatusBarStatus, string> = {
   waiting: "waiting",
+  "awaiting-permission": "needs approval",
   error: "error",
   "done-unread": "unread",
 };

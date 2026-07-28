@@ -57,6 +57,7 @@ mod tests {
     /// `<agent>-pending:<path>` sentinel — enough to prove which adapter ran.
     fn snapshot(agent: Option<&str>) -> WorktreeSnapshot {
         WorktreeSnapshot {
+            kind: crate::domain::model::WorktreeKind::Linked,
             branch: "feature".to_string(),
             label: None,
             base_branch: None,

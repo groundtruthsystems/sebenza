@@ -38,7 +38,7 @@ export const AgentCapabilitiesSchema = z.object({
   interrupt: z.boolean(),
   resume: z.boolean(),
   /** Can branch a new session off an existing one, keeping its history. */
-  fork: z.boolean().optional(),
+  fork: z.boolean(),
   /** Sebenza can choose the session id at launch, so it never has to poll for it. */
   pinnableSessionId: z.boolean(),
   /** The agent's hooks can gate (deny/allow) a tool call, not merely observe it.

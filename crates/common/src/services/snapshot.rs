@@ -178,6 +178,7 @@ mod tests {
             },
             services: Vec::new(),
             prs: Vec::new(),
+            reported_session_id: None,
         }
     }
 

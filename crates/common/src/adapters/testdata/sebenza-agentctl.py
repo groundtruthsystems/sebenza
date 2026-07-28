@@ -236,8 +236,14 @@ def main():
         return 0
 
     if parsed.command == "opencode-permission-asked":
-        # Blocked on a human decision in opencode's TUI. Idle, not running.
-        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="idle"), control_env), control_env)
+        # Blocked on a human decision in opencode's own TUI. A DISTINCT lifecycle rather
+        # than plain idle, so the dashboard can say WHY this worktree wants attention:
+        # approve something already proposed, versus send the next prompt. With many
+        # parallel worktrees that difference is the whole value of the signal.
+        #
+        # Sebenza cannot answer the prompt - opencode's permission.ask hook does not fire
+        # (verified on 1.18.9) - so this is observational only.
+        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="awaiting_permission"), control_env), control_env)
         return 0
 
     if parsed.command == "opencode-permission-replied":
