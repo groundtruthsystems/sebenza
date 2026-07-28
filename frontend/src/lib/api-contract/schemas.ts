@@ -37,11 +37,13 @@ export const AgentCapabilitiesSchema = z.object({
   conversationHistory: z.boolean(),
   interrupt: z.boolean(),
   resume: z.boolean(),
-  /** Can a tab fork this agent's conversation? Built-ins only.
-   *  Deliberately NOT `.default(false)`: responses are not validated at runtime,
-   *  so a default would silently lie about an older server. Read it through
-   *  `agentCan()` in lib/agent-capabilities.ts, which has an explicit fallback. */
+  /** Can branch a new session off an existing one, keeping its history. */
   fork: z.boolean().optional(),
+  /** Sebenza can choose the session id at launch, so it never has to poll for it. */
+  pinnableSessionId: z.boolean(),
+  /** The agent's hooks can gate (deny/allow) a tool call, not merely observe it.
+   *  False for every current built-in. */
+  permissionInterception: z.boolean(),
 });
 
 export const AgentSummarySchema = z.object({

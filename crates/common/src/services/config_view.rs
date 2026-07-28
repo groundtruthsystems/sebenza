@@ -11,9 +11,9 @@ pub struct AgentCapabilities {
     pub conversation_history: bool,
     pub interrupt: bool,
     pub resume: bool,
-    /// Kept in lockstep with `agent_registry::AgentCapabilities` — the parity
-    /// test in this module fails if the two ever disagree.
     pub fork: bool,
+    pub pinnable_session_id: bool,
+    pub permission_interception: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -33,6 +33,8 @@ fn builtin_agent_summaries() -> Vec<AgentSummary> {
         interrupt: true,
         resume: true,
         fork: true,
+        pinnable_session_id: true,
+        permission_interception: false,
     };
     vec![
         AgentSummary {
@@ -69,8 +71,10 @@ pub fn list_agent_summaries(config: &ProjectConfig) -> Vec<AgentSummary> {
                 in_app_chat: false,
                 conversation_history: false,
                 interrupt: false,
-                resume: cfg.resume_command.is_some(),
                 fork: false,
+                pinnable_session_id: false,
+                permission_interception: false,
+                resume: cfg.resume_command.is_some(),
             },
         })
         .collect();

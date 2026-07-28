@@ -227,6 +227,8 @@ mod tests {
                 interrupt: true,
                 resume: true,
                 fork: true,
+                pinnable_session_id: true,
+                permission_interception: false,
             },
             implementation: AgentImplementation::Builtin(
                 BuiltinAgentId::from_wire(id).expect("test helper takes a builtin id"),

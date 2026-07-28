@@ -12,9 +12,18 @@ pub struct AgentCapabilities {
     pub conversation_history: bool,
     pub interrupt: bool,
     pub resume: bool,
-    /// Can a tab fork this agent's conversation? Requires session-id discovery,
-    /// which only the built-ins expose — so custom agents get `false`.
+    /// Can branch a new session off an existing one, keeping its history.
+    /// Claude: `--resume <id> --fork-session`. Codex: `fork <id>`.
     pub fork: bool,
+    /// Sebenza can choose the session id at launch, so it never has to discover it.
+    /// Claude accepts `--session-id`; Codex assigns its own and must be polled for
+    /// (`capture_new_session_id`).
+    pub pinnable_session_id: bool,
+    /// The agent's hook layer can *gate* a tool call — deny or allow it — rather than
+    /// only observing after the fact. False for every current built-in: Claude's and
+    /// Codex's hooks observe, and Codex's PermissionRequest only signals a lifecycle
+    /// change. Reserved for an agent that can genuinely block.
+    pub permission_interception: bool,
 }
 
 /// A built-in agent, i.e. one Sebenza knows how to launch, hook and read history for.
@@ -89,6 +98,10 @@ fn builtin(id: BuiltinAgentId) -> AgentDefinition {
             interrupt: true,
             resume: true,
             fork: true,
+            // Only Claude lets the caller choose the session id up front.
+            pinnable_session_id: matches!(id, BuiltinAgentId::Claude),
+            // No current built-in can deny a tool call from a hook.
+            permission_interception: false,
         },
         implementation: AgentImplementation::Builtin(id),
     }
@@ -110,6 +123,8 @@ fn build_custom_definition(id: &str, config: &CustomAgentConfig) -> AgentDefinit
             interrupt: false,
             resume: config.resume_command.is_some(),
             fork: false,
+            pinnable_session_id: false,
+            permission_interception: false,
         },
         implementation: AgentImplementation::Custom(config.clone()),
     }
@@ -175,6 +190,8 @@ pub struct AgentCapabilitiesWire {
     pub interrupt: bool,
     pub resume: bool,
     pub fork: bool,
+    pub pinnable_session_id: bool,
+    pub permission_interception: bool,
 }
 
 #[derive(Serialize)]
@@ -207,6 +224,8 @@ fn to_details(agent: AgentDefinition) -> AgentDetailsWire {
             interrupt: agent.capabilities.interrupt,
             resume: agent.capabilities.resume,
             fork: agent.capabilities.fork,
+            pinnable_session_id: agent.capabilities.pinnable_session_id,
+            permission_interception: agent.capabilities.permission_interception,
         },
         start_command,
         resume_command,
@@ -244,5 +263,121 @@ pub fn validate_custom_agent_input(
     ValidateCustomAgentResult {
         normalized_id: normalize_custom_agent_id(label),
         warnings,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::config::CustomAgentConfig;
+    use indexmap::IndexMap;
+    use std::collections::HashMap;
+
+    fn config_with(agents: &[(&str, CustomAgentConfig)]) -> ProjectConfig {
+        ProjectConfig {
+            name: "p".to_string(),
+            workspace: crate::domain::config::WorkspaceConfig {
+                main_branch: "main".to_string(),
+                worktree_root: "/wt".to_string(),
+                default_agent: "claude".to_string(),
+                auto_pull: crate::domain::config::AutoPullConfig {
+                    enabled: false,
+                    interval_seconds: 0,
+                },
+            },
+            profiles: IndexMap::new(),
+            agents: agents.iter().cloned().map(|(k, v)| (k.to_string(), v)).collect(),
+            launchers: HashMap::new(),
+            services: Vec::new(),
+            startup_envs: HashMap::new(),
+            integrations: crate::domain::config::IntegrationConfig {
+                github: crate::domain::config::GitHubIntegrationConfig {
+                    linked_repos: Vec::new(),
+                    auto_remove_on_merge: false,
+                },
+            },
+            lifecycle_hooks: crate::domain::config::LifecycleHooksConfig {
+                post_create: None,
+                pre_remove: None,
+            },
+            auto_name: None,
+            oneshot: crate::domain::config::OneshotConfig {
+                system_prompt: String::new(),
+            },
+        }
+    }
+
+    fn custom(label: &str, resume: Option<&str>) -> CustomAgentConfig {
+        CustomAgentConfig {
+            label: label.to_string(),
+            start_command: "run".to_string(),
+            resume_command: resume.map(str::to_string),
+        }
+    }
+
+    /// The verified per-agent capability matrix. `fork` and `pinnable_session_id` differ
+    /// between the two built-ins today; `permission_interception` is false for both
+    /// because neither Claude's nor Codex's hooks can gate a tool call.
+    #[test]
+    fn builtin_capability_matrix_matches_verified_behaviour() {
+        let config = config_with(&[]);
+        let defs = list_agent_definitions(&config);
+
+        let claude = defs.iter().find(|d| d.id == "claude").expect("claude is builtin");
+        assert!(claude.capabilities.fork, "claude forks via --resume ID --fork-session");
+        assert!(
+            claude.capabilities.pinnable_session_id,
+            "claude accepts --session-id, so Sebenza can pin the id at launch"
+        );
+        assert!(
+            !claude.capabilities.permission_interception,
+            "claude hooks observe; they cannot deny a tool call"
+        );
+
+        let codex = defs.iter().find(|d| d.id == "codex").expect("codex is builtin");
+        assert!(codex.capabilities.fork, "codex forks via `fork <id>`");
+        assert!(
+            !codex.capabilities.pinnable_session_id,
+            "codex assigns its own session id, so it must be discovered by polling"
+        );
+        assert!(
+            !codex.capabilities.permission_interception,
+            "codex's PermissionRequest hook only signals; it cannot deny"
+        );
+    }
+
+    /// Every new capability must be explicitly false for custom agents. The wire schema
+    /// declares them non-optional booleans, so a missing field fails schema parse.
+    #[test]
+    fn custom_agents_declare_every_new_capability_as_false() {
+        let config = config_with(&[("mine", custom("Mine", Some("resume")))]);
+        let defs = list_agent_definitions(&config);
+        let mine = defs.iter().find(|d| d.id == "mine").expect("custom agent listed");
+
+        assert!(!mine.capabilities.fork);
+        assert!(!mine.capabilities.pinnable_session_id);
+        assert!(!mine.capabilities.permission_interception);
+        // Unchanged pre-existing behaviour: resume is granted by a resume_command.
+        assert!(mine.capabilities.resume);
+        assert!(!mine.capabilities.in_app_chat);
+    }
+
+    /// The new fields must reach the frontend, not just exist in Rust: they are part of
+    /// AgentCapabilitiesSchema in the ts-rest contract.
+    #[test]
+    fn new_capabilities_are_serialized_on_the_wire_in_camel_case() {
+        let config = config_with(&[]);
+        let details = get_agent_details(&config, "claude").expect("claude details");
+        let json = serde_json::to_value(&details.capabilities).expect("serializes");
+
+        for field in ["fork", "pinnableSessionId", "permissionInterception"] {
+            assert!(
+                json.get(field).is_some(),
+                "wire payload must carry {field}; got {json}"
+            );
+        }
+        assert_eq!(json.get("fork"), Some(&serde_json::json!(true)));
+        assert_eq!(json.get("pinnableSessionId"), Some(&serde_json::json!(true)));
+        assert_eq!(json.get("permissionInterception"), Some(&serde_json::json!(false)));
     }
 }
