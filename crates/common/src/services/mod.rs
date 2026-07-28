@@ -6,6 +6,7 @@ pub mod auto_name_service;
 pub mod auto_pull_service;
 pub mod claude_conversation_service;
 pub mod codex_conversation_service;
+pub mod opencode_conversation_service;
 pub mod conversation_router;
 pub mod config_view;
 pub mod init_authoring;
