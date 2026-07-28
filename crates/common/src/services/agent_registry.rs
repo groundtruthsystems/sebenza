@@ -181,7 +181,7 @@ pub fn normalize_custom_agent_id(label: &str) -> String {
 
 // --- Wire types ---
 
-#[derive(Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentCapabilitiesWire {
     pub terminal: bool,
@@ -266,53 +266,66 @@ pub fn validate_custom_agent_input(
     }
 }
 
+/// Config builders shared by tests in this crate.
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::domain::config::CustomAgentConfig;
+pub mod tests_support {
+    use crate::domain::config::*;
     use indexmap::IndexMap;
     use std::collections::HashMap;
 
-    fn config_with(agents: &[(&str, CustomAgentConfig)]) -> ProjectConfig {
+    /// A ProjectConfig with no profiles, agents, services or hooks — the minimum that
+    /// deserializes. Mutate the fields a test cares about.
+    pub fn minimal_config() -> ProjectConfig {
         ProjectConfig {
             name: "p".to_string(),
-            workspace: crate::domain::config::WorkspaceConfig {
+            workspace: WorkspaceConfig {
                 main_branch: "main".to_string(),
                 worktree_root: "/wt".to_string(),
                 default_agent: "claude".to_string(),
-                auto_pull: crate::domain::config::AutoPullConfig {
-                    enabled: false,
-                    interval_seconds: 0,
-                },
+                auto_pull: AutoPullConfig { enabled: false, interval_seconds: 0 },
             },
             profiles: IndexMap::new(),
-            agents: agents.iter().cloned().map(|(k, v)| (k.to_string(), v)).collect(),
+            agents: HashMap::new(),
             launchers: HashMap::new(),
             services: Vec::new(),
             startup_envs: HashMap::new(),
-            integrations: crate::domain::config::IntegrationConfig {
-                github: crate::domain::config::GitHubIntegrationConfig {
+            integrations: IntegrationConfig {
+                github: GitHubIntegrationConfig {
                     linked_repos: Vec::new(),
                     auto_remove_on_merge: false,
                 },
             },
-            lifecycle_hooks: crate::domain::config::LifecycleHooksConfig {
-                post_create: None,
-                pre_remove: None,
-            },
+            lifecycle_hooks: LifecycleHooksConfig { post_create: None, pre_remove: None },
             auto_name: None,
-            oneshot: crate::domain::config::OneshotConfig {
-                system_prompt: String::new(),
-            },
+            oneshot: OneshotConfig { system_prompt: String::new() },
         }
     }
 
-    fn custom(label: &str, resume: Option<&str>) -> CustomAgentConfig {
+    /// A custom agent definition; `resume` grants the resume capability.
+    pub fn custom_agent(label: &str, resume: Option<&str>) -> CustomAgentConfig {
         CustomAgentConfig {
             label: label.to_string(),
             start_command: "run".to_string(),
             resume_command: resume.map(str::to_string),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_support::{custom_agent, minimal_config};
+    use super::*;
+
+    fn config_with(agents: &[(&str, crate::domain::config::CustomAgentConfig)]) -> ProjectConfig {
+        let mut c = minimal_config();
+        for (id, cfg) in agents {
+            c.agents.insert(id.to_string(), cfg.clone());
+        }
+        c
+    }
+
+    fn custom(label: &str, resume: Option<&str>) -> crate::domain::config::CustomAgentConfig {
+        custom_agent(label, resume)
     }
 
     /// The verified per-agent capability matrix. `fork` and `pinnable_session_id` differ
