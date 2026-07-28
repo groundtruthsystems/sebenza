@@ -40,19 +40,21 @@
           "id": "phase-0-task-5",
           "name": "Write tests for loopback-default bind",
           "description": "FR-0.5. Failing tests asserting the server binds 127.0.0.1 by default and binds all interfaces only when the explicit opt-in flag/env is set.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "afa558a"
         },
         {
           "id": "phase-0-task-6",
           "name": "Implement loopback-default bind with explicit LAN opt-in",
           "description": "FR-0.5. Change main.rs:82 from SocketAddr::from(([0,0,0,0], port)) to loopback by default, adding an explicit flag/env to opt into all interfaces. Behaviour change for anyone reaching the dashboard from another machine - must be called out in release notes. Unblocks the permission routes in phase-3.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "afa558a"
         },
         {
           "id": "phase-0-task-7",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md: ensure test coverage for phase changes, run cargo test and CI=true npm test, propose manual verification, await confirmation, attach git-notes verification report, record checkpoint_sha.",
-          "status": "backlog"
+          "status": "doing"
         }
       ]
     },

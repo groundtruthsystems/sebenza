@@ -13,7 +13,7 @@
       "description": "Embed opencode as a first-class built-in agent, selectable when creating a new worktree, alongside claude and codex. Includes a Sebenza-side permission approve/deny flow for opencode. goose was researched and verified but descoped to a later track (see TODO.md).",
       "status": "doing",
       "created_at": "2026-07-27T14:49:46Z",
-      "updated_at": "2026-07-28T10:45:00Z",
+      "updated_at": "2026-07-28T11:00:00Z",
       "design_path": "tracks/goose_opencode_agents_20260727/design.md",
       "spec_path": "tracks/goose_opencode_agents_20260727/spec.md",
       "plan_path": "tracks/goose_opencode_agents_20260727/plan.json",
@@ -45,8 +45,8 @@
       ],
       "progress": {
         "total_tasks": 45,
-        "completed_tasks": 4,
-        "percentage": 8.9
+        "completed_tasks": 6,
+        "percentage": 13.3
       }
     }
   ]
