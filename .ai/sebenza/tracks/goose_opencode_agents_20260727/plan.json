@@ -70,13 +70,15 @@
           "id": "phase-1-task-1",
           "name": "Write tests for BuiltinAgentId enum and per-agent invocation split",
           "description": "FR-1.1. Failing tests covering the enum-based registry and the extraction of built_in_invocation's if/else into per-agent functions, preserving existing claude and codex argv exactly (fresh, resume, fork, yolo, system prompt, prompt suffix).",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "4984db4"
         },
         {
           "id": "phase-1-task-2",
           "name": "Introduce BuiltinAgentId and refactor invocation building",
           "description": "FR-1.1. Replace AgentImplementation::Builtin(String) with Builtin(BuiltinAgentId) for Claude and Codex only. Split built_in_invocation (agent_service.rs:74-132) into named per-agent functions dispatched by enum match. No new agents in this task - this is the seam that Opencode plugs into in phase-2, and that a future goose track reuses.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "4984db4"
         },
         {
           "id": "phase-1-task-3",
