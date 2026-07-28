@@ -170,49 +170,56 @@
           "id": "phase-2-task-3",
           "name": "Write tests for the opencode plugin shim",
           "description": "FR-3.3, FR-3.4, FR-5.6. Failing tests asserting the generated .opencode/plugins/sebenza.js imports nothing, embeds no branch/worktree/profile literals (per-worktree data arrives via SEBENZA_* env vars), is byte-stable across worktrees, is written as a full overwrite, and maps the event hook correctly.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "1ea4152"
         },
         {
           "id": "phase-2-task-4",
           "name": "Generate the opencode plugin shim and extend agentctl",
           "description": "FR-3.3, FR-3.4. Emit an import-free JS shim using only runtime globals. Map the generic event hook: EventSessionCreated to session-id capture (no polling), EventSessionIdle to idle, EventSessionError to runtime error, tool.execute.before to running, tool.execute.after to PR detection via the existing maybe_send_pr_opened. Add opencode-* agentctl subcommands; all decision logic stays in the Python helper, never reimplemented in JS. This is the first generated-JS artifact in the codebase.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "1ea4152"
         },
         {
           "id": "phase-2-task-5",
           "name": "Write tests for opencode history via the CLI",
           "description": "FR-3.5. Failing tests against the phase-0 export fixture, asserting history is read via `opencode session list` and `opencode export <id> --sanitize`, that opencode.db is never opened, and that unknown fields in the export JSON are tolerated.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "58f4395"
         },
         {
           "id": "phase-2-task-6",
           "name": "Implement opencode session discovery and conversation service",
           "description": "FR-3.5. Add adapters/opencode_session_log.rs shelling out to session list and export --sanitize, plus services/opencode_conversation_service.rs emitting AgentsUiMessage. --sanitize gives upstream-defined secret redaction, preferable to anything Sebenza would implement itself. Add the Opencode variant to DiscoverableAgentKind and WorktreeConversationProvider.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "58f4395"
         },
         {
           "id": "phase-2-task-7",
           "name": "Implement worktree-to-session correlation per the phase-0 finding",
           "description": "FR-3.6. Correlate via project.worktree to session directory/path as established by phase-0-task-1. If that task found opencode resolves a linked worktree to the parent repository, implement the revised approach it recommends instead - do not assume per-worktree partitioning.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "f7270a7"
         },
         {
           "id": "phase-2-task-8",
           "name": "Write tests for artifact git-exclusion and env file permissions",
           "description": "FR-5.1, FR-5.5. Failing tests asserting all generated in-worktree artifacts are added to info/exclude (.opencode/plugins/, and retroactively .claude/settings.local.json), and that control.env and runtime.env are written 0600.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "1ea4152"
         },
         {
           "id": "phase-2-task-9",
           "name": "Git-exclude generated artifacts and harden env file modes",
           "description": "FR-5.1, FR-5.5. Generalise ensure_generated_codex_hooks_ignored from a single constant to a path list, so any future agent's artifact is covered by construction. Apply set_mode_600 in write_control_env and write_runtime_env - runtime.env merges .env.local project secrets, so the exposure is wider than the control token alone.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "1ea4152"
         },
         {
           "id": "phase-2-task-10",
           "name": "Write tests for untrusted-plugin scan and per-repo confirmation",
           "description": "FR-5.2, FR-5.3. SHARED CONTROL. Failing tests for: detecting plugin files Sebenza did not write by comparing against a stored hash of bytes last written (not a recomputed expectation); the store living outside the worktree in <git-common-dir>/.ai/sebenza/; auto-launch blocked pending confirmation; the decision remembered per repository; and the store being unwritable from the worktree.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-2-task-11",
