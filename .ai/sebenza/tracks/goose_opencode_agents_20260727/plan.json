@@ -271,7 +271,7 @@
     {
       "id": "phase-3",
       "name": "Permission visibility for opencode (redesigned)",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -285,27 +285,32 @@
           "id": "phase-3-task-2",
           "name": "Write tests for an awaiting-permission lifecycle state",
           "description": "Failing tests for a distinct AgentLifecycle state meaning 'blocked on a permission decision', its status string, and the runtime-event arm that sets it. Distinct from Idle because 'finished its turn' and 'blocked on a dialog' call for different user actions, yet both currently render as `waiting`.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "d990faa"
         },
         {
           "id": "phase-3-task-3",
           "name": "Implement the awaiting-permission lifecycle state end to end",
           "description": "AgentLifecycle variant, lifecycle_status mapping, the agent_status_changed lifecycle whitelist in parse_runtime_event, agentctl's opencode-permission-asked, and the frontend status mapping plus label so the dashboard says WHY a worktree wants attention. Reuses the existing `waiting` visual treatment rather than inventing a new one.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "d990faa"
         },
         {
           "id": "phase-3-task-4",
           "name": "Record the enforcement gap in the design and docs",
           "description": "Update design.md and spec.md so no document still claims Sebenza can gate an opencode tool call, and add a TODO for revisiting if upstream restores permission.ask. The design currently describes a synchronous decision channel that cannot be built.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "HEAD"
         },
         {
           "id": "phase-3-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "a5755aa"
         }
-      ]
+      ],
+      "checkpoint_sha": "a5755aa"
     }
   ]
 }
