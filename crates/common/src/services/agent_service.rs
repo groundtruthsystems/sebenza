@@ -19,7 +19,10 @@ fn runtime_bootstrap(runtime_env_path: &str) -> String {
     format!("set -a; . {}; set +a", quote_shell(runtime_env_path))
 }
 
-const DOCKER_PATH_FALLBACK: &str = "/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin";
+// `/root/.opencode/bin` is opencode's own install location, which is not a conventional
+// directory and is not on a container's default PATH.
+const DOCKER_PATH_FALLBACK: &str =
+    "/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin:/root/.opencode/bin";
 
 fn docker_runtime_bootstrap(runtime_env_path: &str) -> String {
     format!("{}; export PATH=\"$PATH:{DOCKER_PATH_FALLBACK}\"", runtime_bootstrap(runtime_env_path))

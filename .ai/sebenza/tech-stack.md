@@ -35,8 +35,24 @@ wrapper in `frontend/src/lib/api.ts`.
 ## External dependencies
 
 - **Required:** `git`, `tmux`.
-- **Optional:** `gh` (PR/CI monitoring), `claude` / `codex` CLIs (built-in agents), `docker`
-  (sandboxed worktree runtime).
+- **Optional:** `gh` (PR/CI monitoring), `docker` (sandboxed worktree runtime), and the
+  built-in agent CLIs below.
+
+### Built-in agent CLIs and minimum supported versions
+
+| Agent | Minimum verified | Notes |
+|---|---|---|
+| `claude` | — | Session logs under `~/.claude/projects/<encoded-cwd>/` |
+| `codex` | — | Needs `--enable hooks`; assigns its own session id |
+| `opencode` | **1.18.7** | Installs to `~/.opencode/bin`, which is **not** on a default `PATH`. History is read via `opencode export <id>` (never `--sanitize`, which redacts the transcript). Session store is SQLite; Sebenza never reads it directly |
+
+`sebenza-cli init` reports each tool's detected version, so a session-format or hook change
+that breaks history can be diagnosed against the version actually installed rather than
+guessed at. opencode moves fast — 1.18.7 → 1.18.9 was observed within a day — so the
+adapter tolerates unknown fields and degrades rather than failing.
+
+`goose` is detected by `init` but is **not** a built-in agent; it remains usable as a custom
+(terminal-only) agent. See `TODO.md`.
 
 ## Build order constraint
 

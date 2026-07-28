@@ -177,6 +177,25 @@ fn build_custom_definition(id: &str, config: &CustomAgentConfig) -> AgentDefinit
     }
 }
 
+/// Custom-agent ids that a built-in now shadows, so the caller can tell the user their
+/// configuration has stopped taking effect.
+///
+/// This matters because it is a silent breaking change: `.ai/sebenza.example.yaml` used to
+/// ship an `opencode:` custom agent, so anyone who started from it has an entry that the
+/// filter in `list_agent_definitions` now discards. Reporting it is the difference between
+/// "my custom command mysteriously stopped working" and an actionable message. The escape
+/// hatch is to rename the key, since `agents` is keyed by an arbitrary string.
+pub fn shadowed_custom_agent_ids(config: &ProjectConfig) -> Vec<String> {
+    let mut ids: Vec<String> = config
+        .agents
+        .keys()
+        .filter(|id| BuiltinAgentId::from_wire(id).is_some())
+        .cloned()
+        .collect();
+    ids.sort();
+    ids
+}
+
 /// Built-in agents followed by custom agents (sorted by label, then id),
 /// excluding any custom entry that shadows a built-in id.
 pub fn list_agent_definitions(config: &ProjectConfig) -> Vec<AgentDefinition> {
@@ -429,6 +448,25 @@ mod tests {
             !oc.capabilities.permission_interception,
             "permission.ask was not observed firing (phase-0-task-2); gated on the phase-3 spike"
         );
+    }
+
+    #[test]
+    fn a_custom_entry_shadowed_by_a_builtin_is_reported_not_silently_dropped() {
+        // Anyone who started from the shipped example config has an `opencode:` entry.
+        let config = config_with(&[
+            ("opencode", custom("My OpenCode", Some("opencode -c"))),
+            ("goose", custom("Goose", None)),
+            ("mine", custom("Mine", None)),
+        ]);
+        // goose is NOT builtin in this track, so its entry still applies.
+        assert_eq!(shadowed_custom_agent_ids(&config), vec!["opencode".to_string()]);
+
+        // And the builtin wins in the listing, so the custom one really is inert.
+        let defs = list_agent_definitions(&config);
+        let oc = defs.iter().find(|d| d.id == "opencode").expect("opencode listed");
+        assert_eq!(oc.kind, "builtin", "the builtin must win over the shadowed entry");
+        assert!(defs.iter().any(|d| d.id == "goose" && d.kind == "custom"));
+        assert!(defs.iter().any(|d| d.id == "mine" && d.kind == "custom"));
     }
 
     /// Every new capability must be explicitly false for custom agents. The wire schema

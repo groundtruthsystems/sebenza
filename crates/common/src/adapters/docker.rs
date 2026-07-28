@@ -123,6 +123,20 @@ pub fn build_docker_run_args(
     v(&mut args, format!("{home}/.claude:/root/.claude"));
     v(&mut args, format!("{home}/.claude.json:/root/.claude.json"));
     v(&mut args, format!("{home}/.codex:/root/.codex"));
+    // opencode needs TWO mounts, unlike claude/codex.
+    //
+    // Those two happen to keep config AND session data under one directory, so a single
+    // mount gives a containerised run both its credentials and a host-visible session log
+    // - which is the only reason conversation history works under docker today.
+    //
+    // opencode separates them: credentials live in ~/.config/opencode, sessions in
+    // ~/.local/share/opencode (opencode.db). Without the config mount a containerised run
+    // has no provider credentials at all; without the data mount Sebenza cannot export the
+    // session from the host. Both are mounted unconditionally, matching the claude/codex
+    // mounts above, so host and docker have the same capabilities rather than history
+    // silently depending on the runtime.
+    v(&mut args, format!("{home}/.config/opencode:/root/.config/opencode"));
+    v(&mut args, format!("{home}/.local/share/opencode:/root/.local/share/opencode"));
 
     // Guest paths already covered by configured mounts (explicit mounts win).
     let mut extra_guest: HashSet<String> = HashSet::new();
@@ -336,6 +350,29 @@ mod tests {
             service_port_envs: vec!["PORT".to_string()],
             runtime_env: HashMap::from([("PORT".to_string(), "5111".to_string()), ("FOO".to_string(), "bar".to_string())]),
         }
+    }
+
+
+    #[test]
+    fn opencode_gets_both_a_config_and_a_session_data_mount() {
+        let args = build_docker_run_args(&opts(), &HashSet::new(), "/home/u", "c1", None, 1000, 1000);
+        let joined = args.join(" ");
+
+        // Both are required, unlike claude/codex which need only one each: opencode keeps
+        // credentials in ~/.config/opencode and its session store in
+        // ~/.local/share/opencode. Without the first a containerised run has no
+        // credentials; without the second the host cannot `opencode export`.
+        assert!(
+            joined.contains("-v /home/u/.config/opencode:/root/.config/opencode"),
+            "missing opencode config mount: {joined}"
+        );
+        assert!(
+            joined.contains("-v /home/u/.local/share/opencode:/root/.local/share/opencode"),
+            "missing opencode session-data mount: {joined}"
+        );
+        // Pre-existing mounts must survive.
+        assert!(joined.contains("-v /home/u/.claude:/root/.claude"));
+        assert!(joined.contains("-v /home/u/.codex:/root/.codex"));
     }
 
     #[test]

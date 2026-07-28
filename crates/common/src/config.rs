@@ -272,6 +272,7 @@ fn parse_project_config(val: serde_yaml::Value) -> ProjectConfig {
             let provider = match auto_name_map.get("provider").and_then(|v| v.as_str()) {
                 Some("claude") => Some(AutoNameProvider::Claude),
                 Some("codex") => Some(AutoNameProvider::Codex),
+                Some("opencode") => Some(AutoNameProvider::Opencode),
                 _ => None,
             };
             if let Some(provider) = provider {

@@ -96,6 +96,21 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
     manager.load_persisted();
     let launch = manager.add_ephemeral(&project_dir);
 
+    // Tell the user if a custom-agent entry has been superseded by a built-in. Otherwise
+    // this is a silent breaking change: the shipped example config used to define an
+    // `opencode:` custom agent, and `list_agent_definitions` now discards that entry in
+    // favour of the built-in, so a customised command would just stop taking effect.
+    let shadowed = common::services::agent_registry::shadowed_custom_agent_ids(&launch.config());
+    if !shadowed.is_empty() {
+        tracing::warn!(
+            "custom agent(s) {} in {project_dir} are now BUILT IN, so those `agents:` entries \
+             are ignored. Delete them, or rename the key (e.g. `{}-custom:`) to keep a \
+             divergent command.",
+            shadowed.join(", "),
+            shadowed[0],
+        );
+    }
+
     let terminal = Arc::new(TerminalManager::new(port));
     // Reap orphaned grouped sessions from previous runs before serving.
     terminal.cleanup_stale_sessions();

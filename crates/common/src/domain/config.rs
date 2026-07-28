@@ -126,6 +126,7 @@ pub struct LifecycleHooksConfig {
 pub enum AutoNameProvider {
     Claude,
     Codex,
+    Opencode,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
