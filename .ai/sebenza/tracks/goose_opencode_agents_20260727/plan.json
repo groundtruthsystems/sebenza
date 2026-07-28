@@ -271,74 +271,85 @@
     {
       "id": "phase-3",
       "name": "Permission gating for opencode",
-      "status": "doing",
-      "blocked_reason": null,
+      "status": "blocked",
+      "blocked_reason": "Hard gate phase-3-task-1 returned a negative result: permission.ask does not fire on opencode 1.18.9, so the synchronous decision channel cannot be built as designed. Awaiting a redesign-or-descope decision.",
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Spike: verify permission.ask can fire and be honoured",
           "description": "Residue of phase-0-task-2, which established that --auto bypasses permission.ask, that permission.ask is config-ruleset-gated rather than per-tool-call, and that `permission: {bash: \"ask\"}` hangs non-interactive `opencode run`. What remains unproven is whether permission.ask fires AT ALL and whether mutating output.status is honoured. Build a harness matching how Sebenza actually launches agents - an interactive TUI in a tmux pane - and/or `opencode serve` + a scripted client. Set a project permission rule evaluating to `ask`, install a probe plugin that logs the call and sets status, and confirm the tool is allowed or denied accordingly. HARD GATE: if permission.ask cannot be driven this way, the remaining phase-3 tasks are not buildable as designed and the phase must be redesigned or descoped. Do not begin phase-3-task-2 until this resolves.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "f4c9b53"
         },
         {
           "id": "phase-3-task-2",
           "name": "Write tests for the asymmetric credential model",
           "description": "FR-4.2. Failing tests asserting the resolve route REJECTS a verdict presented with only the control token; that it requires a per-request resolver secret minted server-side; that the secret never appears in control.env, runtime.env or any worktree-readable file; and that a verdict is single-use and bound to session plus request id. This closes the flaw where the gated process, which holds SEBENZA_CONTROL_TOKEN, could approve its own request.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "phase-3-task-1 established that permission.ask never fires on opencode 1.18.9 (verified via an interactive TUI in tmux: permission.asked/permission.replied fire on the generic event hook, the mutable permission.ask hook does not). The gating design has nothing to write a verdict into, so this task is not buildable as specified. Needs a redesign or descope decision."
         },
         {
           "id": "phase-3-task-3",
           "name": "Implement the pending-decision store and resolver secrets",
           "description": "FR-4.2, FR-4.3. Mirror agent_stream.rs's AgentStreamManager/RunState idiom: a concurrent map of request ids to oneshot senders resolved by a side-channel call. In-memory, not durable across restart. Mint per-request resolver secrets delivered only via the WS push payload and the CLI response.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "phase-3-task-1 established that permission.ask never fires on opencode 1.18.9 (verified via an interactive TUI in tmux: permission.asked/permission.replied fire on the generic event hook, the mutable permission.ask hook does not). The gating design has nothing to write a verdict into, so this task is not buildable as specified. Needs a redesign or descope decision."
         },
         {
           "id": "phase-3-task-4",
           "name": "Write tests for submit/resolve routes, fail-closed paths and the cap",
           "description": "FR-4.4 to FR-4.8, FR-4.11. Failing tests for: the submit handler awaiting a oneshot receiver with no lock held across the await; timeout, HTTP error and connection reset all resolving to deny; the server timeout being authoritative; the per-session and global pending cap with auto-deny beyond it; timeout enforcement independent of WS delivery; and both routes bound to loopback.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "phase-3-task-1 established that permission.ask never fires on opencode 1.18.9 (verified via an interactive TUI in tmux: permission.asked/permission.replied fire on the generic event hook, the mutable permission.ask hook does not). The gating design has nothing to write a verdict into, so this task is not buildable as specified. Needs a redesign or descope decision."
         },
         {
           "id": "phase-3-task-5",
           "name": "Implement the submit and resolve routes",
           "description": "FR-4.4 to FR-4.8, FR-4.11, FR-5.8. Loopback-bound routes with the asymmetric auth model, fail-closed on every failure mode, server-authoritative timeout, pending cap with auto-deny, and the permission_decision (including resolution source) and pending_permission_cap_hit audit events. Never block the async runtime.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "phase-3-task-1 established that permission.ask never fires on opencode 1.18.9 (verified via an interactive TUI in tmux: permission.asked/permission.replied fire on the generic event hook, the mutable permission.ask hook does not). The gating design has nothing to write a verdict into, so this task is not buildable as specified. Needs a redesign or descope decision."
         },
         {
           "id": "phase-3-task-6",
           "name": "Write tests for the shim permission.ask round-trip",
           "description": "FR-4.1, FR-4.5. Failing tests asserting the shim calls permission.ask, awaits a verdict via fetch (a runtime global under opencode's bundled Bun, so the import-free constraint from phase-2 still holds), writes it into output.status, and fails closed on timeout or error.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "phase-3-task-1 established that permission.ask never fires on opencode 1.18.9 (verified via an interactive TUI in tmux: permission.asked/permission.replied fire on the generic event hook, the mutable permission.ask hook does not). The gating design has nothing to write a verdict into, so this task is not buildable as specified. Needs a redesign or descope decision."
         },
         {
           "id": "phase-3-task-7",
           "name": "Implement permission.ask in the generated shim",
           "description": "FR-4.1. Extend the phase-2 shim to submit the request, await the verdict, and set output.status. Apply the phase-0-task-2 finding: if permission.ask does not fire under --auto, the two features are mutually exclusive and the UI must prevent enabling both.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "phase-3-task-1 established that permission.ask never fires on opencode 1.18.9 (verified via an interactive TUI in tmux: permission.asked/permission.replied fire on the generic event hook, the mutable permission.ask hook does not). The gating design has nothing to write a verdict into, so this task is not buildable as specified. Needs a redesign or descope decision."
         },
         {
           "id": "phase-3-task-8",
           "name": "Implement the dashboard permission prompt and WS push",
           "description": "FR-4.9. Push pending requests over the existing WS event stream carrying the resolver secret, and render a prompt card modelled on AskUserQuestionCard's look - its plumbing is transcript-level with no backend counterpart and is not reusable.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "phase-3-task-1 established that permission.ask never fires on opencode 1.18.9 (verified via an interactive TUI in tmux: permission.asked/permission.replied fire on the generic event hook, the mutable permission.ask hook does not). The gating design has nothing to write a verdict into, so this task is not buildable as specified. Needs a redesign or descope decision."
         },
         {
           "id": "phase-3-task-9",
           "name": "Implement CLI parity for pending permission requests",
           "description": "FR-4.9. sebenza-cli commands to list and answer pending requests, per Guiding Principle 8. This is also the designed fallback when a WS push is missed.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "phase-3-task-1 established that permission.ask never fires on opencode 1.18.9 (verified via an interactive TUI in tmux: permission.asked/permission.replied fire on the generic event hook, the mutable permission.ask hook does not). The gating design has nothing to write a verdict into, so this task is not buildable as specified. Needs a redesign or descope decision."
         },
         {
           "id": "phase-3-task-10",
           "name": "Implement per-profile timeout and visible timeout denial",
           "description": "FR-4.6, FR-4.10. Add a configurable per-profile decision timeout. A timeout-caused denial must be visible in the transcript and worktree status so a stalled worktree reads as 'waited for you, then denied' rather than as a hung agent.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "phase-3-task-1 established that permission.ask never fires on opencode 1.18.9 (verified via an interactive TUI in tmux: permission.asked/permission.replied fire on the generic event hook, the mutable permission.ask hook does not). The gating design has nothing to write a verdict into, so this task is not buildable as specified. Needs a redesign or descope decision."
         },
         {
           "id": "phase-3-task-11",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md. Manual verification must cover: approving a tool call, denying one, letting one time out and confirming the denial is visible, and confirming the resolve route rejects a control-token-only verdict.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "phase-3-task-1 established that permission.ask never fires on opencode 1.18.9 (verified via an interactive TUI in tmux: permission.asked/permission.replied fire on the generic event hook, the mutable permission.ask hook does not). The gating design has nothing to write a verdict into, so this task is not buildable as specified. Needs a redesign or descope decision."
         }
       ]
     }
