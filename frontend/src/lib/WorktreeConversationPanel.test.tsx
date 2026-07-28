@@ -52,6 +52,7 @@ function renderPanel({
   conversationError = null,
   composerText = "",
   isSending = false,
+  supportsChat = true,
   onAnswerQuestion = vi.fn(),
 }: {
   worktree?: WorktreeInfo;
@@ -60,12 +61,14 @@ function renderPanel({
   composerText?: string;
   isSending?: boolean;
   onAnswerQuestion?: (text: string) => void;
+  supportsChat?: boolean;
 } = {}) {
   const onInterrupt = vi.fn();
 
   render(
     <WorktreeConversationPanel
       worktree={worktree}
+      supportsChat={supportsChat}
       conversation={conversation}
       conversationError={conversationError}
       conversationLoading={false}
@@ -399,5 +402,32 @@ describe("WorktreeConversationPanel", () => {
     });
 
     expect(screen.getByText("Codex is processing")).toBeInTheDocument();
+  });
+});
+
+describe("capability-driven chat gating", () => {
+  it("hides chat when the agent does not declare in-app chat", () => {
+    renderPanel({
+      worktree: createWorktree({ agentName: "some-custom-agent", agentLabel: "Custom" }),
+      supportsChat: false,
+    });
+    // The panel must explain itself rather than silently rendering nothing.
+    expect(document.body.textContent).toMatch(/does not support|not available|terminal/i);
+  });
+
+  it("shows chat when the agent declares in-app chat, whatever its id", () => {
+    renderPanel({
+      worktree: createWorktree({ agentName: "some-future-agent", agentLabel: "Future" }),
+      supportsChat: true,
+    });
+    expect(document.body.textContent).not.toMatch(/does not support/i);
+  });
+
+  it("falls back to the agent id for its label, never guessing Codex", () => {
+    renderPanel({
+      worktree: createWorktree({ agentName: "some-future-agent", agentLabel: null }),
+      supportsChat: true,
+    });
+    expect(document.body.textContent).not.toContain("Codex");
   });
 });

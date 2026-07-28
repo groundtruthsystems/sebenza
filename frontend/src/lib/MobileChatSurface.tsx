@@ -24,6 +24,8 @@ import WorktreeConversationPanel from "./WorktreeConversationPanel";
 
 interface Props {
   worktree: WorktreeInfo;
+  /** Whether the worktree's agent declares in-app chat (`capabilities.inAppChat`). */
+  supportsChat: boolean;
   onConversationMessageSent?: () => void;
 }
 
@@ -46,6 +48,7 @@ const REFRESH_POLL_SETTLE_TICKS = 3;
 
 export default function MobileChatSurface({
   worktree,
+  supportsChat,
   onConversationMessageSent = () => {},
 }: Props) {
   const [conversation, setConversationState] = useState<AgentsUiConversationState | null>(null);
@@ -87,7 +90,9 @@ export default function MobileChatSurface({
   }
 
   function supportsStreaming(nextConversation: AgentsUiConversationState | null): boolean {
-    return nextConversation?.provider === "codexAppServer" || nextConversation?.provider === "claudeCode";
+    // Any provider the contract knows about is a chat provider; listing ids inline here
+    // means a new provider is silently treated as "no chat".
+    return nextConversation?.provider != null;
   }
 
   function hasActiveConversationStream(conversationId: string): boolean {
@@ -318,6 +323,10 @@ export default function MobileChatSurface({
     // history so the terminal claude's flushed messages appear live; stop once it idles.
     const agentBusy = worktree.agent === "working";
     const isTerminalOwnedClaudeTurn =
+      // Claude-specific by nature, not a capability: it compensates for Claude's live
+      // stream omitting terminal-typed turns. Whether another agent needs the same
+      // compensation can only be judged by watching its stream. Mirrors the equivalent
+      // exception in sebenza-cli oneshot.rs.
       conversation?.provider === "claudeCode" && conversation.running !== true;
 
     if (agentBusy && isTerminalOwnedClaudeTurn) {
@@ -366,6 +375,7 @@ export default function MobileChatSurface({
   return (
     <WorktreeConversationPanel
       worktree={worktree}
+      supportsChat={supportsChat}
       conversation={conversation}
       conversationError={conversationError}
       conversationLoading={conversationLoading}

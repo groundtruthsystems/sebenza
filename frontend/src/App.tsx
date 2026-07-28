@@ -161,6 +161,14 @@ export default function App() {
   const terminalRef = useRef<TerminalHandle>(null);
   const worktreeSearchInputRef = useRef<HTMLInputElement>(null);
 
+  function agentCapabilitiesFor(worktree: WorktreeInfo | undefined) {
+    if (!worktree?.agentName) return undefined;
+    return config.agents.find((candidate) => candidate.id === worktree.agentName)?.capabilities;
+  }
+
+  /** Fail closed: an agent we cannot find capabilities for gets no chat tab, rather
+   *  than falling back to a hardcoded id list. Hiding a tab is recoverable; offering
+   *  chat for an agent that cannot serve it is not. */
   function supportsWorktreeChat(worktree: WorktreeInfo | undefined): boolean {
     return agentCan(config.agents, worktree?.agentName, "inAppChat");
   }

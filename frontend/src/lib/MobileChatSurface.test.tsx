@@ -135,7 +135,7 @@ describe("MobileChatSurface", () => {
     } satisfies AgentsUiSendMessageResponse);
     vi.mocked(fetchWorktreeConversationHistory).mockResolvedValue(createConversationResponse("claudeCode"));
 
-    render(<MobileChatSurface worktree={createWorktree()} />);
+    render(<MobileChatSurface worktree={createWorktree()} supportsChat />);
 
     await screen.findByText("No messages yet. Send the first prompt to start this chat.");
     expect(connectWorktreeConversationStream).not.toHaveBeenCalled();
@@ -174,7 +174,7 @@ describe("MobileChatSurface", () => {
         streaming: true,
       } satisfies AgentsUiSendMessageResponse);
 
-    render(<MobileChatSurface worktree={createWorktree()} />);
+    render(<MobileChatSurface worktree={createWorktree()} supportsChat />);
 
     await screen.findByText("No messages yet. Send the first prompt to start this chat.");
 
@@ -238,7 +238,7 @@ describe("MobileChatSurface", () => {
       ],
     }));
 
-    render(<MobileChatSurface worktree={createWorktree()} />);
+    render(<MobileChatSurface worktree={createWorktree()} supportsChat />);
 
     await screen.findByText("No messages yet. Send the first prompt to start this chat.");
 
@@ -266,7 +266,7 @@ describe("MobileChatSurface", () => {
     } satisfies AgentsUiSendMessageResponse);
     vi.mocked(fetchWorktreeConversationHistory).mockResolvedValue(createConversationResponse("codexAppServer"));
 
-    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex" })} />);
+    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex" })} supportsChat />);
 
     await screen.findByText("No messages yet. Send the first prompt to start this chat.");
     expect(connectWorktreeConversationStream).not.toHaveBeenCalled();
@@ -289,7 +289,7 @@ describe("MobileChatSurface", () => {
   it("does not open an idle Codex stream after loading the snapshot", async () => {
     vi.mocked(attachWorktreeConversation).mockResolvedValue(createConversationResponse("codexAppServer"));
 
-    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex" })} />);
+    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex" })} supportsChat />);
 
     await screen.findByText("No messages yet. Send the first prompt to start this chat.");
 
@@ -302,7 +302,7 @@ describe("MobileChatSurface", () => {
       activeTurnId: "turn-1",
     }));
 
-    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex" })} />);
+    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex" })} supportsChat />);
 
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
@@ -321,7 +321,7 @@ describe("MobileChatSurface", () => {
       streaming: true,
     } satisfies AgentsUiSendMessageResponse);
 
-    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex" })} />);
+    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex" })} supportsChat />);
 
     await screen.findByText("No messages yet. Send the first prompt to start this chat.");
 
@@ -362,7 +362,7 @@ describe("MobileChatSurface", () => {
       activeTurnId: "claude-turn:turn-1",
     }));
 
-    render(<MobileChatSurface worktree={createWorktree()} />);
+    render(<MobileChatSurface worktree={createWorktree()} supportsChat />);
 
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
@@ -390,7 +390,7 @@ describe("MobileChatSurface", () => {
       activeTurnId: "turn-1",
     }));
 
-    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex", agentLabel: "Codex" })} />);
+    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex", agentLabel: "Codex" })} supportsChat />);
 
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
@@ -430,7 +430,7 @@ describe("MobileChatSurface", () => {
       activeTurnId: "turn-1",
     }));
 
-    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex", agentLabel: "Codex" })} />);
+    render(<MobileChatSurface worktree={createWorktree({ agentName: "codex", agentLabel: "Codex" })} supportsChat />);
 
     await waitFor(() => {
       expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
@@ -524,7 +524,7 @@ describe("MobileChatSurface", () => {
     );
 
     const { rerender } = render(
-      <MobileChatSurface worktree={createWorktree({ agent: "working", status: "running" })} />,
+      <MobileChatSurface worktree={createWorktree({ agent: "working", status: "running" })} supportsChat />,
     );
 
     await screen.findByText("Build the feature");
@@ -544,7 +544,7 @@ describe("MobileChatSurface", () => {
     expect(callsWhileBusy).toBeGreaterThan(1);
 
     // When the run settles and the agent goes idle, polling stops.
-    rerender(<MobileChatSurface worktree={createWorktree({ agent: "waiting", status: "idle" })} />);
+    rerender(<MobileChatSurface worktree={createWorktree({ agent: "waiting", status: "idle" })} supportsChat />);
     await vi.advanceTimersByTimeAsync(5000);
     expect(vi.mocked(fetchWorktreeConversationHistory).mock.calls.length).toBe(callsWhileBusy);
   });
