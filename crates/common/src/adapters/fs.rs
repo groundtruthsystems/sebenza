@@ -348,9 +348,16 @@ pub fn build_control_env_map(
     control_token: &str,
     worktree_id: &str,
     branch: &str,
+    git_dir: &str,
 ) -> HashMap<String, String> {
     HashMap::from([
         ("SEBENZA_CONTROL_URL".to_string(), control_url.to_string()),
+        // The generated opencode plugin reads this instead of having the path compiled
+        // into it, which keeps the generated file byte-identical across worktrees.
+        (
+            "SEBENZA_AGENTCTL".to_string(),
+            format!("{git_dir}/.ai/sebenza/sebenza-agentctl"),
+        ),
         ("SEBENZA_CONTROL_TOKEN".to_string(), control_token.to_string()),
         ("SEBENZA_WORKTREE_ID".to_string(), worktree_id.to_string()),
         ("SEBENZA_BRANCH".to_string(), branch.to_string()),
@@ -360,6 +367,20 @@ pub fn build_control_env_map(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn control_env_carries_the_agentctl_path_for_the_opencode_plugin() {
+        let env = build_control_env_map("http://127.0.0.1:5111", "tok", "wt1", "feature", "/repo/.git");
+        assert_eq!(
+            env.get("SEBENZA_AGENTCTL").map(String::as_str),
+            Some("/repo/.git/.ai/sebenza/sebenza-agentctl"),
+            "the generated opencode plugin reads the agentctl path from the env so the \
+             generated file stays byte-identical across worktrees"
+        );
+        // Pre-existing keys must be untouched.
+        assert_eq!(env.get("SEBENZA_CONTROL_TOKEN").map(String::as_str), Some("tok"));
+        assert_eq!(env.get("SEBENZA_BRANCH").map(String::as_str), Some("feature"));
+    }
 
     fn temp_worktree() -> PathBuf {
         let dir = std::env::temp_dir()

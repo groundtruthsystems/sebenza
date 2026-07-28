@@ -54,6 +54,15 @@ def build_parser():
     subparsers.add_parser("codex-permission-request")
     subparsers.add_parser("codex-post-tool-use")
     subparsers.add_parser("codex-stop")
+    # opencode: driven by the generated JS plugin (.opencode/plugins/sebenza.js), which
+    # pipes a small derived payload on stdin. Mapped onto the same three primitives the
+    # claude/codex subcommands use - status-changed, agent-stopped, PR detection - so the
+    # decision logic lives here in one language rather than being reimplemented in JS.
+    subparsers.add_parser("opencode-session-created")
+    subparsers.add_parser("opencode-tool-before")
+    subparsers.add_parser("opencode-tool-after")
+    subparsers.add_parser("opencode-permission-ask")
+    subparsers.add_parser("opencode-stop")
 
     return parser
 
@@ -202,6 +211,26 @@ def main():
     if parsed.command == "claude-post-tool-use":
         hook_payload = read_hook_payload()
         return 0 if maybe_send_pr_opened(hook_payload, control_env) else 1
+
+    if parsed.command in ("opencode-session-created", "opencode-tool-before"):
+        # Either signal means the agent is doing something.
+        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="running"), control_env), control_env)
+        return 0
+
+    if parsed.command == "opencode-permission-ask":
+        # opencode is waiting on a permission decision, so it is idle from Sebenza's point
+        # of view. Sebenza cannot yet answer it - see the phase-3 spike.
+        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="idle"), control_env), control_env)
+        return 0
+
+    if parsed.command == "opencode-tool-after":
+        hook_payload = read_hook_payload()
+        maybe_send_pr_opened(hook_payload, control_env)
+        return 0
+
+    if parsed.command == "opencode-stop":
+        send_payload(build_payload("agent-stopped", parsed, control_env), control_env)
+        return 0
 
     if parsed.command == "codex-stop":
         send_payload(build_payload("agent-stopped", parsed, control_env), control_env)

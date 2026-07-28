@@ -95,7 +95,7 @@ fn initialize_managed_worktree(
     write_runtime_env(&opts.git_dir, &runtime_env)?;
 
     if let (Some(url), Some(token)) = (&opts.control_url, &opts.control_token) {
-        let control_env = build_control_env_map(url, token, &meta.worktree_id, &meta.branch);
+        let control_env = build_control_env_map(url, token, &meta.worktree_id, &meta.branch, &opts.git_dir);
         write_control_env(&opts.git_dir, &control_env)?;
     }
 

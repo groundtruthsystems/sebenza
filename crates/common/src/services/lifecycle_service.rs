@@ -770,6 +770,7 @@ impl LifecycleService {
             &control_token,
             &meta.worktree_id,
             &meta.branch,
+            git_dir,
         );
         op(write_control_env(git_dir, &control_env))?;
 
