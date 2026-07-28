@@ -2,6 +2,22 @@
 
 **Track:** `goose_opencode_agents_20260727` · **Type:** feature · **Status:** backlog
 
+> ## Scope change — goose deferred
+>
+> **This track now implements opencode only.** goose was descoped after verification; the follow-up is
+> recorded in the repository's `TODO.md`.
+>
+> **This document is deliberately left intact.** The goose findings below were established by direct
+> observation and are the substance of that future track: the Open Plugins hook spec and event list, the
+> session JSONL structured-block format, `-n` session pinning, `GOOSE_MODE=auto` semantics and the fact
+> that goose hooks **cannot** gate a tool call, and the verified `message_count` under-count constraint
+> (19 of 99 real sessions). Deleting them would mean re-doing the research.
+>
+> Read the goose sections as **research for a deferred track**, and [spec.md](./spec.md) /
+> [plan.json](./plan.json) as the authority on what is actually being built. Phase numbering in this
+> document predates the descope: the delivered phases are `0` prerequisites → `1` abstraction →
+> `2` opencode → `3` permission gating.
+
 ## Overview
 
 Sebenza's recorded core goal is **agent-agnostic parallelism** — "Agents are interchangeable…

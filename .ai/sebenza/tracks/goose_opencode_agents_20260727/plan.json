@@ -17,13 +17,13 @@
         {
           "id": "phase-0-task-2",
           "name": "Verify permission.ask behaviour under --auto",
-          "description": "FR-0.2. Determine whether the permission.ask plugin hook still fires when opencode is launched with --auto. Record whether bypass and Sebenza-side gating can coexist or are mutually exclusive. BLOCKING for phase-4 wiring.",
+          "description": "FR-0.2. Determine whether the permission.ask plugin hook still fires when opencode is launched with --auto. Record whether bypass and Sebenza-side gating can coexist or are mutually exclusive. BLOCKING for phase-3 wiring.",
           "status": "backlog"
         },
         {
           "id": "phase-0-task-3",
-          "name": "Capture test fixtures for both agents",
-          "description": "FR-0.3. Commit as testdata/: (a) a real `opencode export <id>` JSON payload; (b) a goose session .jsonl containing text, toolRequest and toolResponse blocks; (c) a goose session whose header message_count under-counts its message lines; (d) a 0-byte goose session. These are the basis for all parser tests and cannot be invented from documentation. The opencode fixture is needed first now that opencode leads.",
+          "name": "Capture an opencode export fixture",
+          "description": "FR-0.3. Commit a real `opencode export <id>` JSON payload as testdata/. This is the basis for all history parser tests and cannot be invented from documentation. Requires an authenticated opencode.",
           "status": "backlog"
         },
         {
@@ -41,7 +41,7 @@
         {
           "id": "phase-0-task-6",
           "name": "Implement loopback-default bind with explicit LAN opt-in",
-          "description": "FR-0.5. Change main.rs:82 from SocketAddr::from(([0,0,0,0], port)) to loopback by default, adding an explicit flag/env to opt into all interfaces. Behaviour change for anyone reaching the dashboard from another machine - must be called out in release notes. Unblocks the permission routes (phase-4) and GOOSE_MODE=auto (phase-3).",
+          "description": "FR-0.5. Change main.rs:82 from SocketAddr::from(([0,0,0,0], port)) to loopback by default, adding an explicit flag/env to opt into all interfaces. Behaviour change for anyone reaching the dashboard from another machine - must be called out in release notes. Unblocks the permission routes in phase-3.",
           "status": "backlog"
         },
         {
@@ -67,7 +67,7 @@
         {
           "id": "phase-1-task-2",
           "name": "Introduce BuiltinAgentId and refactor invocation building",
-          "description": "FR-1.1. Replace AgentImplementation::Builtin(String) with Builtin(BuiltinAgentId) for Claude and Codex only. Split built_in_invocation (agent_service.rs:74-132) into named per-agent functions dispatched by enum match. No new agents in this task - this is the seam.",
+          "description": "FR-1.1. Replace AgentImplementation::Builtin(String) with Builtin(BuiltinAgentId) for Claude and Codex only. Split built_in_invocation (agent_service.rs:74-132) into named per-agent functions dispatched by enum match. No new agents in this task - this is the seam that Opencode plugs into in phase-2, and that a future goose track reuses.",
           "status": "backlog"
         },
         {
@@ -177,13 +177,13 @@
         {
           "id": "phase-2-task-8",
           "name": "Write tests for artifact git-exclusion and env file permissions",
-          "description": "FR-5.1, FR-5.5. SHARED CONTROL. Failing tests asserting all generated in-worktree artifacts are added to info/exclude (.opencode/plugins/, .agents/plugins/, and retroactively .claude/settings.local.json), and that control.env and runtime.env are written 0600.",
+          "description": "FR-5.1, FR-5.5. Failing tests asserting all generated in-worktree artifacts are added to info/exclude (.opencode/plugins/, and retroactively .claude/settings.local.json), and that control.env and runtime.env are written 0600.",
           "status": "backlog"
         },
         {
           "id": "phase-2-task-9",
           "name": "Git-exclude generated artifacts and harden env file modes",
-          "description": "FR-5.1, FR-5.5. SHARED CONTROL. Generalise ensure_generated_codex_hooks_ignored to a path list covering every generated artifact, including goose's path ahead of phase-3. Apply set_mode_600 in write_control_env and write_runtime_env - runtime.env merges .env.local project secrets, so the exposure is wider than the control token alone.",
+          "description": "FR-5.1, FR-5.5. Generalise ensure_generated_codex_hooks_ignored from a single constant to a path list, so any future agent's artifact is covered by construction. Apply set_mode_600 in write_control_env and write_runtime_env - runtime.env merges .env.local project secrets, so the exposure is wider than the control token alone.",
           "status": "backlog"
         },
         {
@@ -195,31 +195,31 @@
         {
           "id": "phase-2-task-11",
           "name": "Implement untrusted-plugin scan, confirmation store and audit events",
-          "description": "FR-5.2 to FR-5.4, FR-5.8. SHARED CONTROL. Scan before launch, block, and require per-repo confirmation stored at control-token trust tier outside the worktree. Offer opencode's --pure (runs without external plugins) as the safe terminal-only fallback when the user declines. Persist audit events (agent_launched with bypass mode, artifact_written/overwritten with mismatch boolean, untrusted_plugin_detected) under <git-common-dir>/.ai/sebenza/, carrying no secrets. Cover both agents' plugin paths so phase-3 inherits it.",
+          "description": "FR-5.2 to FR-5.4, FR-5.8. Scan before launch, block, and require per-repo confirmation stored at control-token trust tier outside the worktree. Offer opencode's --pure (runs without external plugins) as the safe terminal-only fallback when the user declines. Persist audit events (agent_launched with bypass mode, artifact_written/overwritten with mismatch boolean, untrusted_plugin_detected) under <git-common-dir>/.ai/sebenza/, carrying no secrets. Keep the scan's plugin-path set data-driven so a future agent is a config change, not a code change.",
           "status": "backlog"
         },
         {
           "id": "phase-2-task-12",
           "name": "Write tests for docker mounts and PATH fallback",
-          "description": "FR-6.1. SHARED CONTROL. Failing pure-function assertions on build_docker_run_args output, following docker.rs's existing test module pattern - no Docker daemon required. Cover both agents' config and session paths.",
+          "description": "FR-6.1. Failing pure-function assertions on build_docker_run_args output, following docker.rs's existing test module pattern - no Docker daemon required.",
           "status": "backlog"
         },
         {
           "id": "phase-2-task-13",
           "name": "Add docker config and session-data mounts",
-          "description": "FR-6.1. SHARED CONTROL. Bind-mount ~/.config/opencode, ~/.local/share/opencode, ~/.config/goose and ~/.local/share/goose/sessions unconditionally, matching the existing claude/codex mounts, so history parity holds on host and docker. Add /root/.opencode/bin to DOCKER_PATH_FALLBACK. Without the config mounts a containerised run has no provider credentials at all.",
+          "description": "FR-6.1. Bind-mount ~/.config/opencode and ~/.local/share/opencode unconditionally, matching the existing claude/codex mounts, so history parity holds on host and docker. Add /root/.opencode/bin to DOCKER_PATH_FALLBACK. Without the config mount a containerised run has no provider credentials at all.",
           "status": "backlog"
         },
         {
           "id": "phase-2-task-14",
           "name": "Implement shadow resolution and the durable override notice",
-          "description": "FR-1.6. SHARED CONTROL. Builtin wins over a shadowed custom-agent id, emitting a durable shadowed_custom_agent_detected event that names the id and states the key-rename escape hatch. Remove BOTH the goose and opencode entries from .ai/sebenza.example.yaml. Add a compatibility test that loads the pre-change example config. This is a breaking change for existing users and must never fail silently.",
+          "description": "FR-1.6. Builtin wins over a shadowed custom-agent id, emitting a durable shadowed_custom_agent_detected event that names the id and states the key-rename escape hatch. Remove ONLY the opencode entry from .ai/sebenza.example.yaml - goose is NOT becoming builtin in this track, so its custom-agent entry must remain and keep working. Add a compatibility test that loads the pre-change example config. Breaking change for existing users; must never fail silently.",
           "status": "backlog"
         },
         {
           "id": "phase-2-task-15",
           "name": "Add opencode to auto-naming, init analysis and version reporting",
-          "description": "FR-2.9 (opencode half), FR-6.5, FR-6.6. Add the opencode arm to llm_spawn.rs::build_llm_args (opencode run --format json) and to init_authoring.rs (InitAgent, authoring_agent(), build_init_agent_command()) - a separate fifth dispatch axis. Add the AutoNameProvider variant plus its YAML-parsing counterpart at config.rs:273-274. Act on init.rs:52's existing probes, report detected versions, document minimum supported versions in tech-stack.md, and update README prerequisites.",
+          "description": "FR-3.8, FR-6.5, FR-6.6. Add the opencode arm to llm_spawn.rs::build_llm_args (opencode run --format json) and to init_authoring.rs (InitAgent, authoring_agent(), build_init_agent_command()) - a separate fifth dispatch axis. Add the AutoNameProvider variant plus its YAML-parsing counterpart at config.rs:273-274. Act on init.rs:52's existing opencode probe, report the detected version, document the minimum supported version in tech-stack.md, and update README prerequisites.",
           "status": "backlog"
         },
         {
@@ -232,128 +232,66 @@
     },
     {
       "id": "phase-3",
-      "name": "goose at full parity",
-      "status": "backlog",
-      "blocked_reason": null,
-      "tasks": [
-        {
-          "id": "phase-3-task-1",
-          "name": "Write tests for goose invocation and GOOSE_MODE env override",
-          "description": "FR-2.1, FR-2.7. Failing tests for fresh/resume/fork argv, pinned session id via -n, and agent_env_overrides returning GOOSE_MODE only for goose plus yolo, validated against the closed set {auto, approve, chat, smart_approve} at map-build time. goose is the only agent whose bypass is an env var rather than a flag.",
-          "status": "backlog"
-        },
-        {
-          "id": "phase-3-task-2",
-          "name": "Implement the Goose variant, invocations and env-based bypass",
-          "description": "FR-1.1, FR-2.1, FR-2.6, FR-2.7. Add Goose to BuiltinAgentId as its own exhaustiveness sweep. Implement invocation building with -n pinning (so capture_new_session_id is skipped) and route GOOSE_MODE through runtime_env_extras into runtime.env - never a command flag, never an inline VAR=value prefix. Protect the key from env_passthrough clobbering.",
-          "status": "backlog"
-        },
-        {
-          "id": "phase-3-task-3",
-          "name": "Write tests for goose hook artifact and agentctl subcommands",
-          "description": "FR-2.2. Failing tests for .agents/plugins/sebenza/hooks/hooks.json generation (full overwrite, idempotent, no merge logic, fixed-literal commands via shell_quote) and for the new goose-* agentctl subcommands mapping onto the existing status-changed / agent-stopped / PR-detection primitives. The git-exclusion for this path already landed in phase-2.",
-          "status": "backlog"
-        },
-        {
-          "id": "phase-3-task-4",
-          "name": "Generate goose hooks and extend sebenza-agentctl",
-          "description": "FR-2.2. Write the goose hooks.json as a Sebenza-owned subtree overwrite - no merge strategy needed, unlike the shared claude/codex config files. Add goose-user-prompt-submit, goose-post-tool-use and goose-stop subcommands reusing the three existing primitives. Verify maybe_send_pr_opened works against a real goose PostToolUse payload rather than assuming.",
-          "status": "backlog"
-        },
-        {
-          "id": "phase-3-task-5",
-          "name": "Write tests for goose session log parsing",
-          "description": "FR-2.3, FR-2.4, FR-2.5. Failing tests against the phase-0 fixtures: content block mapping (text, toolRequest with tool_call_id/tool_name, toolResponse correlated by id with status), exact-match working_dir correlation, message_count used only zero-vs-nonzero, 0-byte file treated as legitimately empty, unknown header fields ignored, malformed lines skipped without panic.",
-          "status": "backlog"
-        },
-        {
-          "id": "phase-3-task-6",
-          "name": "Implement goose session log adapter and conversation service",
-          "description": "FR-2.3 to FR-2.5. Add adapters/goose_session_log.rs and services/goose_conversation_service.rs emitting AgentsUiMessage with full tool fidelity. Add the Goose variant to DiscoverableAgentKind and WorktreeConversationProvider. message_count > 0 with zero parsed messages surfaces 'history unavailable'; never compare exact counts (19 of 99 real sessions under-count).",
-          "status": "backlog"
-        },
-        {
-          "id": "phase-3-task-7",
-          "name": "Implement GOOSE_MODE=auto disclosure and session indicator",
-          "description": "FR-2.8. Distinct copy, a confirmation step separate from the claude/codex yolo toggle, per-project re-confirmation, and a persistent in-session indicator stating that Sebenza cannot intercept or deny any action. goose hooks cannot gate a tool call - unlike opencode, which by this point demonstrably can - so this must not read as equivalent. Depends on the loopback bind from phase-0.",
-          "status": "backlog"
-        },
-        {
-          "id": "phase-3-task-8",
-          "name": "Add goose to auto-naming, init analysis and version reporting",
-          "description": "FR-2.9 (goose half), FR-6.5. Add the goose arm to llm_spawn.rs::build_llm_args (goose run -t TEXT --system TEXT --no-session) and to init_authoring.rs, plus the AutoNameProvider variant. Report the detected goose version in init's dependency check and document its minimum supported version in tech-stack.md.",
-          "status": "backlog"
-        },
-        {
-          "id": "phase-3-task-9",
-          "name": "Phase verification & checkpoint",
-          "description": "Per workflow.md. Manual verification must cover creating a goose worktree, tool-call cards rendering in history, status transitions, resume, the GOOSE_MODE=auto disclosure and indicator, and history under both host and docker runtimes.",
-          "status": "backlog"
-        }
-      ]
-    },
-    {
-      "id": "phase-4",
       "name": "Permission gating for opencode",
       "status": "backlog",
       "blocked_reason": null,
       "tasks": [
         {
-          "id": "phase-4-task-1",
+          "id": "phase-3-task-1",
           "name": "Write tests for the asymmetric credential model",
           "description": "FR-4.2. Failing tests asserting the resolve route REJECTS a verdict presented with only the control token; that it requires a per-request resolver secret minted server-side; that the secret never appears in control.env, runtime.env or any worktree-readable file; and that a verdict is single-use and bound to session plus request id. This closes the flaw where the gated process, which holds SEBENZA_CONTROL_TOKEN, could approve its own request.",
           "status": "backlog"
         },
         {
-          "id": "phase-4-task-2",
+          "id": "phase-3-task-2",
           "name": "Implement the pending-decision store and resolver secrets",
           "description": "FR-4.2, FR-4.3. Mirror agent_stream.rs's AgentStreamManager/RunState idiom: a concurrent map of request ids to oneshot senders resolved by a side-channel call. In-memory, not durable across restart. Mint per-request resolver secrets delivered only via the WS push payload and the CLI response.",
           "status": "backlog"
         },
         {
-          "id": "phase-4-task-3",
+          "id": "phase-3-task-3",
           "name": "Write tests for submit/resolve routes, fail-closed paths and the cap",
           "description": "FR-4.4 to FR-4.8, FR-4.11. Failing tests for: the submit handler awaiting a oneshot receiver with no lock held across the await; timeout, HTTP error and connection reset all resolving to deny; the server timeout being authoritative; the per-session and global pending cap with auto-deny beyond it; timeout enforcement independent of WS delivery; and both routes bound to loopback.",
           "status": "backlog"
         },
         {
-          "id": "phase-4-task-4",
+          "id": "phase-3-task-4",
           "name": "Implement the submit and resolve routes",
           "description": "FR-4.4 to FR-4.8, FR-4.11, FR-5.8. Loopback-bound routes with the asymmetric auth model, fail-closed on every failure mode, server-authoritative timeout, pending cap with auto-deny, and the permission_decision (including resolution source) and pending_permission_cap_hit audit events. Never block the async runtime.",
           "status": "backlog"
         },
         {
-          "id": "phase-4-task-5",
+          "id": "phase-3-task-5",
           "name": "Write tests for the shim permission.ask round-trip",
           "description": "FR-4.1, FR-4.5. Failing tests asserting the shim calls permission.ask, awaits a verdict via fetch (a runtime global under opencode's bundled Bun, so the import-free constraint from phase-2 still holds), writes it into output.status, and fails closed on timeout or error.",
           "status": "backlog"
         },
         {
-          "id": "phase-4-task-6",
+          "id": "phase-3-task-6",
           "name": "Implement permission.ask in the generated shim",
           "description": "FR-4.1. Extend the phase-2 shim to submit the request, await the verdict, and set output.status. Apply the phase-0-task-2 finding: if permission.ask does not fire under --auto, the two features are mutually exclusive and the UI must prevent enabling both.",
           "status": "backlog"
         },
         {
-          "id": "phase-4-task-7",
+          "id": "phase-3-task-7",
           "name": "Implement the dashboard permission prompt and WS push",
           "description": "FR-4.9. Push pending requests over the existing WS event stream carrying the resolver secret, and render a prompt card modelled on AskUserQuestionCard's look - its plumbing is transcript-level with no backend counterpart and is not reusable.",
           "status": "backlog"
         },
         {
-          "id": "phase-4-task-8",
+          "id": "phase-3-task-8",
           "name": "Implement CLI parity for pending permission requests",
           "description": "FR-4.9. sebenza-cli commands to list and answer pending requests, per Guiding Principle 8. This is also the designed fallback when a WS push is missed.",
           "status": "backlog"
         },
         {
-          "id": "phase-4-task-9",
+          "id": "phase-3-task-9",
           "name": "Implement per-profile timeout and visible timeout denial",
           "description": "FR-4.6, FR-4.10. Add a configurable per-profile decision timeout. A timeout-caused denial must be visible in the transcript and worktree status so a stalled worktree reads as 'waited for you, then denied' rather than as a hung agent.",
           "status": "backlog"
         },
         {
-          "id": "phase-4-task-10",
+          "id": "phase-3-task-10",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md. Manual verification must cover: approving a tool call, denying one, letting one time out and confirming the denial is visible, and confirming the resolve route rejects a control-token-only verdict.",
           "status": "backlog"

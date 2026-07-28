@@ -10,10 +10,10 @@
     {
       "track_id": "goose_opencode_agents_20260727",
       "type": "feature",
-      "description": "Embed Linux Foundation goose and opencode as first-class built-in agents, selectable when creating a new worktree, alongside claude and codex. Includes a Sebenza-side permission approve/deny flow for opencode.",
+      "description": "Embed opencode as a first-class built-in agent, selectable when creating a new worktree, alongside claude and codex. Includes a Sebenza-side permission approve/deny flow for opencode. goose was researched and verified but descoped to a later track (see TODO.md).",
       "status": "backlog",
       "created_at": "2026-07-27T14:49:46Z",
-      "updated_at": "2026-07-27T15:58:00Z",
+      "updated_at": "2026-07-28T09:05:00Z",
       "design_path": "tracks/goose_opencode_agents_20260727/design.md",
       "spec_path": "tracks/goose_opencode_agents_20260727/spec.md",
       "plan_path": "tracks/goose_opencode_agents_20260727/plan.json",
@@ -38,19 +38,13 @@
         },
         {
           "id": "phase-3",
-          "name": "goose at full parity",
-          "status": "backlog",
-          "blocked_reason": null
-        },
-        {
-          "id": "phase-4",
           "name": "Permission gating for opencode",
           "status": "backlog",
           "blocked_reason": null
         }
       ],
       "progress": {
-        "total_tasks": 53,
+        "total_tasks": 44,
         "completed_tasks": 0,
         "percentage": 0
       }
