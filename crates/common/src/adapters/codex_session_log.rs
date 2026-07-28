@@ -16,7 +16,10 @@ fn truncate(text: &str) -> String {
         return text.to_string();
     }
     let head: String = text.chars().take(TOOL_OUTPUT_TRUNCATE_LIMIT).collect();
-    format!("{head}... (truncated, {} more chars)", count - TOOL_OUTPUT_TRUNCATE_LIMIT)
+    format!(
+        "{head}... (truncated, {} more chars)",
+        count - TOOL_OUTPUT_TRUNCATE_LIMIT
+    )
 }
 
 fn compact_json(v: &Value) -> String {
@@ -49,7 +52,9 @@ fn read_reasoning_summary(raw: &Value) -> String {
 
 fn parse_arguments(raw: Option<&str>) -> Option<Value> {
     let raw = raw?;
-    serde_json::from_str::<Value>(raw).ok().filter(|v| v.is_object())
+    serde_json::from_str::<Value>(raw)
+        .ok()
+        .filter(|v| v.is_object())
 }
 
 fn read_tool_command(tool_name: &str, arguments_text: Option<&str>) -> Option<String> {
@@ -80,14 +85,20 @@ fn build_tool_use_text(tool_name: &str, arguments_text: Option<&str>) -> String 
 fn read_output_exit_code(output: &str) -> Option<i64> {
     if let Some(idx) = output.find("Process exited with code ") {
         let rest = &output[idx + "Process exited with code ".len()..];
-        let num: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '-').collect();
+        let num: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
         if let Ok(code) = num.parse::<i64>() {
             return Some(code);
         }
     }
     for line in output.lines() {
         if let Some(rest) = line.strip_prefix("Exit code: ") {
-            let num: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '-').collect();
+            let num: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '-')
+                .collect();
             if let Ok(code) = num.parse::<i64>() {
                 return Some(code);
             }
@@ -214,8 +225,18 @@ pub fn parse_codex_session_messages(text: &str) -> Vec<AgentsUiMessage> {
                         && let Some(text) = payload.get("message").and_then(read_string)
                     {
                         let phase = payload.get("phase").and_then(read_string);
-                        if !has_duplicate_text(&messages, &turn, "assistant", &text, phase.as_deref()) {
-                            let kind = if phase.as_deref() == Some("analysis") { "thinking" } else { "text" };
+                        if !has_duplicate_text(
+                            &messages,
+                            &turn,
+                            "assistant",
+                            &text,
+                            phase.as_deref(),
+                        ) {
+                            let kind = if phase.as_deref() == Some("analysis") {
+                                "thinking"
+                            } else {
+                                "text"
+                            };
                             let mut m = AgentsUiMessage::new(
                                 format!("assistant:{turn}:{block_index}"),
                                 turn,
@@ -245,7 +266,8 @@ pub fn parse_codex_session_messages(text: &str) -> Vec<AgentsUiMessage> {
 
         match payload_type {
             Some("reasoning") => {
-                let summary = read_reasoning_summary(payload.get("summary").unwrap_or(&Value::Null));
+                let summary =
+                    read_reasoning_summary(payload.get("summary").unwrap_or(&Value::Null));
                 if summary.is_empty() {
                     continue;
                 }
@@ -265,25 +287,50 @@ pub fn parse_codex_session_messages(text: &str) -> Vec<AgentsUiMessage> {
                 let Some(call_id) = payload.get("call_id").and_then(read_string) else {
                     continue;
                 };
-                let tool_name = payload.get("name").and_then(read_string).unwrap_or_else(|| "tool".to_string());
+                let tool_name = payload
+                    .get("name")
+                    .and_then(read_string)
+                    .unwrap_or_else(|| "tool".to_string());
                 let is_custom = payload_type == Some("custom_tool_call");
                 let arguments_text = if is_custom {
-                    payload.get("input").and_then(Value::as_str).map(str::to_string)
-                        .or_else(|| Some(compact_json(payload.get("input").unwrap_or(&serde_json::json!({})))))
+                    payload
+                        .get("input")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            Some(compact_json(
+                                payload.get("input").unwrap_or(&serde_json::json!({})),
+                            ))
+                        })
                 } else {
-                    payload.get("arguments").and_then(Value::as_str).map(str::to_string)
-                        .or_else(|| Some(compact_json(payload.get("arguments").unwrap_or(&serde_json::json!({})))))
+                    payload
+                        .get("arguments")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            Some(compact_json(
+                                payload.get("arguments").unwrap_or(&serde_json::json!({})),
+                            ))
+                        })
                 };
                 let command = read_tool_command(&tool_name, arguments_text.as_deref());
-                let cwd = if is_custom { None } else { read_tool_cwd(arguments_text.as_deref()) };
-                tool_meta.insert(call_id.clone(), (tool_name.clone(), command.clone(), cwd.clone()));
+                let cwd = if is_custom {
+                    None
+                } else {
+                    read_tool_cwd(arguments_text.as_deref())
+                };
+                tool_meta.insert(
+                    call_id.clone(),
+                    (tool_name.clone(), command.clone(), cwd.clone()),
+                );
 
                 let text = if is_custom {
                     tool_name.clone()
                 } else {
                     build_tool_use_text(&tool_name, arguments_text.as_deref())
                 };
-                let mut m = AgentsUiMessage::new(call_id.clone(), turn, "assistant", "toolUse", text);
+                let mut m =
+                    AgentsUiMessage::new(call_id.clone(), turn, "assistant", "toolUse", text);
                 m.tool_name = Some(tool_name);
                 m.tool_call_id = Some(call_id);
                 m.command = command;
@@ -306,7 +353,13 @@ pub fn parse_codex_session_messages(text: &str) -> Vec<AgentsUiMessage> {
                     .get("output")
                     .and_then(Value::as_str)
                     .map(|s| s.trim_end().to_string())
-                    .unwrap_or_else(|| compact_json(payload.get("output").unwrap_or(&Value::String(String::new()))));
+                    .unwrap_or_else(|| {
+                        compact_json(
+                            payload
+                                .get("output")
+                                .unwrap_or(&Value::String(String::new())),
+                        )
+                    });
                 let exit_code = read_output_exit_code(&output);
                 let mut m = AgentsUiMessage::new(
                     format!("{call_id}:result"),
@@ -335,7 +388,9 @@ pub fn parse_codex_session_messages(text: &str) -> Vec<AgentsUiMessage> {
 }
 
 fn codex_sessions_root() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".codex").join("sessions"))
+    std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(".codex").join("sessions"))
 }
 
 fn collect_rollouts(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
@@ -447,7 +502,10 @@ mod tests {
         assert_eq!(msgs[3].kind, "text");
         assert_eq!(msgs[3].text, "done");
         // order is contiguous.
-        assert_eq!(msgs.iter().map(|m| m.order).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
+        assert_eq!(
+            msgs.iter().map(|m| m.order).collect::<Vec<_>>(),
+            vec![0, 1, 2, 3]
+        );
     }
 
     #[test]

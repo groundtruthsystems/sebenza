@@ -1,20 +1,8 @@
 use crate::domain::config::ProjectConfig;
+use crate::services::agent_registry::{AgentCapabilitiesWire, list_agent_details};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AgentCapabilities {
-    pub terminal: bool,
-    pub in_app_chat: bool,
-    pub conversation_history: bool,
-    pub interrupt: bool,
-    pub resume: bool,
-    /// Kept in lockstep with `agent_registry::AgentCapabilities` — the parity
-    /// test in this module fails if the two ever disagree.
-    pub fork: bool,
-}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,63 +10,28 @@ pub struct AgentSummary {
     pub id: String,
     pub label: String,
     pub kind: String, // "builtin" | "custom"
-    pub capabilities: AgentCapabilities,
+    pub capabilities: AgentCapabilitiesWire,
 }
 
-fn builtin_agent_summaries() -> Vec<AgentSummary> {
-    let full = || AgentCapabilities {
-        terminal: true,
-        in_app_chat: true,
-        conversation_history: true,
-        interrupt: true,
-        resume: true,
-        fork: true,
-    };
-    vec![
-        AgentSummary {
-            id: "claude".to_string(),
-            label: "Claude".to_string(),
-            kind: "builtin".to_string(),
-            capabilities: full(),
-        },
-        AgentSummary {
-            id: "codex".to_string(),
-            label: "Codex".to_string(),
-            kind: "builtin".to_string(),
-            capabilities: full(),
-        },
-    ]
-}
-
-/// Builtin + custom agent summaries. Custom agents (from `config.agents`, minus
-/// builtin ids) are sorted by label then id, matching `listAgentDefinitions`.
+/// Builtin + custom agent summaries for `/api/config`.
+///
+/// **Derived from `agent_registry`, never a second hardcoded list.** This module used to
+/// keep its own `AgentCapabilities` struct and its own claude/codex list, and it — not
+/// `agent_registry` — is what `/api/config` serves, so it is what populates the Create
+/// Worktree picker. The two drifted the moment a capability was added to one of them
+/// (codex's `pinnable_session_id` read `true` here and `false` there, and the builtin list
+/// here silently omitted opencode). Deriving means adding a built-in or a capability needs
+/// no edit in this file at all.
 pub fn list_agent_summaries(config: &ProjectConfig) -> Vec<AgentSummary> {
-    let builtins = builtin_agent_summaries();
-    let builtin_ids: Vec<&str> = builtins.iter().map(|a| a.id.as_str()).collect();
-
-    let mut customs: Vec<AgentSummary> = config
-        .agents
-        .iter()
-        .filter(|(id, _)| !builtin_ids.contains(&id.as_str()))
-        .map(|(id, cfg)| AgentSummary {
-            id: id.clone(),
-            label: cfg.label.clone(),
-            kind: "custom".to_string(),
-            capabilities: AgentCapabilities {
-                terminal: true,
-                in_app_chat: false,
-                conversation_history: false,
-                interrupt: false,
-                resume: cfg.resume_command.is_some(),
-                fork: false,
-            },
+    list_agent_details(config)
+        .into_iter()
+        .map(|d| AgentSummary {
+            id: d.id,
+            label: d.label,
+            kind: d.kind.to_string(),
+            capabilities: d.capabilities,
         })
-        .collect();
-    customs.sort_by(|a, b| a.label.cmp(&b.label).then(a.id.cmp(&b.id)));
-
-    let mut all = builtins;
-    all.extend(customs);
-    all
+        .collect()
 }
 
 /// Label for an agent id, or the id itself if unknown; `None` when id is `None`.
@@ -211,12 +164,10 @@ pub fn build_app_config(config: &ProjectConfig, project_dir: &str) -> AppConfig 
             .iter()
             .map(|lr| LinkedRepoView {
                 alias: lr.alias.clone(),
-                dir: lr.dir.as_ref().map(|d| {
-                    Path::new(project_dir)
-                        .join(d)
-                        .to_string_lossy()
-                        .to_string()
-                }),
+                dir: lr
+                    .dir
+                    .as_ref()
+                    .map(|d| Path::new(project_dir).join(d).to_string_lossy().to_string()),
             })
             .collect(),
         auto_remove_on_merge: config.integrations.github.auto_remove_on_merge,
@@ -228,8 +179,8 @@ pub fn build_app_config(config: &ProjectConfig, project_dir: &str) -> AppConfig 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::config::CustomAgentConfig;
     use crate::config::default_config;
+    use crate::domain::config::CustomAgentConfig;
     use crate::services::agent_registry::list_agent_definitions;
 
     fn config_with_customs() -> ProjectConfig {

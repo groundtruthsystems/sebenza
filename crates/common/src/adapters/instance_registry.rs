@@ -12,7 +12,10 @@ pub struct InstanceEntry {
 
 fn registry_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    PathBuf::from(home).join(".ai").join("sebenza").join("instances")
+    PathBuf::from(home)
+        .join(".ai")
+        .join("sebenza")
+        .join("instances")
 }
 
 fn entry_path(port: u16) -> PathBuf {

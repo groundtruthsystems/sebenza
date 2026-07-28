@@ -31,7 +31,10 @@ pub fn home() -> String {
 }
 
 pub fn systemd_dir() -> PathBuf {
-    PathBuf::from(home()).join(".config").join("systemd").join("user")
+    PathBuf::from(home())
+        .join(".config")
+        .join("systemd")
+        .join("user")
 }
 
 pub fn launchd_dir() -> PathBuf {
@@ -46,7 +49,10 @@ pub fn unit_path(platform: Platform) -> PathBuf {
 }
 
 pub fn launchd_log_path() -> PathBuf {
-    PathBuf::from(home()).join("Library").join("Logs").join(format!("{SERVICE_NAME}.log"))
+    PathBuf::from(home())
+        .join("Library")
+        .join("Logs")
+        .join(format!("{SERVICE_NAME}.log"))
 }
 
 /// A discovered installed service unit.
@@ -107,7 +113,9 @@ fn generate_systemd_unit(config: &ServiceConfig) -> String {
 }
 
 fn escape_plist(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 fn generate_launchd_plist(config: &ServiceConfig) -> String {
@@ -192,7 +200,8 @@ pub fn list_installed_services() -> Vec<InstalledService> {
     if let Ok(entries) = std::fs::read_dir(systemd_dir()) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if (name == "sebenza.service" || (name.starts_with("sebenza-") && name.ends_with(".service")))
+            if (name == "sebenza.service"
+                || (name.starts_with("sebenza-") && name.ends_with(".service")))
                 && entry.path().is_file()
             {
                 out.push(InstalledService {
@@ -231,7 +240,10 @@ pub fn resolve_server_path() -> String {
             }
         }
     }
-    if let Ok(out) = std::process::Command::new("which").arg("sebenza-server").output() {
+    if let Ok(out) = std::process::Command::new("which")
+        .arg("sebenza-server")
+        .output()
+    {
         if out.status.success() {
             let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
             if !p.is_empty() {

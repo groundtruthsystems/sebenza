@@ -4,6 +4,7 @@ export function agentIconVisible(status: string, unread: boolean): boolean {
   return (
     status === "working" ||
     status === "waiting" ||
+    status === "awaiting-permission" ||
     status === "error" ||
     (status === "done" && unread)
   );
@@ -11,7 +12,7 @@ export function agentIconVisible(status: string, unread: boolean): boolean {
 
 function pillClass(s: string): string {
   if (s === "working") return "bg-success/15 text-success";
-  if (s === "waiting") return "bg-warning/15 text-warning";
+  if (s === "waiting" || s === "awaiting-permission") return "bg-warning/15 text-warning";
   if (s === "done") return "bg-success/15 text-success";
   if (s === "error") return "bg-danger/15 text-danger";
   return "bg-hover text-muted";
@@ -35,7 +36,7 @@ function Icon({ status, size, unread }: { status: string; size: number; unread: 
       </svg>
     );
   }
-  if (status === "waiting") {
+  if (status === "waiting" || status === "awaiting-permission") {
     return (
       <svg
         className="text-warning"
@@ -108,7 +109,7 @@ export default function AgentStatusIcon({
   return (
     <span className={`text-xs px-2 py-0.5 rounded-xl flex items-center gap-1 ${pillClass(status)}`}>
       <Icon status={status} size={size} unread={unread} />
-      {status || "idle"}
+      {status === "awaiting-permission" ? "needs approval" : status || "idle"}
     </span>
   );
 }

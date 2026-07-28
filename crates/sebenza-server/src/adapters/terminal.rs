@@ -11,13 +11,13 @@
 //! (the first `resize` triggers attach).
 
 use crate::adapters::tmux::run_tmux;
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 const MAX_SCROLLBACK_BYTES: usize = 1024 * 1024; // 1 MB
 
@@ -285,8 +285,11 @@ impl TerminalManager {
         );
 
         if let Some(preamble) = preamble {
-            tmux_exec(&["send-keys", "-t", &pane_target, "-l", "--", preamble], None)
-                .map_err(|e| format!("send-keys preamble failed{}", detail(&e)))?;
+            tmux_exec(
+                &["send-keys", "-t", &pane_target, "-l", "--", preamble],
+                None,
+            )
+            .map_err(|e| format!("send-keys preamble failed{}", detail(&e)))?;
         }
 
         let cleaned = text.replace('\0', "");
@@ -297,7 +300,15 @@ impl TerminalManager {
         )
         .map_err(|e| format!("load-buffer failed{}", detail(&e)))?;
         tmux_exec(
-            &["paste-buffer", "-rp", "-b", &buffer_name, "-t", &pane_target, "-d"],
+            &[
+                "paste-buffer",
+                "-rp",
+                "-b",
+                &buffer_name,
+                "-t",
+                &pane_target,
+                "-d",
+            ],
             None,
         )
         .map_err(|e| format!("paste-buffer failed{}", detail(&e)))?;
@@ -310,7 +321,11 @@ impl TerminalManager {
     }
 
     /// Send Ctrl-C to the worktree's owner pane.
-    pub fn interrupt_prompt(&self, target: &TerminalAttachTarget, pane_index: i64) -> Result<(), String> {
+    pub fn interrupt_prompt(
+        &self,
+        target: &TerminalAttachTarget,
+        pane_index: i64,
+    ) -> Result<(), String> {
         let pane_target = format!(
             "{}:{}.{}",
             target.owner_session_name, target.window_name, pane_index
@@ -454,7 +469,14 @@ mod tests {
 
     #[test]
     fn attach_cmd_wires_owner_and_grouped_sessions() {
-        let cmd = build_attach_cmd("sebenza-dash-5111-1", "sebenza-main", "sebenza-proj", 80, 24, None);
+        let cmd = build_attach_cmd(
+            "sebenza-dash-5111-1",
+            "sebenza-main",
+            "sebenza-proj",
+            80,
+            24,
+            None,
+        );
         assert!(cmd.contains("tmux new-session -d -s \"sebenza-dash-5111-1\" -t \"sebenza-proj\""));
         assert!(cmd.contains("tmux select-window -t \"sebenza-dash-5111-1:sebenza-main\""));
         assert!(cmd.contains("#{window_zoomed_flag}"));

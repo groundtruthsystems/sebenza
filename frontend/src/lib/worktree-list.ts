@@ -38,7 +38,7 @@ export function countArchivedMatches(worktrees: WorktreeInfo[], query: string): 
   return worktrees.filter((worktree) => worktree.archived && matchesWorktreeSearch(worktree, query)).length;
 }
 
-export const OVERFLOW_STATUS_BAR_STATUSES = ["waiting", "error", "done-unread"] as const;
+export const OVERFLOW_STATUS_BAR_STATUSES = ["waiting", "awaiting-permission", "error", "done-unread"] as const;
 export type OverflowStatusBarStatus = (typeof OVERFLOW_STATUS_BAR_STATUSES)[number];
 
 export function rowShowsAgentStatus(worktree: WorktreeInfo): boolean {
@@ -52,6 +52,7 @@ export function overflowStatusOf(
   notifiedBranches: Set<string>,
 ): OverflowStatusBarStatus | null {
   if (!rowShowsAgentStatus(worktree)) return null;
+  if (worktree.agent === "awaiting-permission") return "awaiting-permission";
   if (worktree.agent === "waiting") return "waiting";
   if (worktree.agent === "error") return "error";
   if (worktree.agent === "done" && notifiedBranches.has(worktree.branch)) return "done-unread";
@@ -63,7 +64,7 @@ export function countAgentStatusesIn(
   branches: Set<string>,
   notifiedBranches: Set<string> = new Set(),
 ): Record<OverflowStatusBarStatus, number> {
-  const counts: Record<OverflowStatusBarStatus, number> = { waiting: 0, error: 0, "done-unread": 0 };
+  const counts: Record<OverflowStatusBarStatus, number> = { waiting: 0, "awaiting-permission": 0, error: 0, "done-unread": 0 };
   for (const { worktree } of rows) {
     if (!branches.has(worktree.branch)) continue;
     const status = overflowStatusOf(worktree, notifiedBranches);

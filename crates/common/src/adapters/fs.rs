@@ -1,7 +1,7 @@
 use crate::domain::model::{
-    OpenSessionsState, PrEntry, WorktreeArchiveState, WorktreeMeta, WorktreeStoragePaths,
-    WorktreeTab, WorktreeTabKind, OPEN_SESSIONS_STATE_VERSION, ROOT_TAB_ID,
-    WORKTREE_ARCHIVE_STATE_VERSION,
+    OPEN_SESSIONS_STATE_VERSION, OpenSessionsState, PrEntry, ROOT_TAB_ID,
+    WORKTREE_ARCHIVE_STATE_VERSION, WorktreeArchiveState, WorktreeMeta, WorktreeStoragePaths,
+    WorktreeTab, WorktreeTabKind,
 };
 use std::collections::HashMap;
 use std::fs;
@@ -102,7 +102,11 @@ pub fn build_runtime_env_map(
 ) -> HashMap<String, String> {
     let mut env: HashMap<String, String> = HashMap::new();
     env.extend(dotenv_values.iter().map(|(k, v)| (k.clone(), v.clone())));
-    env.extend(meta.startup_env_values.iter().map(|(k, v)| (k.clone(), v.clone())));
+    env.extend(
+        meta.startup_env_values
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone())),
+    );
     for (k, v) in &meta.allocated_ports {
         env.insert(k.clone(), v.to_string());
     }
@@ -143,7 +147,10 @@ pub fn parse_dotenv(content: &str) -> HashMap<String, String> {
 /// Match `^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)` → (key, rest).
 fn parse_dotenv_line(line: &str) -> Option<(String, &str)> {
     let rest = line.trim_start();
-    let rest = rest.strip_prefix("export ").map(str::trim_start).unwrap_or(rest);
+    let rest = rest
+        .strip_prefix("export ")
+        .map(str::trim_start)
+        .unwrap_or(rest);
     let mut chars = rest.char_indices();
     let (_, first) = chars.next()?;
     if !(first.is_ascii_alphabetic() || first == '_') {
@@ -214,7 +221,11 @@ pub fn read_track_file(worktree_path: &str, rel: &str) -> Result<String, TrackFi
 /// projects that aren't worktrees of the active project.
 pub fn read_track_file_in(dir: &Path, rel: &str) -> Result<String, TrackFileError> {
     let rel_path = Path::new(rel.trim_start_matches("./"));
-    if rel_path.is_absolute() || rel_path.components().any(|c| matches!(c, Component::ParentDir)) {
+    if rel_path.is_absolute()
+        || rel_path
+            .components()
+            .any(|c| matches!(c, Component::ParentDir))
+    {
         return Err(TrackFileError::Traversal);
     }
     let canon_dir = fs::canonicalize(dir).map_err(|_| TrackFileError::NotFound)?;
@@ -229,7 +240,8 @@ pub fn read_track_file_in(dir: &Path, rel: &str) -> Result<String, TrackFileErro
 
 fn project_archive_state_path(git_dir: &str) -> String {
     Path::new(git_dir)
-        .join(".ai").join("sebenza")
+        .join(".ai")
+        .join("sebenza")
         .join("archive.json")
         .to_string_lossy()
         .to_string()
@@ -279,7 +291,8 @@ pub fn write_worktree_archive_state(
 
 fn project_open_sessions_state_path(git_dir: &str) -> String {
     Path::new(git_dir)
-        .join(".ai").join("sebenza")
+        .join(".ai")
+        .join("sebenza")
         .join("open-sessions.json")
         .to_string_lossy()
         .to_string()
@@ -302,7 +315,11 @@ pub fn read_open_sessions_state(git_dir: &str) -> OpenSessionsState {
 pub fn write_open_sessions_state(git_dir: &str, state: &OpenSessionsState) -> Result<(), String> {
     ensure_worktree_storage_dirs(git_dir)?;
     let json = serde_json::to_string_pretty(state).map_err(|e| e.to_string())?;
-    fs::write(project_open_sessions_state_path(git_dir), format!("{json}\n")).map_err(|e| e.to_string())
+    fs::write(
+        project_open_sessions_state_path(git_dir),
+        format!("{json}\n"),
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Serialize an env map to a sorted `KEY=value` file, shell-quoting unsafe values.
@@ -329,7 +346,8 @@ fn quote_env_value(value: &str) -> String {
 
 /// Safe env-value character class `[A-Za-z0-9_./:@%+=,-]`.
 fn is_safe_env_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '/' | ':' | '@' | '%' | '+' | '=' | ',' | '-')
+    c.is_ascii_alphanumeric()
+        || matches!(c, '_' | '.' | '/' | ':' | '@' | '%' | '+' | '=' | ',' | '-')
 }
 
 pub fn write_runtime_env(git_dir: &str, env: &HashMap<String, String>) -> Result<(), String> {
@@ -348,10 +366,20 @@ pub fn build_control_env_map(
     control_token: &str,
     worktree_id: &str,
     branch: &str,
+    git_dir: &str,
 ) -> HashMap<String, String> {
     HashMap::from([
         ("SEBENZA_CONTROL_URL".to_string(), control_url.to_string()),
-        ("SEBENZA_CONTROL_TOKEN".to_string(), control_token.to_string()),
+        // The generated opencode plugin reads this instead of having the path compiled
+        // into it, which keeps the generated file byte-identical across worktrees.
+        (
+            "SEBENZA_AGENTCTL".to_string(),
+            format!("{git_dir}/.ai/sebenza/sebenza-agentctl"),
+        ),
+        (
+            "SEBENZA_CONTROL_TOKEN".to_string(),
+            control_token.to_string(),
+        ),
         ("SEBENZA_WORKTREE_ID".to_string(), worktree_id.to_string()),
         ("SEBENZA_BRANCH".to_string(), branch.to_string()),
     ])
@@ -361,9 +389,37 @@ pub fn build_control_env_map(
 mod tests {
     use super::*;
 
+    #[test]
+    fn control_env_carries_the_agentctl_path_for_the_opencode_plugin() {
+        let env = build_control_env_map(
+            "http://127.0.0.1:5111",
+            "tok",
+            "wt1",
+            "feature",
+            "/repo/.git",
+        );
+        assert_eq!(
+            env.get("SEBENZA_AGENTCTL").map(String::as_str),
+            Some("/repo/.git/.ai/sebenza/sebenza-agentctl"),
+            "the generated opencode plugin reads the agentctl path from the env so the \
+             generated file stays byte-identical across worktrees"
+        );
+        // Pre-existing keys must be untouched.
+        assert_eq!(
+            env.get("SEBENZA_CONTROL_TOKEN").map(String::as_str),
+            Some("tok")
+        );
+        assert_eq!(
+            env.get("SEBENZA_BRANCH").map(String::as_str),
+            Some("feature")
+        );
+    }
+
     fn temp_worktree() -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("sebenza-tracks-test-{}", crate::util::id::random_hex(8)));
+        let dir = std::env::temp_dir().join(format!(
+            "sebenza-tracks-test-{}",
+            crate::util::id::random_hex(8)
+        ));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -411,7 +467,10 @@ mod tests {
         fs::write(wt.join("secret.txt"), "nope").unwrap();
 
         // Nested read works (leading "./" tolerated).
-        assert_eq!(read_track_file(&wt_str, "./tracks/t_1/plan.json").unwrap(), "{}");
+        assert_eq!(
+            read_track_file(&wt_str, "./tracks/t_1/plan.json").unwrap(),
+            "{}"
+        );
         // Traversal is rejected.
         assert!(matches!(
             read_track_file(&wt_str, "../../secret.txt"),

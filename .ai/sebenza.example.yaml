@@ -33,13 +33,12 @@ agents:
     # "resume" capability. Omit for a fresh session every time.
     resumeCommand: goose session --resume
 
-  # opencode (https://github.com/sst/opencode) — a provider-agnostic agent.
-  # (Point either harness at any model via its own config, e.g. a NousResearch
-  # Hermes endpoint — the Sebenza agent is the harness; the model is set inside it.)
-  opencode:
-    label: OpenCode
-    startCommand: opencode
-    # resumeCommand omitted → terminal-only, no resume.
+  # NOTE: opencode is now a BUILT-IN agent and no longer needs an entry here. It is
+  # offered automatically, with chat, history, resume and fork. If you keep a custom
+  # `opencode:` entry it will be ignored in favour of the built-in, and Sebenza will say
+  # so on startup — rename the key (e.g. `opencode-custom:`) to keep a divergent command.
+  #
+  # goose is NOT built in yet (see TODO.md); its entry above still applies.
 
 # External editors/tools shown per-worktree in the "Open in…" menu. Unlike
 # agents (which run in the browser terminal), these launch on the host machine

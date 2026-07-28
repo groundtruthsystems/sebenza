@@ -31,7 +31,37 @@ enum Command {
         /// Port to bind (defaults to $PORT, then 5111).
         #[arg(long)]
         port: Option<u16>,
+        /// Host to bind (defaults to $SEBENZA_HOST, then 127.0.0.1).
+        ///
+        /// Loopback is the default deliberately: most routes are unauthenticated,
+        /// so binding all interfaces exposes worktree creation, the terminal PTY,
+        /// and agent control to anything that can reach the port. Pass
+        /// `--host 0.0.0.0` to opt in explicitly.
+        #[arg(long)]
+        host: Option<String>,
     },
+}
+
+/// Default bind host. Loopback, not `0.0.0.0` — see `Command::Serve::host`.
+const DEFAULT_BIND_HOST: &str = "127.0.0.1";
+
+/// Resolve the bind address from the flag, then the environment, then the loopback
+/// default. An unparseable host falls back to the default rather than binding
+/// something unintended.
+fn resolve_bind_addr(host_flag: Option<&str>, host_env: Option<&str>, port: u16) -> SocketAddr {
+    let raw = host_flag
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .or_else(|| host_env.map(str::trim).filter(|s| !s.is_empty()))
+        .unwrap_or(DEFAULT_BIND_HOST);
+
+    match raw.parse::<std::net::IpAddr>() {
+        Ok(ip) => SocketAddr::new(ip, port),
+        Err(_) => {
+            tracing::warn!("invalid bind host {raw:?}; falling back to {DEFAULT_BIND_HOST}");
+            SocketAddr::new(DEFAULT_BIND_HOST.parse().expect("valid default host"), port)
+        }
+    }
 }
 
 #[tokio::main]
@@ -45,14 +75,16 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Command::Serve { port } => serve(port).await,
+        Command::Serve { port, host } => serve(port, host).await,
     }
 }
 
-async fn serve(port_opt: Option<u16>) -> anyhow::Result<()> {
+async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Result<()> {
     let port = port_opt
         .or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()))
         .unwrap_or(5111);
+    let host_env = std::env::var("SEBENZA_HOST").ok();
+    let addr = resolve_bind_addr(host_opt.as_deref(), host_env.as_deref(), port);
 
     let cwd = std::env::current_dir()?;
     let project_dir = config::project_root(&cwd.to_string_lossy());
@@ -63,6 +95,21 @@ async fn serve(port_opt: Option<u16>) -> anyhow::Result<()> {
     // Load persisted projects, then serve the launch cwd for this session only.
     manager.load_persisted();
     let launch = manager.add_ephemeral(&project_dir);
+
+    // Tell the user if a custom-agent entry has been superseded by a built-in. Otherwise
+    // this is a silent breaking change: the shipped example config used to define an
+    // `opencode:` custom agent, and `list_agent_definitions` now discards that entry in
+    // favour of the built-in, so a customised command would just stop taking effect.
+    let shadowed = common::services::agent_registry::shadowed_custom_agent_ids(&launch.config());
+    if !shadowed.is_empty() {
+        tracing::warn!(
+            "custom agent(s) {} in {project_dir} are now BUILT IN, so those `agents:` entries \
+             are ignored. Delete them, or rename the key (e.g. `{}-custom:`) to keep a \
+             divergent command.",
+            shadowed.join(", "),
+            shadowed[0],
+        );
+    }
 
     let terminal = Arc::new(TerminalManager::new(port));
     // Reap orphaned grouped sessions from previous runs before serving.
@@ -79,12 +126,17 @@ async fn serve(port_opt: Option<u16>) -> anyhow::Result<()> {
 
     server::spawn_background_loops(state.clone());
     let app = server::build_router(state);
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(
         "Sebenza serve: http://localhost:{port} (project: {project_dir}, prefix: /{})",
         launch.prefix
     );
+    if !addr.ip().is_loopback() {
+        tracing::warn!(
+            "bound {addr} — NOT loopback. Most routes are unauthenticated, so the dashboard, \
+             terminal PTY and agent control are reachable by anything that can reach this port."
+        );
+    }
 
     // Self-register as a migration sensor so peer servers (and `sebenza-cli project
     // migrate`) can discover this instance; deregister on graceful shutdown.
@@ -133,4 +185,63 @@ fn resolve_frontend_dist(_project_dir: &str) -> Option<PathBuf> {
     let dir = std::env::var("SEBENZA_FRONTEND_DIST").ok()?;
     let path = PathBuf::from(dir);
     path.is_dir().then_some(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_to_loopback_when_nothing_is_set() {
+        let addr = resolve_bind_addr(None, None, 5111);
+        assert_eq!(addr.ip().to_string(), "127.0.0.1");
+        assert_eq!(addr.port(), 5111);
+        assert!(
+            addr.ip().is_loopback(),
+            "default bind must not be reachable off-host"
+        );
+    }
+
+    #[test]
+    fn all_interfaces_require_an_explicit_opt_in() {
+        let addr = resolve_bind_addr(Some("0.0.0.0"), None, 5111);
+        assert_eq!(addr.ip().to_string(), "0.0.0.0");
+        assert!(!addr.ip().is_loopback());
+    }
+
+    #[test]
+    fn env_is_honoured_and_the_flag_wins_over_it() {
+        assert_eq!(
+            resolve_bind_addr(None, Some("0.0.0.0"), 80)
+                .ip()
+                .to_string(),
+            "0.0.0.0"
+        );
+        assert_eq!(
+            resolve_bind_addr(Some("127.0.0.1"), Some("0.0.0.0"), 80)
+                .ip()
+                .to_string(),
+            "127.0.0.1",
+            "an explicit --host must override the environment"
+        );
+    }
+
+    #[test]
+    fn blank_and_invalid_hosts_fall_back_to_loopback() {
+        for bad in ["", "   ", "not-an-ip", "example.com"] {
+            let addr = resolve_bind_addr(Some(bad), None, 5111);
+            assert!(
+                addr.ip().is_loopback(),
+                "host {bad:?} must fall back to loopback, got {}",
+                addr.ip()
+            );
+        }
+    }
+
+    #[test]
+    fn ipv6_loopback_is_accepted() {
+        let addr = resolve_bind_addr(Some("::1"), None, 5111);
+        assert!(addr.ip().is_loopback());
+        assert!(addr.is_ipv6());
+    }
 }

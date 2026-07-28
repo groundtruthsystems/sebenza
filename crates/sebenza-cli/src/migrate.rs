@@ -7,11 +7,14 @@ use common::adapters::instance_registry::{self, InstanceEntry};
 
 use crate::http::Http;
 use crate::service_units::{
-    list_installed_services, read_port_from_unit, InstalledService, Platform,
+    InstalledService, Platform, list_installed_services, read_port_from_unit,
 };
 
 fn other_instances(port: u16) -> Vec<InstanceEntry> {
-    instance_registry::list_live().into_iter().filter(|e| e.port != port).collect()
+    instance_registry::list_live()
+        .into_iter()
+        .filter(|e| e.port != port)
+        .collect()
 }
 
 /// Best-effort warning printed to stderr when peer servers are running.
@@ -41,8 +44,18 @@ fn find_unit_for_port(services: &[InstalledService], port: u16) -> Option<&Insta
 fn disable_unit_commands(svc: &InstalledService) -> Vec<Vec<String>> {
     match svc.platform {
         Platform::Linux => vec![
-            vec!["systemctl".into(), "--user".into(), "stop".into(), svc.name.clone()],
-            vec!["systemctl".into(), "--user".into(), "disable".into(), svc.name.clone()],
+            vec![
+                "systemctl".into(),
+                "--user".into(),
+                "stop".into(),
+                svc.name.clone(),
+            ],
+            vec![
+                "systemctl".into(),
+                "--user".into(),
+                "disable".into(),
+                svc.name.clone(),
+            ],
         ],
         Platform::Macos => vec![vec![
             "launchctl".into(),
@@ -55,7 +68,10 @@ fn disable_unit_commands(svc: &InstalledService) -> Vec<Vec<String>> {
 
 fn run(cmd: &[String]) -> (bool, String) {
     match std::process::Command::new(&cmd[0]).args(&cmd[1..]).output() {
-        Ok(out) => (out.status.success(), String::from_utf8_lossy(&out.stderr).to_string()),
+        Ok(out) => (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ),
         Err(e) => (false, e.to_string()),
     }
 }
@@ -80,7 +96,8 @@ pub async fn run_migrate(port: u16) -> i32 {
     for p in &migrated {
         println!("Now serving {} ({}) — {}", p.name, p.prefix, p.path);
     }
-    let failed_paths: std::collections::HashSet<&str> = failed.iter().map(|(p, _)| p.as_str()).collect();
+    let failed_paths: std::collections::HashSet<&str> =
+        failed.iter().map(|(p, _)| p.as_str()).collect();
     for (path, error) in &failed {
         eprintln!("Warning: could not add {path}: {error}");
     }
@@ -114,7 +131,10 @@ pub async fn run_migrate(port: u16) -> i32 {
         }
         if let Err(e) = std::fs::remove_file(&unit.file_path) {
             all_ok = false;
-            eprintln!("Warning: could not remove {}: {e}", unit.file_path.display());
+            eprintln!(
+                "Warning: could not remove {}: {e}",
+                unit.file_path.display()
+            );
         }
         if all_ok {
             println!("Retired {} (port {}).", unit.name, instance.port);
@@ -122,7 +142,9 @@ pub async fn run_migrate(port: u16) -> i32 {
     }
 
     if find_unit_for_port(&list_installed_services(), port).is_none() {
-        println!("\nThis server isn't installed as a service. Run `sebenza-cli service install` so it starts on boot.");
+        println!(
+            "\nThis server isn't installed as a service. Run `sebenza-cli service install` so it starts on boot."
+        );
     }
     println!("\nMigration complete.");
     0

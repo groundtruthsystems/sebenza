@@ -5,7 +5,7 @@ use crate::adapters::fs::{
 use crate::adapters::git::{CreateGitWorktreeOptions, CreateWorktreeMode, GitGateway};
 use crate::domain::config::RuntimeKind;
 use crate::domain::model::{
-    OneshotMeta, WorktreeMeta, WorktreeSource, WorktreeStoragePaths, WORKTREE_META_SCHEMA_VERSION,
+    OneshotMeta, WORKTREE_META_SCHEMA_VERSION, WorktreeMeta, WorktreeSource, WorktreeStoragePaths,
 };
 use crate::util::id::random_uuid;
 use chrono::{SecondsFormat, Utc};
@@ -95,7 +95,8 @@ fn initialize_managed_worktree(
     write_runtime_env(&opts.git_dir, &runtime_env)?;
 
     if let (Some(url), Some(token)) = (&opts.control_url, &opts.control_token) {
-        let control_env = build_control_env_map(url, token, &meta.worktree_id, &meta.branch);
+        let control_env =
+            build_control_env_map(url, token, &meta.worktree_id, &meta.branch, &opts.git_dir);
         write_control_env(&opts.git_dir, &control_env)?;
     }
 
@@ -219,7 +220,10 @@ pub fn prefix_agent_branch(agent: &str, branch: &str) -> String {
 
 /// One target per agent. A single agent keeps the plain branch; multiple agents
 /// each get an `<agent>-<branch>` prefix.
-pub fn build_create_worktree_targets(branch: &str, agent_ids: &[String]) -> Vec<CreateWorktreeTarget> {
+pub fn build_create_worktree_targets(
+    branch: &str,
+    agent_ids: &[String],
+) -> Vec<CreateWorktreeTarget> {
     if agent_ids.len() <= 1 {
         return agent_ids
             .first()
@@ -247,7 +251,11 @@ mod tests {
     use std::process::Command;
 
     fn git(args: &[&str], cwd: &std::path::Path) {
-        let status = Command::new("git").args(args).current_dir(cwd).output().unwrap();
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
         assert!(status.status.success(), "git {args:?} failed");
     }
 
@@ -273,7 +281,9 @@ mod tests {
                 repo_root: repo_root.clone(),
                 worktree_path: worktree_path.clone(),
                 branch: "feature".to_string(),
-                mode: CreateWorktreeMode::New { base_branch: Some("main".to_string()) },
+                mode: CreateWorktreeMode::New {
+                    base_branch: Some("main".to_string()),
+                },
                 base_branch: Some("main".to_string()),
                 profile: "default".to_string(),
                 agent: "claude".to_string(),
@@ -298,7 +308,10 @@ mod tests {
         let git_dir = git.resolve_worktree_git_dir(&worktree_path).unwrap();
         let meta = read_worktree_meta(&git_dir).unwrap();
         assert_eq!(meta.worktree_id, result.meta.worktree_id);
-        assert_eq!(result.runtime_env.get("SEBENZA_BRANCH").map(String::as_str), Some("feature"));
+        assert_eq!(
+            result.runtime_env.get("SEBENZA_BRANCH").map(String::as_str),
+            Some("feature")
+        );
 
         std::fs::remove_dir_all(&tmp).ok();
     }

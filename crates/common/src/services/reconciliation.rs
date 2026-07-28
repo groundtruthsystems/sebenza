@@ -1,6 +1,8 @@
 use crate::adapters::fs::{build_runtime_env_map, read_worktree_meta, read_worktree_prs};
-use crate::adapters::git::{canonical_path, split_repo_root_entry, GitGateway, GitWorktreeEntry};
-use crate::adapters::tmux::{build_project_session_name, build_worktree_window_name, TmuxGateway, TmuxWindowSummary};
+use crate::adapters::git::{GitGateway, GitWorktreeEntry, canonical_path, split_repo_root_entry};
+use crate::adapters::tmux::{
+    TmuxGateway, TmuxWindowSummary, build_project_session_name, build_worktree_window_name,
+};
 use crate::config::expand_template;
 use crate::domain::config::ProjectConfig;
 use crate::domain::model::{
@@ -194,7 +196,10 @@ impl ReconciliationService {
                 Some(meta) => self.build_service_states(meta, &branch),
                 None => Vec::new(),
             };
-            let prs = git_dir.as_deref().map(read_worktree_prs).unwrap_or_default();
+            let prs = git_dir
+                .as_deref()
+                .map(read_worktree_prs)
+                .unwrap_or_default();
 
             seen.insert(worktree_id.clone());
 
@@ -211,10 +216,19 @@ impl ReconciliationService {
                     .as_ref()
                     .and_then(|m| m.agent_terminal_stale)
                     .unwrap_or(false),
-                runtime: meta.as_ref().map(|m| m.runtime.clone()).unwrap_or_else(|| "host".to_string()),
-                source: meta.as_ref().and_then(|m| m.source.clone()).unwrap_or(WorktreeSource::Ui),
+                runtime: meta
+                    .as_ref()
+                    .map(|m| m.runtime.clone())
+                    .unwrap_or_else(|| "host".to_string()),
+                source: meta
+                    .as_ref()
+                    .and_then(|m| m.source.clone())
+                    .unwrap_or(WorktreeSource::Ui),
                 oneshot: meta.as_ref().and_then(|m| m.oneshot.clone()),
-                tabs: meta.as_ref().and_then(|m| m.tabs.clone()).unwrap_or_default(),
+                tabs: meta
+                    .as_ref()
+                    .and_then(|m| m.tabs.clone())
+                    .unwrap_or_default(),
                 active_tab_id: meta.as_ref().and_then(|m| m.active_tab_id.clone()),
             });
 

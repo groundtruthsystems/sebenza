@@ -19,6 +19,8 @@ function agent(
       resume: kind === "builtin",
       fork: kind === "builtin",
       ...overrides,
+      pinnableSessionId: kind === "builtin",
+      permissionInterception: false,
     },
   };
 }

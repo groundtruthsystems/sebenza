@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 use crate::http::Http;
 
@@ -53,10 +53,14 @@ fn parse(args: &[String]) -> Result<Option<ProjectCommand>> {
             if args.len() > 2 {
                 return Err(anyhow!("Unexpected argument: {}", args[2]));
             }
-            Ok(Some(ProjectCommand::Add(args.get(1).cloned().unwrap_or_else(|| ".".to_string()))))
+            Ok(Some(ProjectCommand::Add(
+                args.get(1).cloned().unwrap_or_else(|| ".".to_string()),
+            )))
         }
         "rm" | "remove" => {
-            let prefix = args.get(1).ok_or_else(|| anyhow!("project rm requires a <prefix> argument"))?;
+            let prefix = args
+                .get(1)
+                .ok_or_else(|| anyhow!("project rm requires a <prefix> argument"))?;
             if args.len() > 2 {
                 return Err(anyhow!("Unexpected argument: {}", args[2]));
             }
@@ -139,15 +143,21 @@ async fn run_inner(cmd: ProjectCommand, port: u16) -> Result<i32> {
                 });
             let res = http.add_project(&absolute).await?;
             if !res.initializing {
-                let project = res
-                    .project
-                    .ok_or_else(|| anyhow!("Server accepted the project but returned nothing to open."))?;
-                println!("Added {} ({}) — {}", project.name, project.prefix, project.path);
+                let project = res.project.ok_or_else(|| {
+                    anyhow!("Server accepted the project but returned nothing to open.")
+                })?;
+                println!(
+                    "Added {} ({}) — {}",
+                    project.name, project.prefix, project.path
+                );
                 return Ok(0);
             }
             // Repo had no .ai/sebenza.yaml — the server is setting it up. Follow the phases.
             let ready = await_setup(&http, &res.path).await?;
-            let name = ready.name.clone().unwrap_or_else(|| ready.prefix.clone().unwrap_or_default());
+            let name = ready
+                .name
+                .clone()
+                .unwrap_or_else(|| ready.prefix.clone().unwrap_or_default());
             let prefix = ready.prefix.clone().unwrap_or_default();
             println!("Added {name} ({prefix}) — {}", res.path);
             Ok(0)
@@ -188,7 +198,11 @@ async fn await_setup(http: &Http, path: &str) -> Result<crate::http::ProjectInit
                 return Ok(state);
             }
             if state.phase == "failed" {
-                return Err(anyhow!(state.error.unwrap_or_else(|| "Project setup failed.".to_string())));
+                return Err(anyhow!(
+                    state
+                        .error
+                        .unwrap_or_else(|| "Project setup failed.".to_string())
+                ));
             }
         }
         tokio::time::sleep(POLL_INTERVAL).await;

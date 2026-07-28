@@ -4,7 +4,7 @@
 
 use std::io::Write;
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde_json::json;
 
 use common::adapters::fs::read_open_sessions_state;
@@ -106,7 +106,9 @@ fn usage(command: &str) -> String {
 
 /// Read a flag's value, supporting both `--flag value` and `--flag=value`.
 fn read_option_value(args: &[String], index: usize, flag: &str) -> Result<(String, usize)> {
-    let arg = args.get(index).ok_or_else(|| anyhow!("{flag} requires a value"))?;
+    let arg = args
+        .get(index)
+        .ok_or_else(|| anyhow!("{flag} requires a value"))?;
     let prefix = format!("{flag}=");
     if let Some(rest) = arg.strip_prefix(&prefix) {
         return Ok((rest.to_string(), index));
@@ -176,7 +178,9 @@ fn parse_add(args: &[String]) -> Result<Parse<AddArgs>> {
             let v = v.trim().to_string();
             if let Some(existing) = &branch {
                 if existing != &v {
-                    return Err(anyhow!("Conflicting branch values: \"{existing}\" and \"{v}\""));
+                    return Err(anyhow!(
+                        "Conflicting branch values: \"{existing}\" and \"{v}\""
+                    ));
                 }
             }
             branch = Some(v);
@@ -286,7 +290,10 @@ fn parse_label(args: &[String]) -> Result<Parse<LabelArgs>> {
     if option_label.is_some() && !label_parts.is_empty() {
         return Err(anyhow!("Cannot use --label with a positional label"));
     }
-    let label = option_label.unwrap_or_else(|| label_parts.join(" ")).trim().to_string();
+    let label = option_label
+        .unwrap_or_else(|| label_parts.join(" "))
+        .trim()
+        .to_string();
     if clear && !label.is_empty() {
         return Err(anyhow!("Cannot use --clear with a label"));
     }
@@ -317,7 +324,9 @@ fn parse_send(args: &[String]) -> Result<Parse<SendArgs>> {
             return Ok(Parse::Help);
         } else if arg == "--prompt" || arg.starts_with("--prompt=") {
             if text.is_some() {
-                return Err(anyhow!("Cannot use --prompt with a positional prompt argument"));
+                return Err(anyhow!(
+                    "Cannot use --prompt with a positional prompt argument"
+                ));
             }
             let (v, n) = read_option_value(args, index, "--prompt")?;
             text = Some(v);
@@ -345,7 +354,11 @@ fn parse_send(args: &[String]) -> Result<Parse<SendArgs>> {
         return Err(anyhow!("Invalid worktree name"));
     }
     let text = text.ok_or_else(|| anyhow!("Missing required argument: <prompt>"))?;
-    Ok(Parse::Parsed(SendArgs { branch, text, preamble }))
+    Ok(Parse::Parsed(SendArgs {
+        branch,
+        text,
+        preamble,
+    }))
 }
 
 #[derive(Clone, Copy)]
@@ -416,7 +429,12 @@ fn parse_tab(args: &[String]) -> Result<Parse<TabArgs>> {
     if agent.is_some() && !matches!(action, TabAction::New) {
         return Err(anyhow!("--agent is only valid for the \"new\" action"));
     }
-    Ok(Parse::Parsed(TabArgs { branch, action, tab_id, agent }))
+    Ok(Parse::Parsed(TabArgs {
+        branch,
+        action,
+        tab_id,
+        agent,
+    }))
 }
 
 struct ListArgs {
@@ -585,8 +603,11 @@ async fn run_inner(ctx: &WorktreeContext) -> Result<i32> {
             }
             let base = http.resolve_project_base(&ctx.project_dir).await?;
             let snapshot = http.get_project(&base).await?;
-            let existing: std::collections::HashSet<&str> =
-                snapshot.worktrees.iter().map(|w| w.branch.as_str()).collect();
+            let existing: std::collections::HashSet<&str> = snapshot
+                .worktrees
+                .iter()
+                .map(|w| w.branch.as_str())
+                .collect();
             let open: std::collections::HashSet<&str> = snapshot
                 .worktrees
                 .iter()
@@ -625,7 +646,10 @@ async fn run_inner(ctx: &WorktreeContext) -> Result<i32> {
                 }
             }
 
-            let mut parts = vec![format!("Restored {restored} session{}", if restored == 1 { "" } else { "s" })];
+            let mut parts = vec![format!(
+                "Restored {restored} session{}",
+                if restored == 1 { "" } else { "s" }
+            )];
             if skipped > 0 {
                 parts.push(format!("skipped {skipped}"));
             }
@@ -648,8 +672,13 @@ async fn run_inner(ctx: &WorktreeContext) -> Result<i32> {
                 Parse::Parsed(p) => p,
             };
             let base = http.resolve_project_base(&ctx.project_dir).await?;
-            http.send_prompt(&base, &parsed.branch, &parsed.text, parsed.preamble.as_deref())
-                .await?;
+            http.send_prompt(
+                &base,
+                &parsed.branch,
+                &parsed.text,
+                parsed.preamble.as_deref(),
+            )
+            .await?;
             println!("Sent prompt to {}", parsed.branch);
             Ok(0)
         }
@@ -665,12 +694,13 @@ async fn run_inner(ctx: &WorktreeContext) -> Result<i32> {
             match parsed.action {
                 TabAction::New => {
                     let tab = match parsed.agent.as_deref() {
-                        Some(agent) => {
-                            http.create_agent_tab(&base, &parsed.branch, agent).await?
-                        }
+                        Some(agent) => http.create_agent_tab(&base, &parsed.branch, agent).await?,
                         None => http.create_tab(&base, &parsed.branch).await?,
                     };
-                    println!("Created {} ({}) in {}", tab.label, tab.tab_id, parsed.branch);
+                    println!(
+                        "Created {} ({}) in {}",
+                        tab.label, tab.tab_id, parsed.branch
+                    );
                 }
                 TabAction::Switch => {
                     let tab_id = parsed.tab_id.unwrap();
@@ -684,7 +714,11 @@ async fn run_inner(ctx: &WorktreeContext) -> Result<i32> {
                 }
                 TabAction::List => {
                     let snapshot = http.get_project(&base).await?;
-                    match snapshot.worktrees.iter().find(|w| w.branch == parsed.branch) {
+                    match snapshot
+                        .worktrees
+                        .iter()
+                        .find(|w| w.branch == parsed.branch)
+                    {
                         None => println!("Worktree not found: {}", parsed.branch),
                         Some(w) => {
                             for tab in &w.tabs {
@@ -710,7 +744,9 @@ async fn run_inner(ctx: &WorktreeContext) -> Result<i32> {
                 Parse::Parsed(p) => p,
             };
             let base = http.resolve_project_base(&ctx.project_dir).await?;
-            let result = http.set_label(&base, &parsed.branch, parsed.label.as_deref()).await?;
+            let result = http
+                .set_label(&base, &parsed.branch, parsed.label.as_deref())
+                .await?;
             match result {
                 Some(label) => println!("Labeled worktree {} as \"{label}\"", parsed.branch),
                 None => println!("Cleared label for {}", parsed.branch),
@@ -870,7 +906,11 @@ fn print_list(worktrees: &[crate::http::WorktreeSnapshot], options: &ListArgs) {
         Some(l) => format!("{l} ({})", r.branch),
         None => r.branch.clone(),
     };
-    let max_name = visible.iter().map(|r| display_name(r).len()).max().unwrap_or(0);
+    let max_name = visible
+        .iter()
+        .map(|r| display_name(r).len())
+        .max()
+        .unwrap_or(0);
 
     for r in &visible {
         let status = format!(

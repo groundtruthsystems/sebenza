@@ -7,6 +7,7 @@ pub mod fs;
 pub mod git;
 pub mod hooks;
 pub mod instance_registry;
+pub mod opencode_session_log;
 pub mod projects_registry;
 pub mod sebenza_registry;
 pub mod session_discovery;

@@ -49,12 +49,17 @@ pub struct SebenzaRegistry {
 
 fn default_registry_file() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    PathBuf::from(home).join(".ai").join("sebenza").join("registry.json")
+    PathBuf::from(home)
+        .join(".ai")
+        .join("sebenza")
+        .join("registry.json")
 }
 
 impl SebenzaRegistry {
     pub fn new() -> Self {
-        SebenzaRegistry { file: default_registry_file() }
+        SebenzaRegistry {
+            file: default_registry_file(),
+        }
     }
 
     #[cfg(test)]
@@ -88,8 +93,10 @@ mod tests {
     use super::*;
 
     fn temp_file(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("sebenza-registry-test-{}", crate::util::id::random_hex(8)));
+        let dir = std::env::temp_dir().join(format!(
+            "sebenza-registry-test-{}",
+            crate::util::id::random_hex(8)
+        ));
         fs::create_dir_all(&dir).unwrap();
         dir.join(name)
     }
@@ -125,8 +132,14 @@ mod tests {
         assert_eq!(parsed.version, "1.0");
         assert_eq!(parsed.projects.len(), 1);
         assert_eq!(parsed.projects[0].name, "demo");
-        assert_eq!(parsed.projects[0].tracks_file, "/tmp/demo/.ai/sebenza/tracks.json");
-        assert_eq!(parsed.projects[0].last_synced.as_deref(), Some("2026-07-27T12:14:04Z"));
+        assert_eq!(
+            parsed.projects[0].tracks_file,
+            "/tmp/demo/.ai/sebenza/tracks.json"
+        );
+        assert_eq!(
+            parsed.projects[0].last_synced.as_deref(),
+            Some("2026-07-27T12:14:04Z")
+        );
 
         fs::remove_dir_all(file.parent().unwrap()).ok();
     }

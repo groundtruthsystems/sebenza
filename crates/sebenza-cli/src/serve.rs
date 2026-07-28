@@ -31,7 +31,12 @@ fn find_frontend_dist() -> Option<PathBuf> {
     }
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    for rel in ["frontend/dist", "../frontend/dist", "../../frontend/dist", "../share/sebenza-cli/frontend/dist"] {
+    for rel in [
+        "frontend/dist",
+        "../frontend/dist",
+        "../../frontend/dist",
+        "../share/sebenza-cli/frontend/dist",
+    ] {
         let candidate = dir.join(rel);
         if candidate.is_dir() {
             return std::fs::canonicalize(&candidate).ok().or(Some(candidate));
@@ -110,7 +115,10 @@ pub async fn run(port: u16, app: bool, cwd: &str) -> i32 {
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     if !keys.is_empty() {
-        cmd.env("SEBENZA_PROJECT_ENV_KEYS", keys.into_iter().collect::<Vec<_>>().join(","));
+        cmd.env(
+            "SEBENZA_PROJECT_ENV_KEYS",
+            keys.into_iter().collect::<Vec<_>>().join(","),
+        );
     }
 
     println!("Starting Sebenza on port {port}...");

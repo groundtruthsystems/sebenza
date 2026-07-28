@@ -10,6 +10,10 @@ import type {
 
 interface Props {
   worktree: WorktreeInfo;
+  /** Whether this worktree's agent declares the in-app chat capability. Passed in
+   *  because the panel has no access to the agent registry; the caller reads
+   *  `capabilities.inAppChat`. Never inferred from the agent id. */
+  supportsChat: boolean;
   conversation: AgentsUiConversationState | null;
   conversationError: string | null;
   conversationLoading: boolean;
@@ -154,6 +158,7 @@ function StopIcon() {
 
 export default function WorktreeConversationPanel({
   worktree,
+  supportsChat,
   conversation,
   conversationError,
   conversationLoading,
@@ -166,8 +171,10 @@ export default function WorktreeConversationPanel({
   onSend,
   onAnswerQuestion,
 }: Props) {
-  const agentLabel = worktree.agentLabel ?? (worktree.agentName === "claude" ? "Claude" : "Codex");
-  const supportsAgentChat = worktree.agentName === "codex" || worktree.agentName === "claude";
+  // Fall back to the agent's own id, never to a guessed builtin name: labelling an
+  // unknown agent "Codex" is worse than showing its id.
+  const agentLabel = worktree.agentLabel ?? worktree.agentName ?? "Agent";
+  const supportsAgentChat = supportsChat;
   const chatAvailable = supportsAgentChat && worktree.mux === "✓";
   const showInterrupt = chatAvailable && (conversation?.running ?? false);
   const showComposerInterrupt = showInterrupt && !conversationError;

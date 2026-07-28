@@ -23,6 +23,8 @@ pub enum WorktreeConversationProvider {
     CodexAppServer,
     #[serde(rename = "claudeCode")]
     ClaudeCode,
+    #[serde(rename = "opencode")]
+    Opencode,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -48,6 +50,19 @@ pub enum WorktreeConversationMeta {
         #[serde(rename = "sessionId")]
         session_id: String,
     },
+    /// opencode records the id Sebenza was told at launch, because it cannot be
+    /// discovered afterwards: `project_id` is per-repository and `opencode session list`
+    /// has no directory column, so neither identifies this worktree's session.
+    #[serde(rename = "opencode")]
+    Opencode {
+        #[serde(rename = "conversationId")]
+        conversation_id: String,
+        cwd: String,
+        #[serde(rename = "lastSeenAt")]
+        last_seen_at: String,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
 }
 
 impl WorktreeConversationMeta {
@@ -55,6 +70,7 @@ impl WorktreeConversationMeta {
         match self {
             Self::Codex { thread_id, .. } => thread_id,
             Self::Claude { session_id, .. } => session_id,
+            Self::Opencode { session_id, .. } => session_id,
         }
     }
 }
@@ -169,6 +185,16 @@ pub enum AgentLifecycle {
     Starting,
     Running,
     Idle,
+    /// Blocked mid-turn on a permission decision the agent is showing in its own UI.
+    ///
+    /// Distinct from `Idle` on purpose: both mean "this worktree wants you", but they call
+    /// for different actions — `Idle` wants your next prompt, this wants you to approve or
+    /// reject something already proposed. With many parallel worktrees, that difference is
+    /// the difference between a legible queue and a wall of identical "waiting" badges.
+    ///
+    /// Sebenza cannot answer the prompt for you: opencode's `permission.ask` hook does not
+    /// fire (verified on 1.18.9), so this state is observational only.
+    AwaitingPermission,
     Stopped,
     Error,
 }
@@ -310,6 +336,10 @@ pub struct ManagedWorktreeRuntimeState {
     pub agent: AgentRuntimeState,
     pub services: Vec<ServiceRuntimeState>,
     pub prs: Vec<PrEntry>,
+    /// Session id reported by the agent at creation, for agents whose id cannot be
+    /// discovered from disk afterwards (opencode). `None` for claude/codex, whose ids are
+    /// recovered by scanning their session logs.
+    pub reported_session_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -341,6 +371,11 @@ pub struct WorktreeSnapshot {
     pub oneshot: Option<OneshotMeta>,
     pub tabs: Vec<WorktreeTab>,
     pub active_tab_id: Option<String>,
+    /// Session id the agent reported at creation, for agents whose id cannot be recovered
+    /// from disk (opencode). Not serialized to the frontend: it is an internal correlation
+    /// key, and adding it to the wire contract would expand the surface for no UI benefit.
+    #[serde(skip)]
+    pub reported_session_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

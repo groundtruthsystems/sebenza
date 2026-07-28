@@ -4,12 +4,20 @@
 
 use std::path::Path;
 
-use common::adapters::git::{canonical_path, split_repo_root_entry, GitGateway};
+use common::adapters::git::{GitGateway, canonical_path, split_repo_root_entry};
 use common::config::project_root;
 
 /// Subcommands that take a `<branch>` argument (get dynamic completion).
 const BRANCH_SUBCOMMANDS: &[&str] = &[
-    "open", "close", "refresh", "archive", "unarchive", "label", "remove", "merge", "send",
+    "open",
+    "close",
+    "refresh",
+    "archive",
+    "unarchive",
+    "label",
+    "remove",
+    "merge",
+    "send",
 ];
 
 const USAGE: &str = "Usage:

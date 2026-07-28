@@ -1,4 +1,6 @@
-use crate::domain::model::{ArchivedWorktreeEntry, WorktreeArchiveState, WORKTREE_ARCHIVE_STATE_VERSION};
+use crate::domain::model::{
+    ArchivedWorktreeEntry, WORKTREE_ARCHIVE_STATE_VERSION, WorktreeArchiveState,
+};
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 

@@ -38,7 +38,10 @@ pub struct ProjectInitState {
 const DEFAULT_TERMINAL_TTL: Duration = Duration::from_secs(60);
 
 fn now_ms() -> u128 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
 }
 
 /// A phase update; `None` fields preserve the prior value (matching the TS
@@ -75,8 +78,12 @@ impl ProjectInitTracker {
     pub fn set(&self, path: &str, phase: ProjectInitPhase, update: PhaseUpdate) {
         let mut inits = self.inits.lock().unwrap();
         let existing = inits.get(path);
-        let prefix = update.prefix.or_else(|| existing.and_then(|e| e.prefix.clone()));
-        let name = update.name.or_else(|| existing.and_then(|e| e.name.clone()));
+        let prefix = update
+            .prefix
+            .or_else(|| existing.and_then(|e| e.prefix.clone()));
+        let name = update
+            .name
+            .or_else(|| existing.and_then(|e| e.name.clone()));
         let error = update.error.or_else(|| {
             if phase == ProjectInitPhase::Failed {
                 existing.and_then(|e| e.error.clone())
@@ -129,10 +136,21 @@ pub fn run_project_init(
     register: impl FnOnce() -> (String, String),
 ) {
     tracing::info!("[project-init] setting up {root}");
-    tracker.set(root, ProjectInitPhase::CreatingConfig, PhaseUpdate::default());
+    tracker.set(
+        root,
+        ProjectInitPhase::CreatingConfig,
+        PhaseUpdate::default(),
+    );
     if let Err(e) = scaffold() {
         tracing::error!("[project-init] setup failed for {root}: {e}");
-        tracker.set(root, ProjectInitPhase::Failed, PhaseUpdate { error: Some(e), ..Default::default() });
+        tracker.set(
+            root,
+            ProjectInitPhase::Failed,
+            PhaseUpdate {
+                error: Some(e),
+                ..Default::default()
+            },
+        );
         return;
     }
 
@@ -140,7 +158,9 @@ pub fn run_project_init(
         tracker.set(root, ProjectInitPhase::Analyzing, PhaseUpdate::default());
         if let Err(e) = analyze() {
             // Best-effort enrichment: keep the starter config and finish setup.
-            tracing::warn!("[project-init] analysis failed for {root}, keeping starter config: {e}");
+            tracing::warn!(
+                "[project-init] analysis failed for {root}, keeping starter config: {e}"
+            );
         }
     }
 
@@ -148,7 +168,11 @@ pub fn run_project_init(
     tracker.set(
         root,
         ProjectInitPhase::Ready,
-        PhaseUpdate { prefix: Some(prefix.clone()), name: Some(name), ..Default::default() },
+        PhaseUpdate {
+            prefix: Some(prefix.clone()),
+            name: Some(name),
+            ..Default::default()
+        },
     );
     tracing::info!("[project-init] {root} ready as \"{prefix}\"");
 }

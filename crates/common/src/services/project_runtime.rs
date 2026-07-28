@@ -84,7 +84,13 @@ impl ProjectRuntime {
         }
     }
 
-    pub fn set_session_state(&mut self, worktree_id: &str, exists: bool, session_name: Option<String>, pane_count: i32) {
+    pub fn set_session_state(
+        &mut self,
+        worktree_id: &str,
+        exists: bool,
+        session_name: Option<String>,
+        pane_count: i32,
+    ) {
         if let Some(state) = self.worktrees.get_mut(worktree_id) {
             state.session = SessionRuntimeState {
                 exists,
@@ -135,7 +141,8 @@ impl ProjectRuntime {
             && state.branch != branch
         {
             self.worktree_ids_by_branch.remove(&state.branch);
-            self.worktree_ids_by_branch.insert(branch.clone(), worktree_id.clone());
+            self.worktree_ids_by_branch
+                .insert(branch.clone(), worktree_id.clone());
         }
 
         let Some(state) = self.worktrees.get_mut(&worktree_id) else {
@@ -169,6 +176,11 @@ impl ProjectRuntime {
                 state.agent.last_error = Some(message.clone());
             }
             RuntimeEvent::PrOpened { .. } => {}
+            // Record the id so the opencode conversation service can export it. This is
+            // the only route by which Sebenza learns an opencode session id.
+            RuntimeEvent::ConversationStarted { session_id, .. } => {
+                state.reported_session_id = Some(session_id.clone());
+            }
         }
         Ok(())
     }
@@ -183,7 +195,8 @@ impl ProjectRuntime {
 
     /// All worktrees, sorted by branch name (matches the TS `listWorktrees`).
     pub fn list_worktrees(&self) -> Vec<ManagedWorktreeRuntimeState> {
-        let mut states: Vec<ManagedWorktreeRuntimeState> = self.worktrees.values().cloned().collect();
+        let mut states: Vec<ManagedWorktreeRuntimeState> =
+            self.worktrees.values().cloned().collect();
         states.sort_by(|a, b| a.branch.cmp(&b.branch));
         states
     }
@@ -227,5 +240,6 @@ fn make_default_state(input: UpsertInput) -> ManagedWorktreeRuntimeState {
         },
         services: Vec::new(),
         prs: Vec::new(),
+        reported_session_id: None,
     }
 }

@@ -15,6 +15,25 @@ pub enum StreamProvider {
     Codex,
 }
 
+impl StreamProvider {
+    /// The streaming provider for a built-in agent, or `None` when that agent has no
+    /// in-app chat implementation. Exhaustive on `BuiltinAgentId`, so a new built-in
+    /// must decide here rather than silently inheriting Claude's provider.
+    pub fn for_builtin(
+        id: common::services::agent_registry::BuiltinAgentId,
+    ) -> Option<StreamProvider> {
+        use common::services::agent_registry::BuiltinAgentId;
+        match id {
+            BuiltinAgentId::Claude => Some(StreamProvider::Claude),
+            BuiltinAgentId::Codex => Some(StreamProvider::Codex),
+            // opencode has no streaming provider yet: in-app chat depends on the
+            // generated plugin and the export-based history adapter, later in this phase.
+            // Its capabilities declare in_app_chat: false, so nothing offers chat for it.
+            BuiltinAgentId::Opencode => None,
+        }
+    }
+}
+
 /// A conversation message without its `order` (assigned per WS subscriber).
 #[derive(Clone)]
 pub struct DraftMessage {
@@ -32,10 +51,22 @@ pub struct DraftMessage {
 /// Live event broadcast to subscribers (order + revision are stamped per-subscriber).
 #[derive(Clone)]
 pub enum StreamEvent {
-    Status { running: bool, active_turn_id: Option<String> },
-    Delta { turn_id: String, item_id: String, delta: String },
-    Upsert { message: DraftMessage, order_key: String },
-    Error { message: String },
+    Status {
+        running: bool,
+        active_turn_id: Option<String>,
+    },
+    Delta {
+        turn_id: String,
+        item_id: String,
+        delta: String,
+    },
+    Upsert {
+        message: DraftMessage,
+        order_key: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 struct RunState {
@@ -183,7 +214,10 @@ fn emit_status(run: &RunState, running: bool) {
 }
 
 fn emit_upsert(run: &RunState, message: DraftMessage, order_key: String) {
-    run.live.lock().unwrap().insert(message.id.clone(), message.clone());
+    run.live
+        .lock()
+        .unwrap()
+        .insert(message.id.clone(), message.clone());
     let _ = run.tx.send(StreamEvent::Upsert { message, order_key });
 }
 
@@ -205,7 +239,10 @@ fn finish_run(run: &RunState, status: &str) {
     };
     for message in finalized {
         let key = message.id.clone();
-        let _ = run.tx.send(StreamEvent::Upsert { message, order_key: key });
+        let _ = run.tx.send(StreamEvent::Upsert {
+            message,
+            order_key: key,
+        });
     }
     emit_status(run, false);
 }
@@ -246,7 +283,9 @@ async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
-            let _ = run.tx.send(StreamEvent::Error { message: format!("failed to spawn claude: {e}") });
+            let _ = run.tx.send(StreamEvent::Error {
+                message: format!("failed to spawn claude: {e}"),
+            });
             return;
         }
     };
@@ -339,11 +378,18 @@ fn handle_stream_line(
 
     for block in parsed.blocks {
         let id = if block.kind == "toolResult" {
-            format!("tool_result:{}", block.tool_call_id.clone().unwrap_or_default())
+            format!(
+                "tool_result:{}",
+                block.tool_call_id.clone().unwrap_or_default()
+            )
         } else {
             format!(
                 "{}:{}",
-                block.message_id.clone().or_else(|| message_id.clone()).unwrap_or_else(|| "msg".to_string()),
+                block
+                    .message_id
+                    .clone()
+                    .or_else(|| message_id.clone())
+                    .unwrap_or_else(|| "msg".to_string()),
                 block_index
             )
         };
@@ -397,7 +443,9 @@ async fn run_codex(input: StartRunInput, run: Arc<RunState>) {
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
-            let _ = run.tx.send(StreamEvent::Error { message: format!("failed to spawn codex: {e}") });
+            let _ = run.tx.send(StreamEvent::Error {
+                message: format!("failed to spawn codex: {e}"),
+            });
             return;
         }
     };
@@ -435,7 +483,11 @@ fn handle_codex_line(line: &str, run: &RunState) {
             let Some(item) = event.get("item") else {
                 return;
             };
-            let id = item.get("id").and_then(Value::as_str).unwrap_or("item").to_string();
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("item")
+                .to_string();
             let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
             let (role, kind) = match item_type {
                 "agent_message" => ("assistant", "text"),
@@ -447,7 +499,12 @@ fn handle_codex_line(line: &str, run: &RunState) {
                 .get("text")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .unwrap_or_else(|| item.get("command").and_then(Value::as_str).unwrap_or("").to_string());
+                .unwrap_or_else(|| {
+                    item.get("command")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string()
+                });
             let status = if event.get("type").and_then(Value::as_str) == Some("item.started") {
                 "inProgress"
             } else {
@@ -467,9 +524,36 @@ fn handle_codex_line(line: &str, run: &RunState) {
             emit_upsert(run, message, id);
         }
         Some("error") => {
-            let msg = event.get("message").and_then(Value::as_str).unwrap_or("codex error").to_string();
+            let msg = event
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("codex error")
+                .to_string();
             let _ = run.tx.send(StreamEvent::Error { message: msg });
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod stream_provider_tests {
+    use super::*;
+    use common::services::agent_registry::BuiltinAgentId;
+
+    #[test]
+    fn every_builtin_maps_to_a_stream_provider_or_explicitly_to_none() {
+        // Exhaustive by construction: if a new BuiltinAgentId variant is added,
+        // `for_builtin` fails to compile until it decides. This asserts every current
+        // variant has been decided, so none silently inherits Claude's provider.
+        for id in BuiltinAgentId::ALL {
+            let provider = StreamProvider::for_builtin(*id);
+            match id {
+                BuiltinAgentId::Claude => assert!(matches!(provider, Some(StreamProvider::Claude))),
+                BuiltinAgentId::Codex => assert!(matches!(provider, Some(StreamProvider::Codex))),
+                // Explicitly no provider yet — chat is disabled for opencode via its
+                // capabilities until the plugin and export adapter land.
+                BuiltinAgentId::Opencode => assert!(provider.is_none()),
+            }
+        }
     }
 }

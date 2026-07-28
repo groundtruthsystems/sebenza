@@ -17,6 +17,7 @@ vi.mock("./api", () => ({
 }));
 
 import { api, createAgent, deleteAgent, fetchAgents, validateAgent } from "./api";
+import { agentCapabilities, builtinAgentCapabilities } from "./api-contract/test-fixtures";
 
 const originalDialogShowModal = HTMLDialogElement.prototype.showModal;
 const originalDialogClose = HTMLDialogElement.prototype.close;
@@ -26,13 +27,7 @@ function createAgentDetails(overrides: Partial<AgentDetails> = {}): AgentDetails
     id: "gemini",
     label: "Gemini CLI",
     kind: "custom",
-    capabilities: {
-      terminal: true,
-      inAppChat: false,
-      conversationHistory: false,
-      interrupt: false,
-      resume: true,
-    },
+    capabilities: agentCapabilities({ resume: true }),
     startCommand: 'gemini --prompt "${PROMPT}"',
     resumeCommand: 'gemini resume --branch "${BRANCH}"',
     ...overrides,
@@ -44,13 +39,7 @@ function createAgentSummary(overrides: Partial<AgentSummary> = {}): AgentSummary
     id: "gemini",
     label: "Gemini CLI",
     kind: "custom",
-    capabilities: {
-      terminal: true,
-      inAppChat: false,
-      conversationHistory: false,
-      interrupt: false,
-      resume: true,
-    },
+    capabilities: agentCapabilities({ resume: true }),
     ...overrides,
   };
 }
@@ -106,13 +95,7 @@ describe("SettingsDialog agent management", () => {
 
   it("shows only custom agents in the list", async () => {
     vi.mocked(fetchAgents).mockResolvedValue([
-      createAgentDetails({ id: "claude", label: "Claude", kind: "builtin", startCommand: null, resumeCommand: null, capabilities: {
-        terminal: true,
-        inAppChat: true,
-        conversationHistory: true,
-        interrupt: true,
-        resume: true,
-      } }),
+      createAgentDetails({ id: "claude", label: "Claude", kind: "builtin", startCommand: null, resumeCommand: null, capabilities: builtinAgentCapabilities() }),
       createAgentDetails(),
     ]);
 
@@ -125,13 +108,7 @@ describe("SettingsDialog agent management", () => {
 
   it("shows an empty state when no custom agents are configured", async () => {
     vi.mocked(fetchAgents).mockResolvedValue([
-      createAgentDetails({ id: "claude", label: "Claude", kind: "builtin", startCommand: null, resumeCommand: null, capabilities: {
-        terminal: true,
-        inAppChat: true,
-        conversationHistory: true,
-        interrupt: true,
-        resume: true,
-      } }),
+      createAgentDetails({ id: "claude", label: "Claude", kind: "builtin", startCommand: null, resumeCommand: null, capabilities: builtinAgentCapabilities() }),
     ]);
 
     renderDialog();

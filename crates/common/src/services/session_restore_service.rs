@@ -1,9 +1,9 @@
 use crate::adapters::fs::write_open_sessions_state;
-use crate::adapters::git::{canonical_path, GitGateway, GitWorktreeEntry};
+use crate::adapters::git::{GitGateway, GitWorktreeEntry, canonical_path};
 use crate::adapters::tmux::{
-    build_project_session_name, build_worktree_window_name, TmuxGateway, TmuxWindowSummary,
+    TmuxGateway, TmuxWindowSummary, build_project_session_name, build_worktree_window_name,
 };
-use crate::domain::model::{OpenSessionsState, OPEN_SESSIONS_STATE_VERSION};
+use crate::domain::model::{OPEN_SESSIONS_STATE_VERSION, OpenSessionsState};
 use std::path::Path;
 
 /// The branch of a live worktree entry, falling back to the directory basename
@@ -71,7 +71,11 @@ pub fn save_open_sessions_snapshot(
         return None;
     }
     let git_dir = git.resolve_worktree_git_dir(&project_root).ok()?;
-    write_open_sessions_state(&git_dir, &build_open_sessions_state(branches.clone(), saved_at)).ok()?;
+    write_open_sessions_state(
+        &git_dir,
+        &build_open_sessions_state(branches.clone(), saved_at),
+    )
+    .ok()?;
     Some(branches)
 }
 

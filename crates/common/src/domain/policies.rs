@@ -44,9 +44,7 @@ pub fn sanitize_branch_name(raw: &str) -> String {
     s = collapse_char(&s, '.');
     s = collapse_char(&s, '/');
     s = collapse_char(&s, '-');
-    s = s
-        .trim_matches(|c| matches!(c, '.' | '-' | '/'))
-        .to_string();
+    s = s.trim_matches(|c| matches!(c, '.' | '-' | '/')).to_string();
     if s.to_lowercase().ends_with(".lock") {
         s.truncate(s.len() - ".lock".len());
     }
@@ -75,7 +73,12 @@ pub fn available_branch_names(
         .filter(|b| is_valid_branch_name(b))
         .collect();
     if include_remote {
-        names.extend(remote.iter().map(String::as_str).filter(|b| is_valid_branch_name(b)));
+        names.extend(
+            remote
+                .iter()
+                .map(String::as_str)
+                .filter(|b| is_valid_branch_name(b)),
+        );
     }
     names
         .into_iter()
@@ -193,7 +196,11 @@ pub fn derive_project_prefix<'a>(
         .unwrap_or("sebenza");
     let base = {
         let s = sanitize_project_prefix(basename);
-        if s.is_empty() { "sebenza".to_string() } else { s }
+        if s.is_empty() {
+            "sebenza".to_string()
+        } else {
+            s
+        }
     };
 
     let mut taken: std::collections::HashSet<String> =
@@ -299,7 +306,11 @@ mod tests {
     fn project_prefixes_never_shadow_hub_routes() {
         for reserved in ["api", "ws", "assets", "registry"] {
             let prefix = derive_project_prefix(&format!("/home/dev/{reserved}"), []);
-            assert_eq!(prefix, format!("{reserved}-2"), "{reserved} must be reserved");
+            assert_eq!(
+                prefix,
+                format!("{reserved}-2"),
+                "{reserved} must be reserved"
+            );
         }
         assert_eq!(derive_project_prefix("/home/dev/my-app", []), "my-app");
     }

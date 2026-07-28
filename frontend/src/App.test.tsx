@@ -149,6 +149,7 @@ import {
   subscribeNotifications,
 } from "./lib/api";
 import { useStore } from "./store";
+import { builtinAgentCapabilities } from "./lib/api-contract/test-fixtures";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -199,25 +200,13 @@ function createConfig(overrides: Partial<AppConfig> = {}): AppConfig {
         id: "claude",
         label: "Claude",
         kind: "builtin",
-        capabilities: {
-          terminal: true,
-          inAppChat: true,
-          conversationHistory: true,
-          interrupt: true,
-          resume: true,
-        },
+        capabilities: builtinAgentCapabilities(),
       },
       {
         id: "codex",
         label: "Codex",
         kind: "builtin",
-        capabilities: {
-          terminal: true,
-          inAppChat: true,
-          conversationHistory: true,
-          interrupt: true,
-          resume: true,
-        },
+        capabilities: builtinAgentCapabilities(),
       },
     ],
     launchers: [],
@@ -1082,7 +1071,9 @@ describe("App create selection", () => {
               interrupt: false,
               resume: false,
               fork: false,
-            },
+      pinnableSessionId: false,
+      permissionInterception: false,
+    },
           },
         ],
       }),

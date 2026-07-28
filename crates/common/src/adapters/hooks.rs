@@ -24,7 +24,10 @@ fn direnv_available() -> bool {
 
 fn build_command(cwd: &str, command: &str) -> Vec<String> {
     if direnv_available() && Path::new(cwd).join(".envrc").exists() {
-        let _ = Command::new("direnv").arg("allow").current_dir(cwd).output();
+        let _ = Command::new("direnv")
+            .arg("allow")
+            .current_dir(cwd)
+            .output();
         return vec![
             "direnv".to_string(),
             "exec".to_string(),
@@ -62,6 +65,9 @@ pub fn run_lifecycle_hook(input: RunLifecycleHookInput) -> Result<(), String> {
     if detail.is_empty() {
         Err(format!("{} hook failed (exit {code})", input.name))
     } else {
-        Err(format!("{} hook failed (exit {code}): {detail}", input.name))
+        Err(format!(
+            "{} hook failed (exit {code}): {detail}",
+            input.name
+        ))
     }
 }

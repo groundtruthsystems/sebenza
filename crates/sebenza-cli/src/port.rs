@@ -40,16 +40,26 @@ pub fn select_instance_port(
     candidate_dirs: &[String],
     instances: &[InstanceEntry],
 ) -> ResolvedPort {
-    if let Some(m) = instances
-        .iter()
-        .find(|entry| candidate_dirs.iter().any(|dir| is_inside(dir, &entry.project_dir)))
-    {
-        return ResolvedPort { port: m.port, source: PortSource::Project };
+    if let Some(m) = instances.iter().find(|entry| {
+        candidate_dirs
+            .iter()
+            .any(|dir| is_inside(dir, &entry.project_dir))
+    }) {
+        return ResolvedPort {
+            port: m.port,
+            source: PortSource::Project,
+        };
     }
     if instances.len() == 1 {
-        return ResolvedPort { port: instances[0].port, source: PortSource::Sole };
+        return ResolvedPort {
+            port: instances[0].port,
+            source: PortSource::Sole,
+        };
     }
-    ResolvedPort { port: default_port, source: PortSource::Default }
+    ResolvedPort {
+        port: default_port,
+        source: PortSource::Default,
+    }
 }
 
 /// Read the live registry + resolve the current project's git root, then
@@ -70,7 +80,11 @@ mod tests {
     use super::*;
 
     fn entry(port: u16, dir: &str) -> InstanceEntry {
-        InstanceEntry { port, project_dir: dir.to_string(), pid: 0 }
+        InstanceEntry {
+            port,
+            project_dir: dir.to_string(),
+            pid: 0,
+        }
     }
 
     #[test]

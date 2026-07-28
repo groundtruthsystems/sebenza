@@ -1,6 +1,6 @@
 use crate::domain::config::AutoNameConfig;
 use crate::domain::policies::{generate_fallback_branch_name, is_valid_branch_name};
-use crate::services::llm_spawn::{llm_provider_label, run_short_llm_task, RunLlmResult};
+use crate::services::llm_spawn::{RunLlmResult, llm_provider_label, run_short_llm_task};
 use std::time::Duration;
 
 const MAX_BRANCH_LENGTH: usize = 40;
@@ -23,7 +23,10 @@ fn normalize_generated_branch_name(raw: &str) -> Result<String, String> {
     let mut branch = raw.trim().to_string();
     // Strip a leading ```lang fence and trailing ``` fence.
     if let Some(rest) = branch.strip_prefix("```") {
-        branch = rest.trim_start_matches(|c: char| c.is_alphanumeric() || c == '-').trim_start().to_string();
+        branch = rest
+            .trim_start_matches(|c: char| c.is_alphanumeric() || c == '-')
+            .trim_start()
+            .to_string();
     }
     if let Some(rest) = branch.strip_suffix("```") {
         branch = rest.trim_end().to_string();
@@ -39,20 +42,33 @@ fn normalize_generated_branch_name(raw: &str) -> Result<String, String> {
         }
     }
     // Strip surrounding quotes/backticks.
-    branch = branch.trim_matches(|c| c == '"' || c == '\'' || c == '`').to_string();
+    branch = branch
+        .trim_matches(|c| c == '"' || c == '\'' || c == '`')
+        .to_string();
     branch = branch.to_lowercase();
     // Replace unsafe chars, collapse `/`/`.` and `-` runs, trim dashes.
-    branch = replace_runs(&branch, |c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '/' | '-')), '-');
+    branch = replace_runs(
+        &branch,
+        |c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '_' | '/' | '-')),
+        '-',
+    );
     branch = replace_runs(&branch, |c| c == '/' || c == '.', '-');
     branch = collapse_dashes(&branch);
     branch = branch.trim_matches('-').to_string();
-    branch = branch.chars().take(MAX_BRANCH_LENGTH).collect::<String>().trim_end_matches('-').to_string();
+    branch = branch
+        .chars()
+        .take(MAX_BRANCH_LENGTH)
+        .collect::<String>()
+        .trim_end_matches('-')
+        .to_string();
 
     if branch.is_empty() {
         return Err("Auto-name model returned an empty branch name".to_string());
     }
     if !is_valid_branch_name(&branch) {
-        return Err(format!("Auto-name model returned an invalid branch name: {branch}"));
+        return Err(format!(
+            "Auto-name model returned an invalid branch name: {branch}"
+        ));
     }
     Ok(branch)
 }
@@ -114,7 +130,12 @@ pub fn generate_branch_name(config: &AutoNameConfig, task: &str) -> Result<Strin
         .unwrap_or_else(default_system_prompt);
     let cli = llm_provider_label(config);
 
-    match run_short_llm_task(config, &system_prompt, &build_prompt(prompt), AUTO_NAME_TIMEOUT) {
+    match run_short_llm_task(
+        config,
+        &system_prompt,
+        &build_prompt(prompt),
+        AUTO_NAME_TIMEOUT,
+    ) {
         RunLlmResult::Ok { stdout } => {
             let output = stdout.trim();
             if output.is_empty() {
@@ -126,10 +147,14 @@ pub fn generate_branch_name(config: &AutoNameConfig, task: &str) -> Result<Strin
             // A timeout falls back to a random name rather than failing.
             Ok(generate_fallback_branch_name())
         }
-        RunLlmResult::SpawnError => {
-            Err(format!("'{cli}' CLI not found. Install it or check your PATH."))
-        }
-        RunLlmResult::ExitNonzero { exit_code, stdout, stderr } => {
+        RunLlmResult::SpawnError => Err(format!(
+            "'{cli}' CLI not found. Install it or check your PATH."
+        )),
+        RunLlmResult::ExitNonzero {
+            exit_code,
+            stdout,
+            stderr,
+        } => {
             let detail = {
                 let s = stderr.trim();
                 if !s.is_empty() {
@@ -151,10 +176,22 @@ mod tests {
 
     #[test]
     fn strips_fences_labels_and_normalizes() {
-        assert_eq!(normalize_generated_branch_name("Add Feature X").unwrap(), "add-feature-x");
-        assert_eq!(normalize_generated_branch_name("Branch: Fix/The Bug").unwrap(), "fix-the-bug");
-        assert_eq!(normalize_generated_branch_name("```\nmy-branch\n```").unwrap(), "my-branch");
-        assert_eq!(normalize_generated_branch_name("\"quoted-name\"").unwrap(), "quoted-name");
+        assert_eq!(
+            normalize_generated_branch_name("Add Feature X").unwrap(),
+            "add-feature-x"
+        );
+        assert_eq!(
+            normalize_generated_branch_name("Branch: Fix/The Bug").unwrap(),
+            "fix-the-bug"
+        );
+        assert_eq!(
+            normalize_generated_branch_name("```\nmy-branch\n```").unwrap(),
+            "my-branch"
+        );
+        assert_eq!(
+            normalize_generated_branch_name("\"quoted-name\"").unwrap(),
+            "quoted-name"
+        );
     }
 
     #[test]

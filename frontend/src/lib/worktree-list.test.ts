@@ -119,18 +119,20 @@ describe("countAgentStatusesIn", () => {
   it("counts waiting and error rows within the given branch set", () => {
     expect(countAgentStatusesIn(rows, new Set(["b", "c"]))).toEqual({
       waiting: 1,
+      "awaiting-permission": 0,
       error: 1,
       "done-unread": 0,
     });
   });
 
   it("returns zero counts for an empty set", () => {
-    expect(countAgentStatusesIn(rows, new Set())).toEqual({ waiting: 0, error: 0, "done-unread": 0 });
+    expect(countAgentStatusesIn(rows, new Set())).toEqual({ waiting: 0, "awaiting-permission": 0, error: 0, "done-unread": 0 });
   });
 
   it("ignores working and idle rows even when in the set", () => {
     expect(countAgentStatusesIn(rows, new Set(["d", "e"]))).toEqual({
       waiting: 0,
+      "awaiting-permission": 0,
       error: 0,
       "done-unread": 0,
     });
@@ -144,6 +146,7 @@ describe("countAgentStatusesIn", () => {
     ];
     expect(countAgentStatusesIn(closedRows, new Set(["closed", "creating", "live"]))).toEqual({
       waiting: 1,
+      "awaiting-permission": 0,
       error: 0,
       "done-unread": 0,
     });
@@ -159,6 +162,7 @@ describe("countAgentStatusesIn", () => {
     const notified = new Set(["unseen-a", "unseen-b"]);
     expect(countAgentStatusesIn(doneRows, branches, notified)).toEqual({
       waiting: 0,
+      "awaiting-permission": 0,
       error: 0,
       "done-unread": 2,
     });

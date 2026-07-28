@@ -54,6 +54,17 @@ def build_parser():
     subparsers.add_parser("codex-permission-request")
     subparsers.add_parser("codex-post-tool-use")
     subparsers.add_parser("codex-stop")
+    # opencode: driven by the generated JS plugin (.opencode/plugins/sebenza.js), which
+    # pipes a small derived payload on stdin. Mapped onto the same three primitives the
+    # claude/codex subcommands use - status-changed, agent-stopped, PR detection - so the
+    # decision logic lives here in one language rather than being reimplemented in JS.
+    subparsers.add_parser("opencode-session-created")
+    subparsers.add_parser("opencode-tool-before")
+    subparsers.add_parser("opencode-tool-after")
+    subparsers.add_parser("opencode-permission-ask")
+    subparsers.add_parser("opencode-permission-asked")
+    subparsers.add_parser("opencode-permission-replied")
+    subparsers.add_parser("opencode-stop")
 
     return parser
 
@@ -79,6 +90,10 @@ def build_payload(command, args, control_env):
     if command == "runtime-error":
         payload["type"] = "runtime_error"
         payload["message"] = args.message
+        return payload
+    if command == "conversation-started":
+        # sessionId is attached by the caller, which reads it from the hook payload.
+        payload["type"] = "conversation_started"
         return payload
     raise RuntimeError(f"unsupported command: {command}")
 
@@ -202,6 +217,53 @@ def main():
     if parsed.command == "claude-post-tool-use":
         hook_payload = read_hook_payload()
         return 0 if maybe_send_pr_opened(hook_payload, control_env) else 1
+
+    if parsed.command == "opencode-session-created":
+        # Report the session id: this is the ONLY route by which Sebenza learns it, since
+        # opencode's store is SQLite behind an internal schema and `session list` has no
+        # directory column. Then mark the agent running.
+        hook_payload = read_hook_payload()
+        session_id = (hook_payload or {}).get("sessionID")
+        if session_id:
+            payload = build_payload("conversation-started", parsed, control_env)
+            payload["sessionId"] = session_id
+            send_payload(payload, control_env)
+        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="running"), control_env), control_env)
+        return 0
+
+    if parsed.command == "opencode-tool-before":
+        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="running"), control_env), control_env)
+        return 0
+
+    if parsed.command == "opencode-permission-asked":
+        # Blocked on a human decision in opencode's own TUI. A DISTINCT lifecycle rather
+        # than plain idle, so the dashboard can say WHY this worktree wants attention:
+        # approve something already proposed, versus send the next prompt. With many
+        # parallel worktrees that difference is the whole value of the signal.
+        #
+        # Sebenza cannot answer the prompt - opencode's permission.ask hook does not fire
+        # (verified on 1.18.9) - so this is observational only.
+        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="awaiting_permission"), control_env), control_env)
+        return 0
+
+    if parsed.command == "opencode-permission-replied":
+        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="running"), control_env), control_env)
+        return 0
+
+    if parsed.command == "opencode-permission-ask":
+        # opencode is waiting on a permission decision, so it is idle from Sebenza's point
+        # of view. Sebenza cannot yet answer it - see the phase-3 spike.
+        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="idle"), control_env), control_env)
+        return 0
+
+    if parsed.command == "opencode-tool-after":
+        hook_payload = read_hook_payload()
+        maybe_send_pr_opened(hook_payload, control_env)
+        return 0
+
+    if parsed.command == "opencode-stop":
+        send_payload(build_payload("agent-stopped", parsed, control_env), control_env)
+        return 0
 
     if parsed.command == "codex-stop":
         send_payload(build_payload("agent-stopped", parsed, control_env), control_env)

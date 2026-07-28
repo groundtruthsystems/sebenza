@@ -3,8 +3,8 @@
 **Manage Git worktrees with AI coding agents — from your browser.**
 
 Sebenza is a self-hosted dashboard for running many coding tasks in parallel. Each
-task lives in its own **Git worktree** with a dedicated AI agent (Claude, Codex, or
-your own CLI) running in a **tmux-backed terminal** you can drive from the browser.
+task lives in its own **Git worktree** with a dedicated AI agent (Claude, Codex,
+OpenCode, or your own CLI) running in a **tmux-backed terminal** you can drive from the browser.
 It watches your pull requests and CI, visualises task progress, and lets you spin
 worktrees up, merge them, and tear them down without leaving the dashboard.
 
@@ -18,7 +18,7 @@ URL prefixes — and everything the dashboard does is also available from the
 
 - **Worktree lifecycle** — create, open, close, label, archive, merge, and remove
   Git worktrees, each on its own branch, from the UI or CLI.
-- **AI agents in the browser** — launch `claude`, `codex`, or a custom agent in a
+- **AI agents in the browser** — launch `claude`, `codex`, `opencode`, or a custom agent in a
   worktree; interact through an embedded terminal or the in-app **web chat**.
 - **Tracks board** — a per-worktree Kanban view of a project's Sebenza tracks
   (`.ai/sebenza/tracks.json`, written by the `sebenza` Claude Code plugin):
@@ -60,8 +60,9 @@ session survives even if you close the tab or the CLI process.
 ### 1. Prerequisites
 
 - **git** and **tmux** — required for worktrees and terminal sessions.
-- Optional: **`gh`** (PR/CI monitoring), **`claude`** / **`codex`** CLIs (built-in
-  agents), **`docker`** (sandboxed worktree runtime).
+- Optional: **`gh`** (PR/CI monitoring), **`docker`** (sandboxed worktree runtime), and
+  the built-in agent CLIs — **`claude`**, **`codex`**, **`opencode`** (1.18.7+).
+  `sebenza-cli init` lists which it found and at what version.
 
 Building from source additionally needs **Rust 1.85+** (2024 edition) and
 **Node.js 20+** with npm — see [Build from source](#build-from-source).
@@ -105,7 +106,7 @@ cd ~/code/my-project
 sebenza-cli init          # dependency checks + scaffolds .ai/sebenza.yaml
 ```
 
-`init` writes a starter config (and, if `claude`/`codex` is available, adapts it to
+`init` writes a starter config (and, if a built-in agent CLI is available, adapts it to
 your project). You can also copy and edit [`.ai/sebenza.example.yaml`](.ai/sebenza.example.yaml)
 by hand.
 
@@ -206,7 +207,24 @@ Without `--port`, CLI commands target the live server for the current project
 | Machine-wide launchers | `~/.ai/sebenza.yaml` |
 | Server state (project registry, instances) | `~/.ai/sebenza/` |
 | Control token | `~/.config/sebenza/control-token` |
-| Environment | `PORT` (server port, default `5111`); `SEBENZA_FRONTEND_DIST` (optional — serve the SPA from disk instead of the embedded bundle) |
+| Environment | `PORT` (server port, default `5111`); `SEBENZA_HOST` (bind host, default `127.0.0.1`); `SEBENZA_FRONTEND_DIST` (optional — serve the SPA from disk instead of the embedded bundle) |
+
+### Network exposure
+
+The server binds **`127.0.0.1` by default**, so the dashboard is reachable only from the machine
+running it. Most routes are unauthenticated — worktree creation, the terminal PTY, and agent control
+included — so exposing the port to a network gives anyone who can reach it the same power you have.
+
+To serve other machines deliberately, opt in:
+
+```bash
+sebenza-server serve --host 0.0.0.0        # or: SEBENZA_HOST=0.0.0.0 sebenza-cli serve
+```
+
+The server logs a warning whenever it binds a non-loopback address.
+
+> **Changed behaviour:** earlier versions always bound `0.0.0.0`. If you reach the dashboard from
+> another machine, set `SEBENZA_HOST=0.0.0.0` (or pass `--host`) after upgrading.
 
 ## Development
 

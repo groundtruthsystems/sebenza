@@ -1,0 +1,254 @@
+{
+  "info": {
+    "id": "ses_057393240ffevhLwLy3w6QY4Td",
+    "slug": "quiet-otter",
+    "projectID": "f6521a77d0a7d6e21a9e806e302332cde3b6978a",
+    "directory": "/repo/worktrees/example-branch",
+    "path": "",
+    "title": "Shell command execution",
+    "agent": "build",
+    "model": {
+      "id": "gemini-3.5-flash-lite",
+      "providerID": "google",
+      "variant": "default"
+    },
+    "version": "1.18.7",
+    "summary": {
+      "additions": 0,
+      "deletions": 0,
+      "files": 0
+    },
+    "cost": 0.0060958,
+    "tokens": {
+      "input": 18361,
+      "output": 24,
+      "reasoning": 211,
+      "cache": {
+        "read": 0,
+        "write": 0
+      }
+    },
+    "permission": [
+      {
+        "permission": "question",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_enter",
+        "pattern": "*",
+        "action": "deny"
+      },
+      {
+        "permission": "plan_exit",
+        "pattern": "*",
+        "action": "deny"
+      }
+    ],
+    "time": {
+      "created": 1785243028927,
+      "updated": 1785243031432
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1785243029185
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "google",
+          "modelID": "gemini-3.5-flash-lite"
+        },
+        "summary": {
+          "diffs": []
+        },
+        "id": "msg_fa8c6cec1001NOQ9OZcVaEp5fX",
+        "sessionID": "ses_057393240ffevhLwLy3w6QY4Td"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "\"Run the shell command: echo hello-from-tool\"",
+          "id": "prt_fa8c6cec6001Hpt4ZoWQVbNEN5",
+          "sessionID": "ses_057393240ffevhLwLy3w6QY4Td",
+          "messageID": "msg_fa8c6cec1001NOQ9OZcVaEp5fX"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_fa8c6cec1001NOQ9OZcVaEp5fX",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/repo/worktrees/example-branch",
+          "root": "/repo/worktrees/example-branch"
+        },
+        "cost": 0.0032813,
+        "tokens": {
+          "total": 9251,
+          "input": 9021,
+          "output": 19,
+          "reasoning": 211,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "gemini-3.5-flash-lite",
+        "providerID": "google",
+        "time": {
+          "created": 1785243029204,
+          "completed": 1785243030847
+        },
+        "finish": "tool-calls",
+        "id": "msg_fa8c6ced4001uDVVMOHjhIN9v3",
+        "sessionID": "ses_057393240ffevhLwLy3w6QY4Td"
+      },
+      "parts": [
+        {
+          "snapshot": "18bac5f453774cf48a7bb0a6921fee8437176efd",
+          "type": "step-start",
+          "id": "prt_fa8c6d4cb001CV2K1Ym2mz076A",
+          "sessionID": "ses_057393240ffevhLwLy3w6QY4Td",
+          "messageID": "msg_fa8c6ced4001uDVVMOHjhIN9v3"
+        },
+        {
+          "type": "reasoning",
+          "text": "**Analyzing the Task**\n\nI'm currently focused on dissecting the user's intent to execute a shell command. I'm reviewing the core principles, specifically the need for conciseness and security. Before I run anything, I need to provide a very brief explanation, and the system should not be modified.\n\n\n",
+          "time": {
+            "start": 1785243030734,
+            "end": 1785243030747
+          },
+          "id": "prt_fa8c6d4ce0012TgXSDs9ImxxME",
+          "sessionID": "ses_057393240ffevhLwLy3w6QY4Td",
+          "messageID": "msg_fa8c6ced4001uDVVMOHjhIN9v3"
+        },
+        {
+          "type": "tool",
+          "tool": "bash",
+          "callID": "aa59Sk6HjNg0Uekq",
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "echo hello-from-tool"
+            },
+            "output": "hello-from-tool\n",
+            "metadata": {
+              "output": "hello-from-tool\n",
+              "exit": 0,
+              "truncated": false
+            },
+            "title": "echo hello-from-tool",
+            "time": {
+              "start": 1785243030806,
+              "end": 1785243030811
+            }
+          },
+          "metadata": {
+            "google": {
+              "thoughtSignature": "EqsICqgIARFNMg9xPPzkbl6Av1QTs4rDO2/zTbIJ/vbI15lmtJ2iYGr3xhANBXmG7yKxXSAJ12KxunyOviAiY+kB4lcDcashYK+5T0WjTfWTnQYwG0gyKWUKoXYUJsq9M3y9ZG7IcDnahirLngQZZZzUk6of2Y+ziZvFB/Jozm+7jumjgdwYFI11qS9+wlIjd/O4T3aHEEp1uN7l35I/A2dZa3E+2TA6GKFa4Df3xFENjTWv94w7PZ13Bbnp21XI8j520JQXHAv+osfp208t8Ytqp9orHJCuQ36jqNeXhPL98BT0uDB2INNWKhb/ru1poR/VtntECNCHNbAvep6iP5hNR+yIldB6dblB/mzNY3MHi0rx+ZRyPmwJjL9Dms46CMpO0/dGabFDkKd8SqzeZaNutjGxc3Ssaj5CD2/8hgCoFsj/n/Rn3G1HedYmF1ian+PGbp3r7b/HeJEAobiS2xiQeuQzhUfQ1mkvKFGTQNHpy9X/TJaSuzaXCczYLWWJvW5RuQcewBXCFdIuYpAkA0pKj2EiC29+2YBOfvl2xUrfWPYT0cs3G6FHoWRYc6MRyPKA8rPSsr5XIFJGyQ9RmD86YwWNSwSBKhPn6LiFVn3YAdSNg/IJ5o3gj/zTT5hqD+mGHsv/TSP7jaz1NsKsmvDdE9I8wifs0TvnRSDVbRg/HN0vnZ7op5mMXKUx3PJ0ArBZRwPySHsxh1u6eFz/tb74dYnUoQGsrd/BmdIBPW92IDMDT07GIxZXKGwCBnWomBqo+nRV0YGP/STDMiJyoCMCgHfCSdh4lQpFBeA3YRsFB5IjSh3bTALLJcaCO4i55Dr36FtgFdW46lw2SaZKlxhHNfMH4vA9S5Jo9VrKfOrprEWaN5srRHWv552sgO0whMPtAe313xKg8KvixKUI3Yn1/MzvzP1El9pDYdVyntpN0DCNIPub5YrpXNLR1Zm4+Atg+Y1vXYUo8sLptZ7yBVCBNLDkSzROcGAkCavWCyY834XdI11xsWJsycaVlHiokPu3LE7bJuLXMdmBM3FO5HUuY1uc9L1bxcFm4cpJVsSYgHwJ2YWahBUxyiG2y2NyoMikYZ2RualF9lUNLB2N5L8dYxVlYp7X26FCyTXumBrXVtHG99qPaK/IIoc51IjZ4taR1hqmyYhTqwBbTW7A624IKJELf2gH9P4C7gOLYila7XUWt2GQg4q1cV/7fXTGFj7DB3KF3cTgX67bklb/U5Heq8kLRxwYUgNujnEK/dr90g7QeVocGYMVVqUzXbayGpGz+n4E8TX7TGd+cqPT+k5HwtyijxvUhPM92fWlDAV6sWjQdq6EwvNU0WdK+Q4Gr/ABA9owH5QrUc1pkjTgsa66P/z2XLWODY3T72CmE3kyPEki20cQSYAOIZRLBp4l1L+aoVa6bklpnCqvyyI="
+            }
+          },
+          "id": "prt_fa8c6d4d2001QkDADtVHPLRuhM",
+          "sessionID": "ses_057393240ffevhLwLy3w6QY4Td",
+          "messageID": "msg_fa8c6ced4001uDVVMOHjhIN9v3"
+        },
+        {
+          "reason": "tool-calls",
+          "snapshot": "18bac5f453774cf48a7bb0a6921fee8437176efd",
+          "type": "step-finish",
+          "tokens": {
+            "total": 9251,
+            "input": 9021,
+            "output": 19,
+            "reasoning": 211,
+            "cache": {
+              "write": 0,
+              "read": 0
+            }
+          },
+          "cost": 0.0032813,
+          "id": "prt_fa8c6d52e001CggqgYXzpf4BZo",
+          "sessionID": "ses_057393240ffevhLwLy3w6QY4Td",
+          "messageID": "msg_fa8c6ced4001uDVVMOHjhIN9v3"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_fa8c6cec1001NOQ9OZcVaEp5fX",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/repo/worktrees/example-branch",
+          "root": "/repo/worktrees/example-branch"
+        },
+        "cost": 0.0028145,
+        "tokens": {
+          "total": 9345,
+          "input": 9340,
+          "output": 5,
+          "reasoning": 0,
+          "cache": {
+            "write": 0,
+            "read": 0
+          }
+        },
+        "modelID": "gemini-3.5-flash-lite",
+        "providerID": "google",
+        "time": {
+          "created": 1785243030849,
+          "completed": 1785243031426
+        },
+        "finish": "stop",
+        "id": "msg_fa8c6d541001P5xCqQTFad4ZY5",
+        "sessionID": "ses_057393240ffevhLwLy3w6QY4Td"
+      },
+      "parts": [
+        {
+          "snapshot": "18bac5f453774cf48a7bb0a6921fee8437176efd",
+          "type": "step-start",
+          "id": "prt_fa8c6d751001hA4PLnandn1hGh",
+          "sessionID": "ses_057393240ffevhLwLy3w6QY4Td",
+          "messageID": "msg_fa8c6d541001P5xCqQTFad4ZY5"
+        },
+        {
+          "type": "text",
+          "text": "hello-from-tool",
+          "time": {
+            "start": 1785243031380,
+            "end": 1785243031392
+          },
+          "id": "prt_fa8c6d754001jVfBeOqcXV45yy",
+          "sessionID": "ses_057393240ffevhLwLy3w6QY4Td",
+          "messageID": "msg_fa8c6d541001P5xCqQTFad4ZY5"
+        },
+        {
+          "reason": "stop",
+          "snapshot": "18bac5f453774cf48a7bb0a6921fee8437176efd",
+          "type": "step-finish",
+          "tokens": {
+            "total": 9345,
+            "input": 9340,
+            "output": 5,
+            "reasoning": 0,
+            "cache": {
+              "write": 0,
+              "read": 0
+            }
+          },
+          "cost": 0.0028145,
+          "id": "prt_fa8c6d77300135GTFDd35FbKH6",
+          "sessionID": "ses_057393240ffevhLwLy3w6QY4Td",
+          "messageID": "msg_fa8c6d541001P5xCqQTFad4ZY5"
+        }
+      ]
+    }
+  ]
+}

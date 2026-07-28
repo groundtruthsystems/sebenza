@@ -8,9 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -53,7 +53,9 @@ fn read_value(args: &[String], index: usize, flag: &str) -> Result<(String, usiz
     if let Some(rest) = arg.strip_prefix(&prefix) {
         return Ok((rest.to_string(), index));
     }
-    let v = args.get(index + 1).ok_or_else(|| anyhow!("{flag} requires a value"))?;
+    let v = args
+        .get(index + 1)
+        .ok_or_else(|| anyhow!("{flag} requires a value"))?;
     Ok((v.clone(), index + 1))
 }
 
@@ -139,7 +141,13 @@ fn parse(args: &[String]) -> Result<Option<ParsedOneshot>> {
         body.insert("envOverrides".into(), Value::Object(env));
     }
 
-    Ok(Some(ParsedOneshot { branch, prompt, resume, body, keep_open }))
+    Ok(Some(ParsedOneshot {
+        branch,
+        prompt,
+        resume,
+        body,
+        keep_open,
+    }))
 }
 
 // ── Shared streaming/poll state ─────────────────────────────────────────────
@@ -265,7 +273,11 @@ fn handle_ws_event(shared: &Shared, ev: &Value) {
                 return;
             }
             p.last_stream_revision = revision;
-            let item_id = ev.get("itemId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let item_id = ev
+                .get("itemId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let delta = ev.get("delta").and_then(|v| v.as_str()).unwrap_or("");
             if p.streaming_item_id.as_deref() != Some(item_id.as_str()) {
                 flush(&mut p);
@@ -302,7 +314,10 @@ fn handle_ws_event(shared: &Shared, ev: &Value) {
         }
         "error" => {
             flush(&mut p);
-            let m = ev.get("message").and_then(|v| v.as_str()).unwrap_or("stream error");
+            let m = ev
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("stream error");
             drop(p);
             err("error", m);
         }
@@ -347,10 +362,16 @@ async fn stream_conversation(shared: Arc<Shared>, port: u16, prefix_path: String
         }
         failures += 1;
         if failures == 3 || failures == 15 {
-            err("warn", &format!("Sebenza server unreachable, retrying ({failures}/{MAX_RECONNECTS})"));
+            err(
+                "warn",
+                &format!("Sebenza server unreachable, retrying ({failures}/{MAX_RECONNECTS})"),
+            );
         }
         if failures >= MAX_RECONNECTS {
-            err("fatal", &format!("Sebenza server unreachable after {failures} reconnect attempts"));
+            err(
+                "fatal",
+                &format!("Sebenza server unreachable after {failures} reconnect attempts"),
+            );
             shared.finalize(1);
             return;
         }
@@ -452,7 +473,11 @@ async fn poll_project_state(shared: Arc<Shared>) {
                 if poll.idle_since.is_none() {
                     poll.idle_since = Some(Instant::now());
                 }
-                is_terminal || poll.idle_since.map(|t| t.elapsed() >= IDLE_GRACE).unwrap_or(false)
+                is_terminal
+                    || poll
+                        .idle_since
+                        .map(|t| t.elapsed() >= IDLE_GRACE)
+                        .unwrap_or(false)
             };
             if stable {
                 if let Err(e) = shared.http.sync_prs(&shared.base, &shared.branch).await {
@@ -466,10 +491,16 @@ async fn poll_project_state(shared: Arc<Shared>) {
                 let has_pr = { !shared.poll.lock().unwrap().seen_pr_urls.is_empty() };
                 shared.flush_line();
                 if has_pr {
-                    out("event", &format!("agent {} after opening PR — exiting", wt.status));
+                    out(
+                        "event",
+                        &format!("agent {} after opening PR — exiting", wt.status),
+                    );
                     shared.finalize(0);
                 } else {
-                    err("error", &format!("agent {} without opening a PR", wt.status));
+                    err(
+                        "error",
+                        &format!("agent {} without opening a PR", wt.status),
+                    );
                     shared.finalize(1);
                 }
                 return;
@@ -561,6 +592,12 @@ pub async fn run(args: &[String], port: u16, project_dir: &str) -> i32 {
 
     tokio::spawn(stream_conversation(shared.clone(), port, prefix_path));
     tokio::spawn(poll_project_state(shared.clone()));
+    // Claude-only history polling. This is NOT a declared capability: it compensates for
+    // gaps in Claude's live stream, and whether another agent needs it can only be
+    // established by watching that agent's stream in practice. The CLI also has no
+    // capabilities endpoint today (only /api/agents/.../history), so reading a flag here
+    // would mean new API plumbing. Revisit when opencode streaming lands: if it needs the
+    // same compensation, this becomes a capability; if not, it stays agent-specific.
     if agent_name.as_deref() == Some("claude") {
         tokio::spawn(poll_history(shared.clone()));
     }
@@ -573,10 +610,9 @@ pub async fn run(args: &[String], port: u16, project_dir: &str) -> i32 {
             let sigterm = async {
                 #[cfg(unix)]
                 {
-                    let mut s = tokio::signal::unix::signal(
-                        tokio::signal::unix::SignalKind::terminate(),
-                    )
-                    .expect("SIGTERM handler");
+                    let mut s =
+                        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                            .expect("SIGTERM handler");
                     s.recv().await;
                 }
                 #[cfg(not(unix))]
@@ -586,8 +622,14 @@ pub async fn run(args: &[String], port: u16, project_dir: &str) -> i32 {
                 _ = tokio::signal::ctrl_c() => {}
                 _ = sigterm => {}
             }
-            println!("\n{} [event] interrupted — worktree {branch} keeps running", ts());
-            println!("{} [event] resume with: sebenza-cli oneshot --resume {branch}", ts());
+            println!(
+                "\n{} [event] interrupted — worktree {branch} keeps running",
+                ts()
+            );
+            println!(
+                "{} [event] resume with: sebenza-cli oneshot --resume {branch}",
+                ts()
+            );
             shared.finalize(130);
         });
     }
@@ -638,7 +680,9 @@ async fn prepare_worktree(
         let mut body = parsed.body.clone();
         body.insert("source".into(), json!("oneshot"));
         body.insert("oneshot".into(), oneshot_cfg.clone());
-        let branch = http.create_worktree_primary(base, Value::Object(body)).await?;
+        let branch = http
+            .create_worktree_primary(base, Value::Object(body))
+            .await?;
         out("event", &format!("created {branch}"));
         Ok(branch)
     }
@@ -658,6 +702,9 @@ async fn ensure_ready(http: &Http, base: &str, branch: &str) -> Option<Option<St
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    err("error", &format!("timed out waiting for {branch} session to start"));
+    err(
+        "error",
+        &format!("timed out waiting for {branch} session to start"),
+    );
     None
 }

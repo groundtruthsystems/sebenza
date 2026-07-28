@@ -4,9 +4,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ── Wire types (camelCase per the server's serde config) ────────────────────
 
@@ -300,7 +300,10 @@ impl Http {
 
     pub async fn add_project(&self, path: &str) -> Result<AddProjectResponse> {
         let v = self
-            .post(&format!("{}/api/projects", self.hub), json!({ "path": path }))
+            .post(
+                &format!("{}/api/projects", self.hub),
+                json!({ "path": path }),
+            )
             .await?;
         Ok(serde_json::from_value(v)?)
     }
@@ -311,7 +314,8 @@ impl Http {
     }
 
     pub async fn remove_project(&self, prefix: &str) -> Result<()> {
-        self.delete(&format!("{}/api/projects/{prefix}", self.hub)).await?;
+        self.delete(&format!("{}/api/projects/{prefix}", self.hub))
+            .await?;
         Ok(())
     }
 
@@ -321,7 +325,10 @@ impl Http {
         paths: Vec<String>,
     ) -> Result<(Vec<ProjectSummary>, Vec<(String, String)>)> {
         let v = self
-            .post(&format!("{}/api/projects/migrate", self.hub), json!({ "paths": paths }))
+            .post(
+                &format!("{}/api/projects/migrate", self.hub),
+                json!({ "paths": paths }),
+            )
             .await?;
         let migrated = v
             .get("migrated")
@@ -334,7 +341,11 @@ impl Http {
                 arr.iter()
                     .filter_map(|e| {
                         let path = e.get("path")?.as_str()?.to_string();
-                        let error = e.get("error").and_then(|x| x.as_str()).unwrap_or("").to_string();
+                        let error = e
+                            .get("error")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         Some((path, error))
                     })
                     .collect()
@@ -391,7 +402,8 @@ impl Http {
     }
 
     pub async fn open_worktree_body(&self, base: &str, name: &str, body: Value) -> Result<()> {
-        self.post(&format!("{base}/api/worktrees/{name}/open"), body).await?;
+        self.post(&format!("{base}/api/worktrees/{name}/open"), body)
+            .await?;
         Ok(())
     }
 
@@ -411,24 +423,33 @@ impl Http {
     }
 
     pub async fn sync_prs(&self, base: &str, name: &str) -> Result<()> {
-        self.post(&format!("{base}/api/worktrees/{name}/sync-prs"), json!({})).await?;
+        self.post(&format!("{base}/api/worktrees/{name}/sync-prs"), json!({}))
+            .await?;
         Ok(())
     }
 
     /// Conversation history messages for a worktree agent.
     pub async fn history(&self, base: &str, name: &str) -> Result<Vec<AgentsUiMessage>> {
-        let v = self.get(&format!("{base}/api/agents/worktrees/{name}/history")).await?;
-        Ok(serde_json::from_value::<ConversationHistoryResponse>(v)?.conversation.messages)
+        let v = self
+            .get(&format!("{base}/api/agents/worktrees/{name}/history"))
+            .await?;
+        Ok(serde_json::from_value::<ConversationHistoryResponse>(v)?
+            .conversation
+            .messages)
     }
 
     pub async fn close_worktree(&self, base: &str, name: &str) -> Result<()> {
-        self.post(&format!("{base}/api/worktrees/{name}/close"), json!({})).await?;
+        self.post(&format!("{base}/api/worktrees/{name}/close"), json!({}))
+            .await?;
         Ok(())
     }
 
     pub async fn refresh_agent_terminal(&self, base: &str, name: &str) -> Result<()> {
-        self.post(&format!("{base}/api/worktrees/{name}/agent-terminal/refresh"), json!({}))
-            .await?;
+        self.post(
+            &format!("{base}/api/worktrees/{name}/agent-terminal/refresh"),
+            json!({}),
+        )
+        .await?;
         Ok(())
     }
 
@@ -442,7 +463,12 @@ impl Http {
     }
 
     /// Returns the resulting label (None when cleared).
-    pub async fn set_label(&self, base: &str, name: &str, label: Option<&str>) -> Result<Option<String>> {
+    pub async fn set_label(
+        &self,
+        base: &str,
+        name: &str,
+        label: Option<&str>,
+    ) -> Result<Option<String>> {
         let v = self
             .put(
                 &format!("{base}/api/worktrees/{name}/label"),
@@ -458,22 +484,32 @@ impl Http {
     }
 
     pub async fn merge_worktree(&self, base: &str, name: &str) -> Result<()> {
-        self.post(&format!("{base}/api/worktrees/{name}/merge"), json!({})).await?;
+        self.post(&format!("{base}/api/worktrees/{name}/merge"), json!({}))
+            .await?;
         Ok(())
     }
 
-    pub async fn send_prompt(&self, base: &str, name: &str, text: &str, preamble: Option<&str>) -> Result<()> {
+    pub async fn send_prompt(
+        &self,
+        base: &str,
+        name: &str,
+        text: &str,
+        preamble: Option<&str>,
+    ) -> Result<()> {
         let mut body = json!({ "text": text });
         if let Some(pre) = preamble {
             body["preamble"] = json!(pre);
         }
-        self.post(&format!("{base}/api/worktrees/{name}/send"), body).await?;
+        self.post(&format!("{base}/api/worktrees/{name}/send"), body)
+            .await?;
         Ok(())
     }
 
     /// Returns the created tab (id + label).
     pub async fn create_tab(&self, base: &str, name: &str) -> Result<WorktreeTab> {
-        let v = self.post(&format!("{base}/api/worktrees/{name}/tabs"), json!({})).await?;
+        let v = self
+            .post(&format!("{base}/api/worktrees/{name}/tabs"), json!({}))
+            .await?;
         Ok(serde_json::from_value::<CreatedTab>(v)?.tab)
     }
 
@@ -494,13 +530,17 @@ impl Http {
     }
 
     pub async fn select_tab(&self, base: &str, name: &str, tab_id: &str) -> Result<()> {
-        self.post(&format!("{base}/api/worktrees/{name}/tabs/{tab_id}/select"), json!({}))
-            .await?;
+        self.post(
+            &format!("{base}/api/worktrees/{name}/tabs/{tab_id}/select"),
+            json!({}),
+        )
+        .await?;
         Ok(())
     }
 
     pub async fn delete_tab(&self, base: &str, name: &str, tab_id: &str) -> Result<()> {
-        self.delete(&format!("{base}/api/worktrees/{name}/tabs/{tab_id}")).await?;
+        self.delete(&format!("{base}/api/worktrees/{name}/tabs/{tab_id}"))
+            .await?;
         Ok(())
     }
 }
