@@ -123,6 +123,54 @@ Data classification stands unmitigated — the same position as claude and codex
 Useful side effect: `state.metadata.exit` gives a real **exit code**, so opencode tool results can populate
 `AgentsUiMessage.exit_code` directly, with no Codex-style string scraping. See FR-3.5a for the full map.
 
+### FR-0.4 — the unconditional dispatch *(phase-0-task-4, resolved 2026-07-28 — it was a real bug, now fixed)*
+
+**Confirmed: Codex interrupt and live streaming were broken.** Traced by reading the code:
+
+- `agent_stream` keys in-flight runs by `conversation_id` (a `HashMap<String, Run>`).
+- `prepare_agent_send` **does** dispatch per agent (server.rs 1309/1314), so a Codex run is registered
+  under a Codex-derived id (`<session-uuid>` or `codex-pending:<path>`).
+- But `agents_interrupt` (1382) and the agents-streaming WebSocket (~1522) called
+  `claude_conversation_service` **unconditionally**. For a Codex worktree that yields
+  `claude-pending:<path>`, which never matches the registered key.
+
+So `interrupt()` always returned `None` → `409 "No active Claude response to interrupt"`, and the
+streaming socket resolved the wrong conversation. `AgentCapabilities.interrupt = true` for codex was
+inaccurate.
+
+**Fix applied:** a new `common::services::conversation_router` centralises the per-agent dispatch
+(`read_worktree_conversation`, `resolve_conversation_id`, `conversation_capable_agent_ids`), with unit
+tests asserting a Codex worktree routes to `provider: "codexAppServer"` and not through the Claude
+adapter. Both call sites now use it, and the 409 text is derived from the capable-agent list rather than
+naming Claude. This is also the seam FR-1.5 converts to a `BuiltinAgentId` enum match in Phase 1 —
+adding an agent then becomes a compile error rather than a silent fallthrough.
+
+### Incidental finding — cross-worktree conversation leak in `claude_cli::latest_session` *(NOT fixed)*
+
+Surfaced while writing the tests above: a test asserting a claude worktree at `/wt` (which has no
+sessions) returned the conversation id `991dce80-…` — an **unrelated ambient session**. Cause:
+`claude_cli::latest_session` (`claude_cli.rs` ~460-467) falls back to *scanning all project dirs for the
+newest `.jsonl`* when the requested cwd has none.
+
+**Consequence:** a freshly created claude worktree can display **another worktree's or another project's
+transcript**. Same-user, single-tenant, so not a confidentiality breach — but it is a correctness bug and
+actively misleading.
+
+**Deliberately not fixed here.** It is outside this task's scope, and the fallback may be intentional
+("continue the last session" convenience). Changing it is a behaviour change deserving its own decision.
+Two consequences for this track: the new opencode adapter **must not** copy the pattern (FR-3.6's
+record-what-we-started design already avoids it), and tests must route on `provider`, not on ids, since
+claude ids are not deterministic in a test environment.
+
+### Toolchain note — `cargo fmt --check` cannot gate this repo as-is
+
+`workflow.md`'s quality gate asks for `cargo fmt --check` clean. Measured on the unmodified tree:
+**406 pre-existing formatting diffs** under the installed rustfmt (largely import-ordering and style-edition
+differences). Running `cargo fmt --all` would rewrite hundreds of untouched files and swamp every diff in
+this track. Treat the gate as *"no new warnings in touched files"* until the repo is reformatted
+deliberately in its own chore. Clippy is in the same position: 31 pre-existing warnings, none in the code
+this task added.
+
 ---
 
 ## Functional Requirements

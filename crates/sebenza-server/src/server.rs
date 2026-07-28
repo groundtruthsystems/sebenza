@@ -1435,11 +1435,24 @@ async fn agents_interrupt(
                 .worktrees
                 .into_iter()
                 .find(|w| w.branch == branch)
-                .map(|w| crate::services::claude_conversation_service::read_worktree_conversation(&w).conversation.conversation_id)
+                // Route through the worktree's OWN agent adapter. Calling the Claude
+                // service unconditionally resolved `claude-pending:<path>` for a Codex
+                // worktree, which never matches the id the run was registered under, so
+                // interrupt always 409'd for Codex.
+                .map(|w| common::services::conversation_router::resolve_conversation_id(&w))
         })
         .await
         .map_err(|_| ApiError::new(500, "task panicked".to_string()))?
         .ok_or_else(|| ApiError::new(404, format!("Worktree not found: {name}")))?
+        .ok_or_else(|| {
+            ApiError::new(
+                409,
+                format!(
+                    "Interrupt is only available for these agents: {}",
+                    common::services::conversation_router::conversation_capable_agent_ids().join(", ")
+                ),
+            )
+        })?
     };
 
     match state.agent_stream.interrupt(&conversation_id) {
@@ -1449,7 +1462,7 @@ async fn agents_interrupt(
             "interrupted": true,
             "streaming": true,
         }))),
-        None => Err(ApiError::new(409, "No active Claude response to interrupt".to_string())),
+        None => Err(ApiError::new(409, "No active agent response to interrupt".to_string())),
     }
 }
 
@@ -1574,9 +1587,11 @@ async fn agents_stream_socket(
         let branch = branch.clone();
         tokio::task::spawn_blocking(move || {
             let snapshot = reconcile_and_snapshot(&app);
-            snapshot.worktrees.into_iter().find(|w| w.branch == branch).map(|w| {
-                let conv = crate::services::claude_conversation_service::read_worktree_conversation(&w).conversation;
-                (conv.conversation_id, conv.messages.len() as u64)
+            snapshot.worktrees.into_iter().find(|w| w.branch == branch).and_then(|w| {
+                // Route through the worktree's own agent adapter — see `agents_interrupt`.
+                let conv = common::services::conversation_router::read_worktree_conversation(&w)?
+                    .conversation;
+                Some((conv.conversation_id, conv.messages.len() as u64))
             })
         })
         .await
