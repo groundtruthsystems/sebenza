@@ -17,10 +17,53 @@ pub struct AgentCapabilities {
     pub fork: bool,
 }
 
+/// A built-in agent, i.e. one Sebenza knows how to launch, hook and read history for.
+///
+/// An enum rather than a `String` so every dispatch site is exhaustiveness-checked:
+/// adding a variant turns each unhandled site into a compile error instead of a silent
+/// fallthrough. That is the defect class that made Codex interrupt inoperable — see
+/// `conversation_router`.
+///
+/// Third-party extensibility is *not* this type's job; that is
+/// `AgentImplementation::Custom`, which stays data-driven via command templates.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BuiltinAgentId {
+    Claude,
+    Codex,
+}
+
+impl BuiltinAgentId {
+    /// Every built-in agent, in the order they are offered.
+    pub const ALL: &'static [BuiltinAgentId] = &[BuiltinAgentId::Claude, BuiltinAgentId::Codex];
+
+    /// The stable wire/config id. Part of the ts-rest contract and of user config
+    /// (`workspace.defaultAgent`), so these strings must not change.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BuiltinAgentId::Claude => "claude",
+            BuiltinAgentId::Codex => "codex",
+        }
+    }
+
+    /// Human-facing label shown in the agent picker.
+    pub fn label(self) -> &'static str {
+        match self {
+            BuiltinAgentId::Claude => "Claude",
+            BuiltinAgentId::Codex => "Codex",
+        }
+    }
+
+    /// Parse a wire/config id. Case-sensitive; `None` for anything that is not a
+    /// built-in (custom agent ids included).
+    pub fn from_wire(id: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|a| a.as_str() == id)
+    }
+}
+
 #[derive(Clone)]
 pub enum AgentImplementation {
-    /// Built-in agent binary: `"claude"` or `"codex"`.
-    Builtin(String),
+    /// A built-in agent Sebenza launches directly.
+    Builtin(BuiltinAgentId),
     Custom(CustomAgentConfig),
 }
 
@@ -34,10 +77,10 @@ pub struct AgentDefinition {
     pub implementation: AgentImplementation,
 }
 
-fn builtin(id: &str, label: &str) -> AgentDefinition {
+fn builtin(id: BuiltinAgentId) -> AgentDefinition {
     AgentDefinition {
-        id: id.to_string(),
-        label: label.to_string(),
+        id: id.as_str().to_string(),
+        label: id.label().to_string(),
         kind: "builtin",
         capabilities: AgentCapabilities {
             terminal: true,
@@ -47,12 +90,12 @@ fn builtin(id: &str, label: &str) -> AgentDefinition {
             resume: true,
             fork: true,
         },
-        implementation: AgentImplementation::Builtin(id.to_string()),
+        implementation: AgentImplementation::Builtin(id),
     }
 }
 
 fn builtin_definitions() -> Vec<AgentDefinition> {
-    vec![builtin("claude", "Claude"), builtin("codex", "Codex")]
+    BuiltinAgentId::ALL.iter().copied().map(builtin).collect()
 }
 
 fn build_custom_definition(id: &str, config: &CustomAgentConfig) -> AgentDefinition {
@@ -75,7 +118,8 @@ fn build_custom_definition(id: &str, config: &CustomAgentConfig) -> AgentDefinit
 /// Built-in agents followed by custom agents (sorted by label, then id),
 /// excluding any custom entry that shadows a built-in id.
 pub fn list_agent_definitions(config: &ProjectConfig) -> Vec<AgentDefinition> {
-    let builtin_ids: std::collections::HashSet<&str> = ["claude", "codex"].into_iter().collect();
+    let builtin_ids: std::collections::HashSet<&str> =
+        BuiltinAgentId::ALL.iter().map(|a| a.as_str()).collect();
     let mut custom: Vec<(&String, &CustomAgentConfig)> = config
         .agents
         .iter()
@@ -95,7 +139,7 @@ pub fn get_agent_definition(config: &ProjectConfig, agent_id: &str) -> Option<Ag
 }
 
 pub fn is_builtin_agent_id(agent_id: &str) -> bool {
-    agent_id == "claude" || agent_id == "codex"
+    BuiltinAgentId::from_wire(agent_id).is_some()
 }
 
 /// Slug a label into a custom agent id (`[^a-z0-9]+` → `-`, trimmed), or `agent`.

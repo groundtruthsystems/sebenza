@@ -964,7 +964,8 @@ fn submit_delay_for_branch(app: &ProjectApp, branch: &str) -> u64 {
         return 0;
     };
     match get_agent_definition(&app.config(), &agent_name).map(|a| a.implementation) {
-        Some(AgentImplementation::Builtin(agent)) if agent == "codex" => 200,
+        // Codex needs a beat between opening its composer and submitting.
+        Some(AgentImplementation::Builtin(common::services::agent_registry::BuiltinAgentId::Codex)) => 200,
         _ => 0,
     }
 }

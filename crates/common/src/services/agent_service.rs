@@ -2,7 +2,7 @@
 //! tmux pane runs to source the runtime env then exec the agent (claude/codex or
 //! a custom template). Docker variants are deferred until the docker adapter lands.
 
-use crate::services::agent_registry::{AgentDefinition, AgentImplementation};
+use crate::services::agent_registry::{AgentDefinition, AgentImplementation, BuiltinAgentId};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum AgentLaunchMode {
@@ -71,40 +71,9 @@ pub struct AgentInvocation<'a> {
     pub pin_session_id: Option<&'a str>,
 }
 
-fn built_in_invocation(
-    agent: &str,
-    inv: &AgentInvocation,
-) -> String {
-    let prompt_suffix = inv
-        .prompt
-        .map(|p| format!(" -- {}", quote_shell(p)))
-        .unwrap_or_default();
-
-    if agent == "codex" {
-        let hooks = " --enable hooks";
-        let yolo = if inv.yolo { " --yolo" } else { "" };
-        if inv.launch_mode == AgentLaunchMode::Fork
-            && let Some(fork) = inv.fork_from_session_id
-        {
-            return format!("codex{hooks}{yolo} fork {}{prompt_suffix}", quote_shell(fork));
-        }
-        if inv.launch_mode == AgentLaunchMode::Resume {
-            let target = inv
-                .resume_conversation_id
-                .map(|id| format!(" {}", quote_shell(id)))
-                .unwrap_or_else(|| " --last".to_string());
-            return format!("codex{hooks}{yolo} resume{target}{prompt_suffix}");
-        }
-        if let Some(sys) = inv.system_prompt {
-            return format!(
-                "codex{hooks}{yolo} -c {}{prompt_suffix}",
-                quote_shell(&format!("developer_instructions={sys}"))
-            );
-        }
-        return format!("codex{hooks}{yolo}{prompt_suffix}");
-    }
-
-    // claude
+/// Claude's launch argv. Kept byte-identical to the pre-refactor behaviour — see the
+/// `GOLDEN` table in this module's tests.
+fn claude_invocation(inv: &AgentInvocation, prompt_suffix: &str) -> String {
     let yolo = if inv.yolo { " --dangerously-skip-permissions" } else { "" };
     if inv.launch_mode == AgentLaunchMode::Fork
         && let Some(fork) = inv.fork_from_session_id
@@ -138,6 +107,46 @@ fn built_in_invocation(
         );
     }
     format!("claude{yolo}{pin}{prompt_suffix}")
+}
+
+/// Codex's launch argv. Unlike Claude, Codex needs `--enable hooks` explicitly and
+/// ignores `pin_session_id` (it assigns its own session id).
+fn codex_invocation(inv: &AgentInvocation, prompt_suffix: &str) -> String {
+    let hooks = " --enable hooks";
+    let yolo = if inv.yolo { " --yolo" } else { "" };
+    if inv.launch_mode == AgentLaunchMode::Fork
+        && let Some(fork) = inv.fork_from_session_id
+    {
+        return format!("codex{hooks}{yolo} fork {}{prompt_suffix}", quote_shell(fork));
+    }
+    if inv.launch_mode == AgentLaunchMode::Resume {
+        let target = inv
+            .resume_conversation_id
+            .map(|id| format!(" {}", quote_shell(id)))
+            .unwrap_or_else(|| " --last".to_string());
+        return format!("codex{hooks}{yolo} resume{target}{prompt_suffix}");
+    }
+    if let Some(sys) = inv.system_prompt {
+        return format!(
+            "codex{hooks}{yolo} -c {}{prompt_suffix}",
+            quote_shell(&format!("developer_instructions={sys}"))
+        );
+    }
+    format!("codex{hooks}{yolo}{prompt_suffix}")
+}
+
+/// Dispatch to the selected built-in agent. Exhaustive on `BuiltinAgentId`, so adding an
+/// agent is a compile error here rather than a silent fallthrough to Claude.
+fn built_in_invocation(agent: BuiltinAgentId, inv: &AgentInvocation) -> String {
+    let prompt_suffix = inv
+        .prompt
+        .map(|p| format!(" -- {}", quote_shell(p)))
+        .unwrap_or_default();
+
+    match agent {
+        BuiltinAgentId::Claude => claude_invocation(inv, &prompt_suffix),
+        BuiltinAgentId::Codex => codex_invocation(inv, &prompt_suffix),
+    }
 }
 
 const CUSTOM_VARS: [(&str, &str); 6] = [
@@ -179,7 +188,7 @@ fn custom_invocation(config: &crate::domain::config::CustomAgentConfig, inv: &Ag
 
 fn agent_invocation(inv: &AgentInvocation) -> String {
     match &inv.agent.implementation {
-        AgentImplementation::Builtin(agent) => built_in_invocation(agent, inv),
+        AgentImplementation::Builtin(agent) => built_in_invocation(*agent, inv),
         AgentImplementation::Custom(config) => custom_invocation(config, inv),
     }
 }
@@ -204,7 +213,7 @@ pub fn build_managed_shell_command(runtime_env_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::agent_registry::{AgentCapabilities, AgentDefinition};
+    use crate::services::agent_registry::{AgentCapabilities, AgentDefinition, BuiltinAgentId};
 
     fn builtin(id: &str) -> AgentDefinition {
         AgentDefinition {
@@ -219,8 +228,81 @@ mod tests {
                 resume: true,
                 fork: true,
             },
-            implementation: AgentImplementation::Builtin(id.to_string()),
+            implementation: AgentImplementation::Builtin(
+                BuiltinAgentId::from_wire(id).expect("test helper takes a builtin id"),
+            ),
         }
+    }
+
+    /// Golden argv for the built-in agents, captured from the pre-refactor
+    /// `built_in_invocation`. The `BuiltinAgentId` refactor MUST NOT change any of these
+    /// strings — this table is the proof that it is behaviour-preserving.
+    const GOLDEN: &[(BuiltinAgentId, &str, &str)] = &[
+        (BuiltinAgentId::Claude, "fresh", "claude"),
+        (BuiltinAgentId::Claude, "fresh+yolo", "claude --dangerously-skip-permissions"),
+        (BuiltinAgentId::Claude, "fresh+sys+prompt", "claude --append-system-prompt 'be x' -- 'do y'"),
+        (BuiltinAgentId::Claude, "resume+last", "claude --continue"),
+        (BuiltinAgentId::Claude, "resume+id", "claude --resume 'sid'"),
+        (BuiltinAgentId::Claude, "fork", "claude --resume 'fid' --fork-session --session-id 'pin'"),
+        (BuiltinAgentId::Codex, "fresh", "codex --enable hooks"),
+        (BuiltinAgentId::Codex, "fresh+yolo", "codex --enable hooks --yolo"),
+        (BuiltinAgentId::Codex, "fresh+sys+prompt", "codex --enable hooks -c 'developer_instructions=be x' -- 'do y'"),
+        (BuiltinAgentId::Codex, "resume+last", "codex --enable hooks resume --last"),
+        (BuiltinAgentId::Codex, "resume+id", "codex --enable hooks resume 'sid'"),
+        (BuiltinAgentId::Codex, "fork", "codex --enable hooks fork 'fid'"),
+    ];
+
+    fn apply_case<'a>(i: &mut AgentInvocation<'a>, case: &str) {
+        match case {
+            "fresh" => {}
+            "fresh+yolo" => i.yolo = true,
+            "fresh+sys+prompt" => {
+                i.system_prompt = Some("be x");
+                i.prompt = Some("do y");
+            }
+            "resume+last" => i.launch_mode = AgentLaunchMode::Resume,
+            "resume+id" => {
+                i.launch_mode = AgentLaunchMode::Resume;
+                i.resume_conversation_id = Some("sid");
+            }
+            "fork" => {
+                i.launch_mode = AgentLaunchMode::Fork;
+                i.fork_from_session_id = Some("fid");
+                i.pin_session_id = Some("pin");
+            }
+            other => panic!("unknown golden case {other}"),
+        }
+    }
+
+    #[test]
+    fn builtin_argv_is_unchanged_by_the_enum_refactor() {
+        for (id, case, expected) in GOLDEN {
+            let agent = builtin(id.as_str());
+            let mut i = inv(&agent);
+            apply_case(&mut i, case);
+            assert_eq!(
+                &agent_invocation(&i),
+                expected,
+                "argv changed for {}/{case}: this refactor must preserve behaviour",
+                id.as_str()
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_agent_id_round_trips_through_its_wire_string() {
+        for id in BuiltinAgentId::ALL {
+            assert_eq!(BuiltinAgentId::from_wire(id.as_str()), Some(*id));
+        }
+        assert_eq!(BuiltinAgentId::from_wire("goose"), None, "goose is not a builtin in this track");
+        assert_eq!(BuiltinAgentId::from_wire("some-custom"), None);
+        assert_eq!(BuiltinAgentId::from_wire("Claude"), None, "wire ids are case-sensitive");
+    }
+
+    #[test]
+    fn all_lists_exactly_the_builtin_agents() {
+        let ids: Vec<&str> = BuiltinAgentId::ALL.iter().map(|a| a.as_str()).collect();
+        assert_eq!(ids, vec!["claude", "codex"]);
     }
 
     fn inv<'a>(agent: &'a AgentDefinition) -> AgentInvocation<'a> {
