@@ -15,6 +15,21 @@ pub enum StreamProvider {
     Codex,
 }
 
+impl StreamProvider {
+    /// The streaming provider for a built-in agent, or `None` when that agent has no
+    /// in-app chat implementation. Exhaustive on `BuiltinAgentId`, so a new built-in
+    /// must decide here rather than silently inheriting Claude's provider.
+    pub fn for_builtin(
+        id: common::services::agent_registry::BuiltinAgentId,
+    ) -> Option<StreamProvider> {
+        use common::services::agent_registry::BuiltinAgentId;
+        match id {
+            BuiltinAgentId::Claude => Some(StreamProvider::Claude),
+            BuiltinAgentId::Codex => Some(StreamProvider::Codex),
+        }
+    }
+}
+
 /// A conversation message without its `order` (assigned per WS subscriber).
 #[derive(Clone)]
 pub struct DraftMessage {
@@ -471,5 +486,25 @@ fn handle_codex_line(line: &str, run: &RunState) {
             let _ = run.tx.send(StreamEvent::Error { message: msg });
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod stream_provider_tests {
+    use super::*;
+    use common::services::agent_registry::BuiltinAgentId;
+
+    #[test]
+    fn every_builtin_maps_to_a_stream_provider_or_explicitly_to_none() {
+        // Exhaustive by construction: if a new BuiltinAgentId variant is added,
+        // `for_builtin` fails to compile until it decides. This asserts every current
+        // variant has been decided, so none silently inherits Claude's provider.
+        for id in BuiltinAgentId::ALL {
+            let provider = StreamProvider::for_builtin(*id);
+            match id {
+                BuiltinAgentId::Claude => assert!(matches!(provider, Some(StreamProvider::Claude))),
+                BuiltinAgentId::Codex => assert!(matches!(provider, Some(StreamProvider::Codex))),
+            }
+        }
     }
 }

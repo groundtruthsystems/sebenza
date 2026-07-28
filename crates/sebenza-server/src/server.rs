@@ -1215,11 +1215,14 @@ async fn refresh_agent_terminal(
             .into_iter()
             .find(|w| w.branch == branch)
             .ok_or(LifecycleError { message: format!("Worktree not found: {branch}"), status: 404 })?;
-        let conversation_id = match worktree.agent_name.as_deref() {
-            Some("claude") => crate::services::claude_conversation_service::read_worktree_conversation(&worktree).conversation.conversation_id,
-            Some("codex") => crate::services::codex_conversation_service::read_worktree_conversation(&worktree).conversation.conversation_id,
-            _ => return Err(LifecycleError { message: "Only built-in agent worktrees can be refreshed".to_string(), status: 409 }),
-        };
+        let conversation_id = common::services::conversation_router::resolve_conversation_id(&worktree)
+            .ok_or_else(|| LifecycleError {
+                message: format!(
+                    "Refreshing the agent terminal is only available for these agents: {}",
+                    common::services::conversation_router::conversation_capable_agent_ids().join(", ")
+                ),
+                status: 409,
+            })?;
         if conversation_id.contains("-pending:") {
             return Err(LifecycleError { message: "No conversation is available to refresh".to_string(), status: 409 });
         }
@@ -1276,7 +1279,6 @@ async fn agents_conversation(
     prefix: &str,
     name: &str,
 ) -> Result<Json<crate::services::agents_ui::AgentsUiConversationResponse>, ApiError> {
-    use crate::services::{claude_conversation_service, codex_conversation_service};
     let app = state.project(prefix)?;
     let branch = name.to_string();
     let response = tokio::task::spawn_blocking(move || {
@@ -1286,14 +1288,15 @@ async fn agents_conversation(
             .into_iter()
             .find(|w| w.branch == branch)
             .ok_or((404u16, format!("Worktree not found: {branch}")))?;
-        match worktree.agent_name.as_deref() {
-            Some("claude") => Ok(claude_conversation_service::read_worktree_conversation(&worktree)),
-            Some("codex") => Ok(codex_conversation_service::read_worktree_conversation(&worktree)),
-            _ => Err((
+        common::services::conversation_router::read_worktree_conversation(&worktree).ok_or_else(|| {
+            (
                 409u16,
-                "Worktree chat is only available for Claude and Codex worktrees".to_string(),
-            )),
-        }
+                format!(
+                    "Worktree chat is only available for these agents: {}",
+                    common::services::conversation_router::conversation_capable_agent_ids().join(", ")
+                ),
+            )
+        })
     })
     .await
     .map_err(|_| ApiError::new(500, "task panicked".to_string()))?
@@ -1336,11 +1339,23 @@ fn prepare_agent_send(
         .into_iter()
         .find(|w| w.branch == branch)
         .ok_or((404u16, format!("Worktree not found: {branch}")))?;
-    let provider = match worktree.agent_name.as_deref() {
-        Some("claude") => StreamProvider::Claude,
-        Some("codex") => StreamProvider::Codex,
-        _ => return Err((409, "Streaming chat is only available for Claude and Codex worktrees".to_string())),
-    };
+    let provider = worktree
+        .agent_name
+        .as_deref()
+        .and_then(|id| get_agent_definition(&app.config(), id))
+        .and_then(|def| match def.implementation {
+            AgentImplementation::Builtin(id) => StreamProvider::for_builtin(id),
+            AgentImplementation::Custom(_) => None,
+        })
+        .ok_or_else(|| {
+            (
+                409u16,
+                format!(
+                    "Streaming chat is only available for these agents: {}",
+                    common::services::conversation_router::conversation_capable_agent_ids().join(", ")
+                ),
+            )
+        })?;
     if !worktree.mux {
         return Err((409, "Open this worktree in the main dashboard before sending messages here".to_string()));
     }
@@ -1360,19 +1375,11 @@ fn prepare_agent_send(
         return Err((409, "Streaming chat is only available for host-runtime worktrees".to_string()));
     }
 
-    // Resolve the current conversation id (real session id, or a pending placeholder).
-    let conversation_id = match provider {
-        StreamProvider::Claude => {
-            crate::services::claude_conversation_service::read_worktree_conversation(&worktree)
-                .conversation
-                .conversation_id
-        }
-        StreamProvider::Codex => {
-            crate::services::codex_conversation_service::read_worktree_conversation(&worktree)
-                .conversation
-                .conversation_id
-        }
-    };
+    // Resolve the current conversation id (real session id, or a pending placeholder)
+    // through the worktree's own agent adapter — the same path interrupt and streaming
+    // use, so all three cannot disagree about which session a worktree owns.
+    let conversation_id = common::services::conversation_router::resolve_conversation_id(&worktree)
+        .ok_or((409u16, "No conversation adapter for this worktree's agent".to_string()))?;
     let resume_session_id = (!conversation_id.contains("-pending:")).then(|| conversation_id.clone());
 
     let mut extra = std::collections::HashMap::new();

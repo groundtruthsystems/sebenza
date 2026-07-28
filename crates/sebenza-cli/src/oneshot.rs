@@ -561,6 +561,12 @@ pub async fn run(args: &[String], port: u16, project_dir: &str) -> i32 {
 
     tokio::spawn(stream_conversation(shared.clone(), port, prefix_path));
     tokio::spawn(poll_project_state(shared.clone()));
+    // Claude-only history polling. This is NOT a declared capability: it compensates for
+    // gaps in Claude's live stream, and whether another agent needs it can only be
+    // established by watching that agent's stream in practice. The CLI also has no
+    // capabilities endpoint today (only /api/agents/.../history), so reading a flag here
+    // would mean new API plumbing. Revisit when opencode streaming lands: if it needs the
+    // same compensation, this becomes a capability; if not, it stays agent-specific.
     if agent_name.as_deref() == Some("claude") {
         tokio::spawn(poll_history(shared.clone()));
     }
