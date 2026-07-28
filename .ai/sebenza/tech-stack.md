@@ -7,7 +7,7 @@ Rust 1.85+ (2024 edition), Cargo workspace, three crates:
 | Crate | Path | Role |
 |---|---|---|
 | `common` | `crates/common` | Shared library. **Ports-and-adapters**: `domain/` (config, model, events, policies), `adapters/` (git, tmux, fs, docker, `claude_cli`, `codex_session_log`, `agent_runtime`, hooks, registries), `services/` (orchestration logic). |
-| `sebenza-server` | `crates/sebenza-server` | axum 0.8 HTTP/WebSocket daemon. Default port 5111. Binary `sebenza-server`. |
+| `sebenza-server` | `crates/sebenza-server` | axum 0.8 HTTP/WebSocket daemon. Default `127.0.0.1:5111` — loopback by default because most routes are unauthenticated; `--host` / `$SEBENZA_HOST` opts into other interfaces. Binary `sebenza-server`. |
 | `sebenza-cli` | `crates/sebenza-cli` | clap 4 all-HTTP client. Binary `sebenza-cli`. |
 
 **Key crates.** tokio (full), axum (ws), tower-http, `rust-embed` (embeds the SPA into the server

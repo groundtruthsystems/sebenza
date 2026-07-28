@@ -206,7 +206,24 @@ Without `--port`, CLI commands target the live server for the current project
 | Machine-wide launchers | `~/.ai/sebenza.yaml` |
 | Server state (project registry, instances) | `~/.ai/sebenza/` |
 | Control token | `~/.config/sebenza/control-token` |
-| Environment | `PORT` (server port, default `5111`); `SEBENZA_FRONTEND_DIST` (optional — serve the SPA from disk instead of the embedded bundle) |
+| Environment | `PORT` (server port, default `5111`); `SEBENZA_HOST` (bind host, default `127.0.0.1`); `SEBENZA_FRONTEND_DIST` (optional — serve the SPA from disk instead of the embedded bundle) |
+
+### Network exposure
+
+The server binds **`127.0.0.1` by default**, so the dashboard is reachable only from the machine
+running it. Most routes are unauthenticated — worktree creation, the terminal PTY, and agent control
+included — so exposing the port to a network gives anyone who can reach it the same power you have.
+
+To serve other machines deliberately, opt in:
+
+```bash
+sebenza-server serve --host 0.0.0.0        # or: SEBENZA_HOST=0.0.0.0 sebenza-cli serve
+```
+
+The server logs a warning whenever it binds a non-loopback address.
+
+> **Changed behaviour:** earlier versions always bound `0.0.0.0`. If you reach the dashboard from
+> another machine, set `SEBENZA_HOST=0.0.0.0` (or pass `--host`) after upgrading.
 
 ## Development
 

@@ -40,7 +40,7 @@
           "id": "phase-0-task-5",
           "name": "Write tests for loopback-default bind",
           "description": "FR-0.5. Failing tests asserting the server binds 127.0.0.1 by default and binds all interfaces only when the explicit opt-in flag/env is set.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-0-task-6",
