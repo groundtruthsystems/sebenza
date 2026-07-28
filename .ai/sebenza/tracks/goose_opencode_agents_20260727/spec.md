@@ -42,6 +42,36 @@ rather than assumed.
 
 ---
 
+## Verified findings
+
+Recorded as Phase 0 tasks complete. These supersede any conflicting statement in
+[design.md](./design.md).
+
+### FR-0.1 — opencode worktree-to-project resolution *(phase-0-task-1, resolved 2026-07-28)*
+
+Method: a throwaway git repo with two linked worktrees; a minimal `opencode run` in each; `opencode.db`
+inspected read-only.
+
+**The design's assumption was wrong.** It claimed each Sebenza worktree becomes its own opencode project.
+It does not:
+
+| Observation | Detail |
+|---|---|
+| ❌ **All worktrees of one repo share ONE `project_id`** | Both linked worktrees produced sessions under `project_id = f6521a77…`. `project_id` is per-repository, **not** a usable per-worktree key |
+| `project.worktree` is the **first-seen** directory | It recorded `linkedwt` only — the worktree that happened to run first, not "the" worktree |
+| `project_directory` accumulates siblings | Three rows for one project: `linkedwt`, `linkedwt2`, `mainrepo` |
+| ✅ **`session.directory` is the exact worktree path** | This is the field that makes correlation possible |
+| ❌ `opencode session list` is project-scoped | Run from either worktree it listed **both** sessions, and it has **no directory column** — it cannot correlate alone |
+| ✅ `opencode export <id>` carries `info.directory` | Also `info.projectID` and `info.version` (`"1.18.7"`), giving a CLI-only correlation and version probe |
+| ✅ `run --format json` echoes `sessionID` on **every** event | Session-id capture needs no polling — this also resolves opencode open question 2 |
+
+**Consequence:** correlation must be **record-what-we-started**, not discover-by-directory. See the
+revised FR-3.6. Discovery remains possible but costs one `export` per candidate, so it is an
+orphan-adoption fallback only. Nothing here blocks Phase 2 — the mechanism changes, the capability does
+not.
+
+---
+
 ## Functional Requirements
 
 > **Phase order.** `0` verification & prerequisites → `1` agent abstraction (pure refactor) →
@@ -109,10 +139,22 @@ track can reclaim it.
   `EventSessionIdle` → idle/agent-stopped; `EventSessionError` → runtime error;
   `tool.execute.before` → running; `tool.execute.after` → PR detection via the existing
   `maybe_send_pr_opened`.
-- **FR-3.5** Read history via **`opencode session list`** and **`opencode export <id> --sanitize`**.
-  **Do not read `opencode.db`.** Tolerate unknown fields in the export JSON.
-- **FR-3.6** Correlate via the `project.worktree` → session `directory`/`path` relationship, per FR-0.1's
-  finding.
+- **FR-3.5** Read history via **`opencode export <id> --sanitize`**. **Do not read `opencode.db`.**
+  Tolerate unknown fields in the export JSON. Note `opencode session list` is **project-scoped and has no
+  directory column**, so it cannot correlate a session to a worktree on its own — it is an enumeration
+  aid only (see FR-3.6). `export` returns `{info, messages}` where `info` carries `id`, `slug`,
+  `projectID`, `directory`, `title`, `agent`, `model`, `version`, `permission`, `time`, `cost`, `tokens`.
+- **FR-3.6** **Correlate on the session id Sebenza itself created — not by discovery.**
+  *(Revised per the FR-0.1 finding; see "Verified findings" below.)*
+  - **Primary path:** capture the session id at launch (`run --format json` echoes `sessionID` on every
+    event; the plugin's `EventSessionCreated` gives the same for interactive runs) and persist it in
+    `WorktreeConversationMeta`. No polling, no discovery.
+  - **Orphan-adoption fallback only:** to find a session Sebenza did not start, enumerate with
+    `opencode session list` then `opencode export <id>` each candidate and match `info.directory` by
+    **exact string equality** against the worktree path. This is O(n) exports, so it must not be on the
+    hot path — use it only on explicit adoption, never per dashboard poll.
+  - **`project_id` MUST NOT be used as a per-worktree key.** It is per-repository: every worktree of a
+    repo shares one project row.
 - **FR-3.7** Probe `~/.opencode/bin` explicitly when resolving the binary — a plain `which("opencode")`
   can fail on a working install because opencode installs outside conventional directories.
 - **FR-3.8** Add an `opencode` arm to `llm_spawn.rs::build_llm_args` (`opencode run --format json`) and to

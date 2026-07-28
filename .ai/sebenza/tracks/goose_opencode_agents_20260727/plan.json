@@ -5,14 +5,14 @@
     {
       "id": "phase-0",
       "name": "Verification & prerequisites",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-0-task-1",
           "name": "Verify opencode worktree-to-project resolution",
           "description": "FR-0.1. With an authenticated opencode, start a session inside a linked git worktree and inspect the project/project_directory/session rows in opencode.db (read-only). Determine whether the worktree gets its own project row or resolves to the parent repository. Record the finding in the spec. If it resolves to the parent, the correlation design in phase-2 must be revised before implementation. BLOCKING for phase-2.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-0-task-2",

@@ -42,7 +42,7 @@ the *stronger* integration target on the dimension that matters most for safety.
 | Events | `SessionStart`, `SessionEnd`, `Stop`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `BeforeReadFile`, `AfterFileEdit`, `BeforeShellExecution`, `AfterShellExecution` | Named hooks `permission.ask`, `tool.execute.before/after`, `tool.definition`, `chat.message/params/headers`, `command.execute.before`, `shell.env`, `experimental.*`, `dispose`, `config`, `auth`, `provider` — **plus a generic `event` hook** carrying the full SDK Event union, incl. `EventSessionCreated`, `EventSessionIdle`, `EventSessionError`, and reasoning/prompt deltas |
 | **Can gate a tool call?** | **No** — hooks are observe-only and non-blocking | **YES** — `permission.ask?: (input: Permission, output: { status: "ask" \| "deny" \| "allow" })`. The output is **mutable**, so a plugin can allow or deny. Stronger than goose *and* than codex, whose `PermissionRequest` handler only signals `idle` |
 | Session history | `~/.local/share/goose/sessions/<id>.jsonl`; line 1 header `{working_dir, description, message_count, total_tokens, …}`, then `{id, role, content, created}` where **`content` is a structured block array** (`text`, `toolRequest{id,toolCall}`, `toolResponse{id,toolResult{status}}`) — analogous to Claude's content blocks | SQLite `opencode.db`, **`journal_mode = wal`** (concurrent read-only is safe). No JSON `storage/` dir exists in this version. **But direct DB access is unnecessary** — `opencode session list` and `opencode export [sessionID] --sanitize` are stable CLI surfaces, and `--sanitize` provides **built-in secret redaction** |
-| Session correlation | Header `working_dir`, exact match | `project.worktree` (git worktree path) → `project_directory`; `session` carries `project_id`, `directory`, `path`, `parent_id` (fork lineage), `title`, `slug`, `permission`, `agent`, `model`. **Partitioned per worktree, not per repo** |
+| Session correlation | Header `working_dir`, exact match | **`session.directory`** — the exact worktree path (verified). `project_id` is **per-repository, NOT per-worktree** (corrected 2026-07-28); `project.worktree` records only the first-seen directory and `project_directory` accumulates siblings. Session rows also carry `parent_id` (fork lineage), `title`, `slug`, `permission`, `agent`, `model` |
 | Pinnable session id | **Yes** — `goose session -n NAME` | No pin flag, but **`EventSessionCreated` delivers the id at creation** via the plugin `event` hook → no polling needed either |
 | One-shot mode | `goose run -t TEXT --system TEXT --no-session` | `opencode run [message] --format json` (raw JSON events), `--title`, `--agent`, `--model`, `--dir`, `-f/--file` |
 | Permission bypass | `GOOSE_MODE=auto` — an **env var, not a flag** | `--auto` — a **flag** ("auto-approve permissions that are not explicitly denied (dangerous!)"), fits the existing append pattern |
@@ -832,20 +832,29 @@ instance: "file exists, no content" is a legitimate state, not an error.
 NAME` pins the id deterministically at creation, so `capture_new_session_id` polling is unnecessary,
 and the header `working_dir` becomes an **integrity check** rather than the lookup key. Correlation
 must use **exact string equality**, never prefix matching — `/repo/wt-1` vs `/repo/wt-10` would
-collide. **opencode's partitioning is now verified and favourable.** The `project` table keys on **`worktree`**
-— the git worktree path (`vcs: "git"`) — with `project_directory` mapping `project_id → directory`, and
-each `session` row carrying `project_id`, `directory`, and `path`. Because Sebenza gives every task its
-own git worktree, **each Sebenza worktree becomes its own opencode project**, so per-worktree
-correlation works naturally. The feared repo-level commingling does not occur.
+collide. > **⚠ CORRECTED 2026-07-28 by phase-0-task-1 — the claim below was wrong.**
+>
+> This section originally asserted that each Sebenza worktree becomes its own opencode project, so
+> repo-level commingling "does not occur." **Direct experiment disproved it.** Two linked worktrees of one
+> throwaway repo produced sessions under a **single shared `project_id`**; `project.worktree` recorded only
+> the first-seen directory, and `project_directory` accumulated all three sibling paths. The feared
+> commingling **does** occur at the project level.
+>
+> **`project_id` must never be used as a per-worktree key.** Correlation instead uses
+> `session.directory` — verified to be the exact worktree path, and exposed over the CLI as
+> `opencode export <id>` → `info.directory`. Note also that `opencode session list` is **project-scoped
+> with no directory column**, so it cannot correlate on its own.
+>
+> The practical design is therefore **record-what-we-started**: capture the session id at launch
+> (`run --format json` echoes `sessionID` on every event; `EventSessionCreated` does the same
+> interactively) and persist it in `WorktreeConversationMeta`. Discovery-by-directory still works but
+> costs one `export` per candidate, so it is an orphan-adoption fallback, not the hot path.
+> See [spec.md](./spec.md) → *Verified findings* and the revised FR-3.5/FR-3.6.
 
-Nor does opencode need polling: **`EventSessionCreated`** arrives via the plugin `event` hook, so the
-generated shim can report the new session id to Sebenza the moment it exists. Combined with goose's
-`-n` pinning, **`capture_new_session_id` remains necessary only for codex.**
-
-*One residual check:* the single `project` row on this machine is a main checkout, so it is not yet
-proven that opencode resolves a **linked git worktree** to its own project row rather than the parent
-repository's. This must be confirmed against a real Sebenza worktree before relying on the correlation
-(Open Question 1).
+opencode does not need polling: **`EventSessionCreated`** arrives via the plugin `event` hook, so the
+generated shim can report the new session id to Sebenza the moment it exists — and `run --format json`
+echoes it synchronously for one-shot runs. Combined with goose's `-n` pinning,
+**`capture_new_session_id` remains necessary only for codex.**
 
 **4. opencode storage — read through the CLI, not the database.** Verified on 1.18.7: storage is a
 single SQLite `opencode.db` with `journal_mode = wal` (so concurrent read-only access is safe), and the
@@ -1335,8 +1344,9 @@ does not wait on it. Also out of scope: `goose acp` as a deeper integration path
   (`"ask" | "deny" | "allow"`). The only agent of the four that can.
 - ~~One-shot mode?~~ **Yes** — `opencode run [message] --format json`, plus `--title`, `--agent`,
   `--model`, `--dir`, `-f`.
-- ~~Project-id derivation?~~ **Per git worktree** — `project.worktree` + `project_directory`; sessions
-  carry `project_id`, `directory`, `path`, `parent_id`. No repo-level commingling.
+- ~~Project-id derivation?~~ **Per repository, NOT per worktree** (corrected by phase-0-task-1). All
+  worktrees of a repo share one `project_id`. Correlate on `session.directory` /
+  `export`→`info.directory` instead; never on `project_id`.
 - ~~WAL mode? Stable export path?~~ **`journal_mode = wal`**, and `opencode session list` +
   `opencode export --sanitize` make direct DB access unnecessary. `--sanitize` redacts sensitive
   transcript/file data.
@@ -1347,9 +1357,9 @@ does not wait on it. Also out of scope: `goose acp` as a deeper integration path
   A shim that imports nothing avoids it. `~/.config/opencode/` is npm/bun-managed.
 
 **opencode — still open**
-0. **Does `permission.ask` still fire when `--auto` is passed?** Determines whether bypass and Sebenza-side gating can coexist or are mutually exclusive. Blocks Phase 4 wiring.
-1. Does opencode resolve a **linked git worktree** to its own `project` row, or to the parent repository's? The only row on this machine is a main checkout. **Blocks correlation** — verify against a real Sebenza worktree.
-2. Does `run --format json` echo the session id synchronously, giving a second (simpler) path to id capture besides the `event` hook?
+0. **Does `permission.ask` still fire when `--auto` is passed?** Determines whether bypass and Sebenza-side gating can coexist or are mutually exclusive. Blocks the permission-gating phase. *(phase-0-task-2)*
+1. ~~Does opencode resolve a linked git worktree to its own `project` row?~~ **RESOLVED 2026-07-28: no.** Worktrees of one repo share a project; correlate on `session.directory`. See spec *Verified findings*.
+2. ~~Does `run --format json` echo the session id synchronously?~~ **RESOLVED: yes** — `sessionID` appears on every emitted event.
 3. What is the `opencode export` JSON shape, and how does it map onto `AgentsUiMessage`? Needs a real authenticated session to capture (this install has 0 credentials).
 4. Minimum supported opencode version to declare, given 1.18.7 is the verified baseline.
 
