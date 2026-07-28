@@ -26,7 +26,8 @@
           "id": "phase-0-task-3",
           "name": "Capture an opencode export fixture",
           "description": "FR-0.3. Commit a real `opencode export <id>` JSON payload as testdata/. This is the basis for all history parser tests and cannot be invented from documentation. Requires an authenticated opencode.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "015aae9"
         },
         {
           "id": "phase-0-task-4",
