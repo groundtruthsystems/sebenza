@@ -17,9 +17,14 @@ The agent abstraction this requires (an enum-based builtin registry, three new c
 unified registry, and registry-resolved dispatch) is built to serve any future agent — so the deferred
 goose work becomes an adapter rather than another fork, which is the product's stated goal.
 
-Because opencode is the only agent of the four whose plugin API can **deny** a tool call
-(`permission.ask` returns a mutable `status`), this track additionally builds Sebenza's first
-**enforcement** path: a synchronous, authenticated permission approve/deny channel.
+~~Because opencode is the only agent of the four whose plugin API can **deny** a tool call, this track
+additionally builds Sebenza's first **enforcement** path.~~
+
+**Corrected 2026-07-28.** `permission.ask` never fires (see *Verified findings* FR-0.2), so no
+enforcement path was built and none is buildable as designed. `permission_interception` is `false` for
+all four agents. What shipped instead is **permission visibility**: a distinct `AwaitingPermission`
+lifecycle, driven by the observational `permission.asked` / `permission.replied` events, so the
+dashboard can say *why* a worktree wants attention. Sebenza cannot answer the prompt for you.
 
 opencode was verified by direct observation of the installed binary (1.18.7), not from documentation.
 Two questions still require an **authenticated** opencode and are front-loaded as Phase 0 verification
@@ -34,7 +39,7 @@ rather than assumed.
 | D3 | Pre-existing untrusted plugins: **scan, block auto-launch, require confirmation** |
 | D4 | opencode targets **full parity** with claude/codex |
 | D4a | **goose is descoped from this track** and recorded as a TODO for later investigation. opencode carries the shared security and runtime controls (git-exclusion, `0600` env files, untrusted-plugin scan, docker mounts, shadow resolution); their implementations stay data-driven so a future agent is a config change, not a code change |
-| D5 | Permission gating for opencode is **in scope** (Phase 3) |
+| D5 | ~~Permission gating for opencode is **in scope**~~ → **redesigned to permission VISIBILITY** after `phase-3-task-1` disproved the premise. No enforcement claim is made |
 | D6 | A **loopback-default bind** is included in this track, gating the Phase 3 permission routes |
 | D7 | The two duplicate builtin registries are **unified** in Phase 1 |
 | D8 | The latent `claude_conversation_service` dispatch bug gets a **Phase 0 investigation** task |
@@ -309,7 +314,27 @@ track can reclaim it.
   fifth** per-agent dispatch axis, distinct from `llm_spawn`. Add the `AutoNameProvider` variant and its
   YAML-parsing counterpart at `config.rs:273-274`.
 
-### FR-4 — Permission gating for opencode (Phase 3)
+### FR-4 — Permission gating for opencode *(NOT BUILT — premise disproved)*
+
+> The requirements below describe a synchronous decision channel that **cannot be built**:
+> `permission.ask` never fires on opencode 1.18.9, so there is nothing to write a verdict into.
+> Retained as the record of what was designed and why it was abandoned. **FR-4a supersedes it.**
+
+### FR-4a — Permission visibility (delivered)
+
+- **FR-4a.1** The generated plugin maps `permission.asked` → a distinct `AwaitingPermission` lifecycle
+  and `permission.replied` → back to running, via `agentctl`.
+- **FR-4a.2** `AwaitingPermission` must be distinct from `Idle`. Both mean "this worktree wants you",
+  but they call for different actions — `Idle` wants your next prompt, this wants you to approve
+  something already proposed. With many parallel worktrees that difference is the whole value.
+- **FR-4a.3** The oneshot watcher must **not** treat it as terminal or grace-eligible: a run blocked on
+  a human is not finished, and auto-closing it would kill the agent mid-task. Covered by test.
+- **FR-4a.4** The dashboard shares `waiting`'s visual treatment but labels it distinctly
+  ("needs approval"), and it counts toward the overflow status bar.
+- **FR-4a.5** No UI may imply Sebenza can approve or deny. It reports; the human answers in the
+  agent's own TUI.
+
+### FR-4 (original, superseded) — Permission gating for opencode
 
 - **FR-4.1** The generated shim implements `permission.ask`, POSTs the request, `await`s a verdict via
   `fetch` (a runtime global under opencode's bundled Bun), and writes it to `output.status`.

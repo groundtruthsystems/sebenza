@@ -1,5 +1,35 @@
 # TODO
 
+## opencode permission gating — revisit if `permission.ask` starts firing
+
+Sebenza can currently **observe** opencode permission prompts but not answer them. Verified
+2026-07-28 against opencode **1.18.9** by driving an interactive TUI in tmux with a probe
+plugin: opencode showed its own *Allow once / Allow always / Reject* dialog and emitted
+`permission.asked` then `permission.replied` on the **generic `event` hook**, never calling
+the named `permission.ask` hook.
+
+`@opencode-ai/plugin` **1.18.7** still declares it:
+
+```ts
+"permission.ask"?: (input: Permission, output: { status: "ask" | "deny" | "allow" }) => Promise<void>
+```
+
+So this is either a binary/types skew or a path the hook no longer serves.
+
+**What ships today:** `permission.asked` puts the worktree into a distinct
+`AgentLifecycle::AwaitingPermission` so the dashboard shows *"needs approval"* rather than a
+generic "waiting"; `permission.replied` clears it. `permission_interception` is `false` for
+all four agents.
+
+**If upstream restores it**, the design for a full approve/deny channel is already written up
+in the track's `design.md` (Application §9) — including the part that is easy to get wrong:
+the gated agent holds `SEBENZA_CONTROL_TOKEN` via `control.env`, so a single shared
+credential would let it approve its own request. Submit and resolve need **asymmetric**
+credentials, with the resolver secret delivered only over the WS push or CLI response.
+
+**Check on an opencode upgrade:** re-run the tmux probe. If `permission.ask` fires, the
+gating work becomes viable and `permission_interception` can flip to true.
+
 ## goose as a built-in agent — investigate later (deferred)
 
 goose was researched and verified (v1.8.0) as part of the opencode track

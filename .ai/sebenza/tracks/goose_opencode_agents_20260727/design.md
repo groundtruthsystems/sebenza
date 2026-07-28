@@ -14,9 +14,26 @@
 > (19 of 99 real sessions). Deleting them would mean re-doing the research.
 >
 > Read the goose sections as **research for a deferred track**, and [spec.md](./spec.md) /
-> [plan.json](./plan.json) as the authority on what is actually being built. Phase numbering in this
-> document predates the descope: the delivered phases are `0` prerequisites → `1` abstraction →
-> `2` opencode → `3` permission gating.
+> [plan.json](./plan.json) as the authority on what is actually being built.
+>
+> ## Second scope change — permission GATING is not buildable
+>
+> **`permission.ask` does not fire.** Verified 2026-07-28 against opencode 1.18.9 by driving an
+> interactive TUI in tmux with a probe plugin: opencode showed its own *Allow once / Allow always /
+> Reject* dialog and emitted `permission.asked` then `permission.replied` on the **generic `event`
+> hook**, never calling `permission.ask`. The `@opencode-ai/plugin` types (1.18.7) still declare it
+> with a mutable `status`, so this is a binary/types skew or a path the hook no longer serves.
+>
+> Everything below describing a **synchronous decision channel** — an authenticated verdict written
+> into `output.status`, asymmetric credentials, a pending-decision store — **was not built and cannot
+> be built as designed.** `permission_interception` is `false` for **all four** agents, which removes
+> the asymmetry this design was built around.
+>
+> What was delivered instead: **permission visibility**. `permission.asked` puts the worktree into a
+> distinct `AwaitingPermission` lifecycle so the dashboard can say *why* it wants attention, and
+> `permission.replied` clears it. Observational only — Sebenza cannot answer the prompt for you.
+>
+> Delivered phases: `0` prerequisites → `1` abstraction → `2` opencode → `3` permission **visibility**.
 
 ## Overview
 
@@ -40,7 +57,7 @@ the *stronger* integration target on the dimension that matters most for safety.
 |---|---|---|
 | Hook mechanism | Shell commands via the **Open Plugins** spec; project-scope auto-discovery at `<worktree>/.agents/plugins/<name>/hooks/hooks.json`; no enable flag | **JS/TS plugin loaded in-process** from `.opencode/plugins/`; `~/.config/opencode/` is npm/bun-managed (`package.json`, `bun.lock`, `node_modules/@opencode-ai/plugin`) |
 | Events | `SessionStart`, `SessionEnd`, `Stop`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `BeforeReadFile`, `AfterFileEdit`, `BeforeShellExecution`, `AfterShellExecution` | Named hooks `permission.ask`, `tool.execute.before/after`, `tool.definition`, `chat.message/params/headers`, `command.execute.before`, `shell.env`, `experimental.*`, `dispose`, `config`, `auth`, `provider` — **plus a generic `event` hook** carrying the full SDK Event union, incl. `EventSessionCreated`, `EventSessionIdle`, `EventSessionError`, and reasoning/prompt deltas |
-| **Can gate a tool call?** | **No** — hooks are observe-only and non-blocking | **YES** — `permission.ask?: (input: Permission, output: { status: "ask" \| "deny" \| "allow" })`. The output is **mutable**, so a plugin can allow or deny. Stronger than goose *and* than codex, whose `PermissionRequest` handler only signals `idle` |
+| **Can gate a tool call?** | **No** — hooks are observe-only and non-blocking | **No** (corrected 2026-07-28). The types declare `permission.ask` with a mutable `status`, but it **never fires** on 1.18.9 — verified in an interactive TUI. Only the observational `permission.asked` / `permission.replied` events arrive, on the generic `event` hook |
 | Session history | `~/.local/share/goose/sessions/<id>.jsonl`; line 1 header `{working_dir, description, message_count, total_tokens, …}`, then `{id, role, content, created}` where **`content` is a structured block array** (`text`, `toolRequest{id,toolCall}`, `toolResponse{id,toolResult{status}}`) — analogous to Claude's content blocks | SQLite `opencode.db`, **`journal_mode = wal`** (concurrent read-only is safe). No JSON `storage/` dir exists in this version. **But direct DB access is unnecessary** — `opencode export <id>` is a stable CLI surface. ⚠ **Use it PLAIN, not `--sanitize`** (corrected 2026-07-28: `--sanitize` redacts text, tool input, output and metadata, making it useless as chat history). `session list` is project-scoped with no directory column |
 | Session correlation | Header `working_dir`, exact match | **`session.directory`** — the exact worktree path (verified). `project_id` is **per-repository, NOT per-worktree** (corrected 2026-07-28); `project.worktree` records only the first-seen directory and `project_directory` accumulates siblings. Session rows also carry `parent_id` (fork lineage), `title`, `slug`, `permission`, `agent`, `model` |
 | Pinnable session id | **Yes** — `goose session -n NAME` | No pin flag, but **`EventSessionCreated` delivers the id at creation** via the plugin `event` hook → no polling needed either |
@@ -283,7 +300,7 @@ Three **new** capability flags, now with verified per-agent values:
 |---|---|---|---|---|
 | `fork` | ✅ `--fork-session` | ✅ `fork <id>` | ❓ `-n` may only resume (OQ 10) | ✅ `--fork` + `session.parent_id` lineage |
 | `pinnable_session_id` | ✅ `--session-id` | ❌ poll | ✅ `-n NAME` | ⚠️ no pin flag, but `EventSessionCreated` returns the id — no poll needed |
-| `permission_interception` | ❌ | ❌ (signal only) | ❌ (hooks cannot deny) | ✅ `permission.ask` mutable `status` |
+| `permission_interception` | ❌ | ❌ (signal only) | ❌ (hooks cannot deny) | ❌ (corrected: `permission.ask` never fires — only observational events) |
 
 `fork` replaces the hardcoded `canFork` (`App.tsx:230`); `pinnable_session_id` replaces the Claude-only
 check at `lifecycle_service.rs:791`. Note `pinnable_session_id` is really answering *"can Sebenza avoid
@@ -1081,7 +1098,7 @@ eliminating the surface rather than escaping it. Never accept a free-form string
 | claude | `--dangerously-skip-permissions` | Claude's own prompts | Yes | No |
 | codex | `--yolo` | Codex's approval prompts | Yes — incl. `PermissionRequest` | No — the handler only emits `idle`; approve/deny happens in codex's own PTY UI |
 | **goose** | `GOOSE_MODE=auto` (env) | goose's permission inspector, annotations, **and LLM detection — every tool call allowed, no prompt** | Yes, after the fact (hooks still fire) | **No, categorically** — hooks cannot deny, with or without bypass |
-| **opencode** | `--auto` (flag) | Auto-approves permissions "not explicitly denied" — so a **deny rule still wins**. ⚠ Verified 2026-07-28: `--auto` also **bypasses `permission.ask` entirely** | Yes — generic `event` hook | **Type-level yes, runtime unconfirmed** — `permission.ask` returns a mutable `status`, but it is ruleset-gated and was not observed firing in `run` mode. Gated behind `phase-3-task-1` |
+| **opencode** | `--auto` (flag) | Auto-approves permissions "not explicitly denied" — so a **deny rule still wins** | Yes — `permission.asked` / `permission.replied` on the generic `event` hook | **No** — `permission.ask` never fires (verified in an interactive TUI on 1.18.9). Sebenza can report that a prompt is pending; it cannot answer it |
 
 The critical asymmetry: **even with no bypass, goose hooks cannot intercept a permission request** —
 that capability does not exist in the Open Plugins spec. So goose's toggle is not "skip prompts
@@ -1090,11 +1107,12 @@ gate, and now goose's own last human checkpoint is gone too." A goose worktree r
 construction**. This finding is specific to goose and does **not** generalise to opencode.
 
 **opencode is the opposite case, and it is an opportunity.** Because `permission.ask` hands the plugin
-a mutable `status`, a Sebenza-authored opencode plugin can genuinely **gate** tool calls — surfacing an
+a mutable `status`, it was expected that a Sebenza-authored opencode plugin could **gate** tool calls — surfacing an
 approve/deny prompt in the dashboard and enforcing the answer. No other agent in Sebenza can do this
 today: claude and codex bypass flags are unmediated, codex's `PermissionRequest` handler only emits a
 lifecycle status, and goose cannot gate at all. This means:
-- `permission_interception` is genuinely `true` for opencode and `false` for the other three.
+- ~~`permission_interception` is genuinely `true` for opencode~~ — **DISPROVED.** It is `false` for all
+  four agents. The hook is declared in the types but is never called, so nothing can gate a tool call.
 - opencode's `--auto` is **less dangerous** than `GOOSE_MODE=auto`, because it auto-approves only what
   is "not explicitly denied" — a deny rule still wins, and `permission.ask` still fires.
 - **Building the gating plugin is in scope** (see Application §9). It is the strongest safety control
