@@ -63,7 +63,7 @@
     {
       "id": "phase-1",
       "name": "Agent abstraction & capability model",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -112,45 +112,51 @@
           "id": "phase-1-task-7",
           "name": "Write tests for registry-resolved server dispatch",
           "description": "FR-1.5. Failing tests asserting refresh_agent_terminal, agents_conversation, prepare_agent_send and submit_delay_for_branch resolve the agent via get_agent_definition and match on BuiltinAgentId rather than on raw strings.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "83ccd3d"
         },
         {
           "id": "phase-1-task-8",
           "name": "Route all server dispatch sites through the registry",
           "description": "FR-1.5. Replace the Some(\"claude\")/Some(\"codex\") string matches at server.rs 1162-63, 1233-34, 1283-84 with a resolve-then-enum-match, following the pattern submit_delay_for_branch (919-933) already uses. Add StreamProvider plumbing in agent_stream.rs. Widening string arms instead would forfeit the exhaustiveness guarantee this refactor exists for.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "83ccd3d"
         },
         {
           "id": "phase-1-task-9",
           "name": "Write tests for capability-driven frontend gating",
           "description": "FR-6.2, FR-6.4. Failing tests for canFork reading capabilities.fork, supportsWorktreeChat failing closed rather than falling back to a hardcoded id list, WorktreeConversationPanel's label and chat gate, MobileChatSurface provider dispatch, and capability-derived 409 message text.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "f7dc21f"
         },
         {
           "id": "phase-1-task-10",
           "name": "Replace hardcoded agent identity in the frontend and API messages",
           "description": "FR-6.2, FR-6.4. App.tsx:230 canFork to capability; App.tsx:162-169 supportsWorktreeChat fallback to false (fail closed, hide the tab); WorktreeConversationPanel.tsx:169-170 label and supportsAgentChat; MobileChatSurface.tsx:90,321. Replace the 'only available for Claude and Codex worktrees' 409 strings with text derived from declared capabilities.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "f7dc21f"
         },
         {
           "id": "phase-1-task-11",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md. Behaviour for claude and codex must be unchanged end-to-end - this phase is a pure refactor with no new agents.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "f7dc21f"
         }
-      ]
+      ],
+      "checkpoint_sha": "f7dc21f"
     },
     {
       "id": "phase-2",
       "name": "opencode at full parity (+ shared controls)",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for opencode invocation and binary resolution",
           "description": "FR-3.2, FR-3.7. Failing tests for fresh/-c/-s/--fork argv, --auto appended like the other flag-based bypasses, --title/--agent/--model/--dir, and binary resolution that probes ~/.opencode/bin explicitly since a plain which() can fail on a working install.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-2-task-2",
