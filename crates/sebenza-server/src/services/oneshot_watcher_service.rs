@@ -36,6 +36,10 @@ pub enum OneshotDecision {
 /// has a PR, and the current idle-timer state. Grace logic:
 /// `stopped`/`error` fire immediately; `idle`/`closed` need the grace window;
 /// anything else resets the timer.
+///
+/// `AwaitingPermission` deliberately falls into "anything else": a oneshot run blocked on
+/// a permission prompt is waiting for a *human*, not finished. Treating it as idle would
+/// auto-close the worktree and kill the agent mid-task.
 pub fn decide(
     lifecycle: AgentLifecycle,
     has_pr: bool,
@@ -73,6 +77,7 @@ fn lifecycle_label(lifecycle: AgentLifecycle) -> &'static str {
         AgentLifecycle::Closed => "closed",
         AgentLifecycle::Running => "running",
         AgentLifecycle::Starting => "starting",
+        AgentLifecycle::AwaitingPermission => "awaiting permission",
     }
 }
 
@@ -180,6 +185,26 @@ fn resolve_meta(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn awaiting_permission_never_fires_and_resets_the_idle_timer() {
+        // A oneshot run blocked on a permission prompt is waiting for a HUMAN. Firing here
+        // would auto-close the worktree and kill the agent mid-task.
+        let decision = decide(AgentLifecycle::AwaitingPermission, false, Some(0), 10_000_000, 1_000);
+        match decision {
+            OneshotDecision::Wait { idle_since_ms } => assert_eq!(
+                idle_since_ms, None,
+                "the idle timer must reset while awaiting permission, however long it waits"
+            ),
+            other => panic!("must not fire while awaiting permission, got {other:?}"),
+        }
+
+        // Contrast: plain Idle past the grace window DOES fire.
+        assert!(matches!(
+            decide(AgentLifecycle::Idle, false, Some(0), 10_000_000, 1_000),
+            OneshotDecision::Fire { .. }
+        ));
+    }
 
     #[test]
     fn non_terminal_running_resets_timer() {
