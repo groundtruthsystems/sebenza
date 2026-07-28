@@ -131,6 +131,8 @@ vi.mock("./lib/api", () => ({
   setUpProject: vi.fn(),
   removeProject: vi.fn(),
   createWorktreeTab: vi.fn(),
+  createWorktreeShellTab: vi.fn(),
+  createWorktreeAgentTab: vi.fn(),
   deleteWorktreeTab: vi.fn(),
   selectWorktreeTab: vi.fn(),
 }));
@@ -139,6 +141,7 @@ import App from "./App";
 import {
   api,
   attachWorktreeConversation,
+  createWorktreeAgentTab,
   connectWorktreeConversationStream,
   fetchWorktrees,
   refreshWorktreeAgentTerminal,
@@ -235,6 +238,7 @@ function createWorktree(
 ): WorktreeInfo {
   return {
     branch,
+    kind: "linked",
     label: null,
     archived: false,
     agent: "waiting",
@@ -573,22 +577,74 @@ describe("App create selection", () => {
   });
 
   it("shows a success toast when pulling main succeeds", async () => {
+    // Pull now lives in the repo row's actions menu, not a sidebar footer strip.
     vi.mocked(api.fetchConfig).mockResolvedValue(createConfig({
       projectDir: "/repo",
       mainBranch: "main",
     }));
-    vi.mocked(fetchWorktrees).mockResolvedValue([]);
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main", { kind: "main" })]);
     vi.mocked(api.pullMain).mockResolvedValueOnce({ status: "updated" });
 
     render(<App />);
 
-    await screen.findByText("Select a worktree");
-    await screen.findByText("main");
+    fireEvent.click(await screen.findByLabelText("Actions for main"));
     fireEvent.click(screen.getByRole("button", { name: "Pull" }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Pull" }));
 
     expect(api.pullMain).toHaveBeenCalledWith({ body: {} });
     expect(await screen.findByRole("alert")).toHaveTextContent('Pulled latest "main" from remote');
+  });
+
+  it("omits merge, archive, remove and sub-worktree from the repo row menu", async () => {
+    // These are refused server-side for the main checkout, so they must not be
+    // offered at all — omitted, not merely disabled.
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("main", { kind: "main" }),
+      createWorktree("feature/x"),
+    ]);
+
+    render(<App />);
+    fireEvent.click(await screen.findByLabelText("Actions for main"));
+
+    const menu = within(document.querySelector("[data-worktree-row-menu]") as HTMLElement);
+    expect(menu.queryByRole("button", { name: "Merge" })).toBeNull();
+    expect(menu.queryByRole("button", { name: "Archive" })).toBeNull();
+    expect(menu.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(menu.queryByRole("button", { name: "Create sub-worktree" })).toBeNull();
+    // Close and Pull remain.
+    expect(menu.getByRole("button", { name: "Close" })).toBeInTheDocument();
+    expect(menu.getByRole("button", { name: "Pull" })).toBeInTheDocument();
+  });
+
+  it("still offers the full action menu for a linked worktree", async () => {
+    // Guards against over-hiding: the trimming must be scoped to kind === "main".
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("main", { kind: "main" }),
+      createWorktree("feature/x"),
+    ]);
+
+    render(<App />);
+    fireEvent.click(await screen.findByLabelText("Actions for feature/x"));
+    const menu = within(document.querySelector("[data-worktree-row-menu]") as HTMLElement);
+    for (const name of ["Merge", "Archive", "Remove", "Create sub-worktree"]) {
+      expect(menu.getByRole("button", { name })).toBeInTheDocument();
+    }
+    expect(menu.queryByRole("button", { name: "Pull" })).toBeNull();
+  });
+
+  it("renders linked repos as footer pull strips, separately from the repo row", async () => {
+    // Linked repos are separate repositories with no worktree/session, so they
+    // keep the SidebarRepoRow treatment the main branch no longer uses.
+    vi.mocked(api.fetchConfig).mockResolvedValue(createConfig({
+      projectDir: "/repo",
+      mainBranch: "main",
+      linkedRepos: [{ alias: "docs", dir: "/repo-docs" }],
+    }));
+    vi.mocked(fetchWorktrees).mockResolvedValue([createWorktree("main", { kind: "main" })]);
+
+    render(<App />);
+    await screen.findByLabelText("Actions for main");
+    expect(await screen.findByText("docs")).toBeInTheDocument();
   });
 
   it("selects the primary paired worktree when Both is created without a prior selection", async () => {
@@ -946,5 +1002,133 @@ describe("App create selection", () => {
     remoteBranches.resolve([{ name: "feature/local-only" }, { name: "feature/remote-only" }]);
 
     expect(await screen.findByRole("button", { name: "feature/remote-only" })).toBeInTheDocument();
+  });
+  it("starts a fresh provider session from the tab bar", async () => {
+    // A Claude worktree can start a Codex session against the same branch.
+    const open = createWorktree("feature/x", {
+      mux: "\u2713",
+      agent: "idle",
+      agentName: "claude",
+      agentLabel: "Claude",
+      tabs: [
+        {
+          tabId: "root",
+          kind: "root",
+          label: "Root",
+          seq: null,
+          sessionId: null,
+          agent: "claude",
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+      activeTabId: "root",
+    });
+    vi.mocked(fetchWorktrees).mockResolvedValue([open]);
+    vi.mocked(createWorktreeAgentTab).mockResolvedValue({
+      tabId: "agent-codex-1",
+      kind: "agent",
+      label: "Codex",
+      seq: 1,
+      sessionId: null,
+      agent: "codex",
+      createdAt: "2026-01-01T00:00:00Z",
+    });
+
+    render(<App />);
+    await screen.findByTitle("feature/x");
+
+    fireEvent.click(screen.getByLabelText("New tab"));
+    const menu = within(document.querySelector(".tab-add-container") as HTMLElement);
+    fireEvent.click(menu.getByRole("button", { name: /New session/ }));
+    fireEvent.click(menu.getByRole("button", { name: "Codex" }));
+
+    await waitFor(() => {
+      expect(createWorktreeAgentTab).toHaveBeenCalledWith("feature/x", "codex");
+    });
+  });
+
+  it("offers New session but not Fork for a custom-agent worktree", async () => {
+    const open = createWorktree("feature/goose", {
+      mux: "\u2713",
+      agent: "idle",
+      agentName: "goose",
+      agentLabel: "Goose",
+      tabs: [
+        {
+          tabId: "root",
+          kind: "root",
+          label: "Root",
+          seq: null,
+          sessionId: null,
+          agent: "goose",
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+      activeTabId: "root",
+    });
+    vi.mocked(fetchWorktrees).mockResolvedValue([open]);
+    vi.mocked(api.fetchConfig).mockResolvedValue(
+      createConfig({
+        agents: [
+          ...createConfig().agents,
+          {
+            id: "goose",
+            label: "Goose",
+            kind: "custom",
+            capabilities: {
+              terminal: true,
+              inAppChat: false,
+              conversationHistory: false,
+              interrupt: false,
+              resume: false,
+              fork: false,
+            },
+          },
+        ],
+      }),
+    );
+
+    render(<App />);
+    await screen.findByTitle("feature/goose");
+
+    fireEvent.click(screen.getByLabelText("New tab"));
+    const menu = within(document.querySelector(".tab-add-container") as HTMLElement);
+    // Goose cannot fork, but a fresh session and a terminal are still offered.
+    expect(menu.queryByRole("button", { name: "Fork" })).toBeNull();
+    expect(menu.getByRole("button", { name: "Terminal" })).toBeInTheDocument();
+    expect(menu.getByRole("button", { name: /New session/ })).toBeInTheDocument();
+  });
+
+  it("shows an error toast when starting a provider session fails", async () => {
+    const open = createWorktree("feature/x", {
+      mux: "\u2713",
+      agent: "idle",
+      agentName: "claude",
+      agentLabel: "Claude",
+      tabs: [
+        {
+          tabId: "root",
+          kind: "root",
+          label: "Root",
+          seq: null,
+          sessionId: null,
+          agent: "claude",
+          createdAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+      activeTabId: "root",
+    });
+    vi.mocked(fetchWorktrees).mockResolvedValue([open]);
+    vi.mocked(createWorktreeAgentTab).mockRejectedValueOnce(new Error("agent is not configured"));
+
+    render(<App />);
+    await screen.findByTitle("feature/x");
+
+    fireEvent.click(screen.getByLabelText("New tab"));
+    const menu = within(document.querySelector(".tab-add-container") as HTMLElement);
+    fireEvent.click(menu.getByRole("button", { name: /New session/ }));
+    fireEvent.click(menu.getByRole("button", { name: "Codex" }));
+
+    expect(await screen.findByText(/agent is not configured/)).toBeInTheDocument();
   });
 });

@@ -256,4 +256,55 @@ mod tests {
         let err = plan_session_layout("/repo", "feature", &[agent, bad], &ctx()).unwrap_err();
         assert!(err.contains("has no command"));
     }
+
+    /// The context the main-repo open path builds: worktree == repo, and an empty
+    /// agent command because no agent pane is planned.
+    fn repo_ctx() -> SessionLayoutContext {
+        SessionLayoutContext {
+            repo_root: "/repo".to_string(),
+            worktree_path: "/repo".to_string(),
+            pane_commands: PaneCommandSet {
+                agent: String::new(),
+                shell: "managed-shell".to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn repo_shell_plan_has_a_single_shell_pane_at_the_repo_root() {
+        let mut shell = template("shell", PaneKind::Shell);
+        shell.focus = Some(true);
+        let plan = plan_session_layout("/repo", "main", &[shell], &repo_ctx()).unwrap();
+
+        assert_eq!(plan.panes.len(), 1);
+        assert_eq!(plan.panes[0].kind, PaneKind::Shell);
+        assert_eq!(plan.panes[0].cwd, "/repo");
+        assert_eq!(plan.panes[0].split, None);
+        assert_eq!(plan.focus_pane_index, 0);
+        // A shell pane is created *with* the window, so it has no typed command.
+        assert_eq!(plan.panes[0].startup_command, None);
+    }
+
+    #[test]
+    fn repo_shell_plan_ignores_the_agent_command() {
+        // Locks in why the main-repo path may pass an empty agent command:
+        // `resolve_pane_startup_command` never reads it for a shell pane. If that
+        // stops holding, this fails rather than silently planning `sh -c ''`.
+        let plan =
+            plan_session_layout("/repo", "main", &[template("shell", PaneKind::Shell)], &repo_ctx())
+                .unwrap();
+        assert_eq!(plan.panes[0].startup_command, None);
+        assert_eq!(plan.shell_command, "managed-shell");
+    }
+
+    #[test]
+    fn repo_shell_plan_window_name_is_the_main_branch() {
+        let plan =
+            plan_session_layout("/repo", "main", &[template("shell", PaneKind::Shell)], &repo_ctx())
+                .unwrap();
+        assert_eq!(plan.window_name, build_worktree_window_name("main"));
+        assert_eq!(plan.window_name, "sebenza-main");
+        // Same tmux session as every worktree in this project — only the window differs.
+        assert_eq!(plan.session_name, build_project_session_name("/repo"));
+    }
 }

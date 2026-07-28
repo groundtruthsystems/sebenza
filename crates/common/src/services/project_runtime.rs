@@ -1,7 +1,8 @@
 use crate::adapters::tmux::build_worktree_window_name;
 use crate::domain::model::{
     AgentLifecycle, AgentRuntimeState, GitWorktreeRuntimeState, ManagedWorktreeRuntimeState,
-    OneshotMeta, PrEntry, ServiceRuntimeState, SessionRuntimeState, WorktreeSource, WorktreeTab,
+    OneshotMeta, PrEntry, ServiceRuntimeState, SessionRuntimeState, WorktreeKind, WorktreeSource,
+    WorktreeTab,
 };
 use std::collections::HashMap;
 
@@ -9,6 +10,7 @@ use std::collections::HashMap;
 /// `None` means "leave existing value untouched" on update.
 pub struct UpsertInput {
     pub worktree_id: String,
+    pub kind: WorktreeKind,
     pub branch: String,
     pub label: Option<String>,
     pub base_branch: Option<String>,
@@ -45,6 +47,7 @@ impl ProjectRuntime {
                 .insert(input.branch.clone(), input.worktree_id.clone());
 
             existing.path = input.path;
+            existing.kind = input.kind;
             existing.branch = input.branch.clone();
             existing.label = input.label;
             existing.base_branch = input.base_branch;
@@ -190,6 +193,7 @@ fn make_default_state(input: UpsertInput) -> ManagedWorktreeRuntimeState {
     let window_name = build_worktree_window_name(&input.branch);
     ManagedWorktreeRuntimeState {
         worktree_id: input.worktree_id,
+        kind: input.kind,
         branch: input.branch.clone(),
         label: input.label,
         base_branch: input.base_branch,

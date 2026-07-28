@@ -10,6 +10,7 @@ function createWorktree(
 ): WorktreeInfo {
   return {
     branch,
+    kind: "linked",
     label: null,
     archived: false,
     agent: "claude",

@@ -2,9 +2,9 @@
 //! `sebenza-cli --completions <sub>` (invoked by those scripts) lists worktree branches
 //! for dynamic completion. Branch listing shells out to git — no server needed.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use common::adapters::git::GitGateway;
+use common::adapters::git::{canonical_path, split_repo_root_entry, GitGateway};
 use common::config::project_root;
 
 /// Subcommands that take a `<branch>` argument (get dynamic completion).
@@ -148,11 +148,14 @@ fn list_worktree_branches() -> Vec<String> {
         .map(|c| c.to_string_lossy().to_string())
         .unwrap_or_default();
     let root = project_root(&cwd);
-    let root_canon = canonical(&root);
-    GitGateway::new()
-        .list_worktrees(&cwd)
+    let root_canon = canonical_path(&root);
+    // The repo root is included: `sebenza-cli open main` / `close main` are valid
+    // now that the main checkout can be opened as a terminal session.
+    let (root_entry, linked) =
+        split_repo_root_entry(GitGateway::new().list_worktrees(&cwd), &root_canon);
+    root_entry
         .into_iter()
-        .filter(|e| !e.bare && canonical(&e.path) != root_canon)
+        .chain(linked)
         .map(|e| {
             e.branch.clone().unwrap_or_else(|| {
                 Path::new(&e.path)
@@ -162,10 +165,4 @@ fn list_worktree_branches() -> Vec<String> {
             })
         })
         .collect()
-}
-
-fn canonical(path: &str) -> String {
-    std::fs::canonicalize(path)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| PathBuf::from(path).to_string_lossy().to_string())
 }

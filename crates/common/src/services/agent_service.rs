@@ -125,10 +125,19 @@ fn built_in_invocation(
             .unwrap_or_else(|| " --continue".to_string());
         return format!("claude{yolo}{target}{prompt_suffix}");
     }
+    // A fresh launch may pin its own session id, so a tab whose pane is rebuilt
+    // later can `--resume` it instead of losing its conversation.
+    let pin = inv
+        .pin_session_id
+        .map(|id| format!(" --session-id {}", quote_shell(id)))
+        .unwrap_or_default();
     if let Some(sys) = inv.system_prompt {
-        return format!("claude{yolo} --append-system-prompt {}{prompt_suffix}", quote_shell(sys));
+        return format!(
+            "claude{yolo}{pin} --append-system-prompt {}{prompt_suffix}",
+            quote_shell(sys)
+        );
     }
-    format!("claude{yolo}{prompt_suffix}")
+    format!("claude{yolo}{pin}{prompt_suffix}")
 }
 
 const CUSTOM_VARS: [(&str, &str); 6] = [
@@ -208,6 +217,7 @@ mod tests {
                 conversation_history: true,
                 interrupt: true,
                 resume: true,
+                fork: true,
             },
             implementation: AgentImplementation::Builtin(id.to_string()),
         }
@@ -260,5 +270,65 @@ mod tests {
         // The bootstrap's own single quotes are shell-escaped by the outer quoting.
         assert!(cmd.contains("set -a; . '\\''/x/runtime.env'\\''; set +a"));
         assert!(cmd.contains("exec "));
+    }
+
+    #[test]
+    fn claude_fresh_pins_the_session_id_when_asked() {
+        // Lets a fresh agent tab be resumed after its pane is rebuilt, instead of
+        // silently losing the conversation.
+        let agent = builtin("claude");
+        let mut invocation = inv(&agent);
+        invocation.pin_session_id = Some("11111111-2222-3333-4444-555555555555");
+        let cmd = agent_invocation(&invocation);
+        assert!(
+            cmd.contains("--session-id '11111111-2222-3333-4444-555555555555'"),
+            "expected a pinned session id, got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn claude_fresh_pins_alongside_a_system_prompt() {
+        let agent = builtin("claude");
+        let mut invocation = inv(&agent);
+        invocation.pin_session_id = Some("abc");
+        invocation.system_prompt = Some("be terse");
+        let cmd = agent_invocation(&invocation);
+        assert!(cmd.contains("--session-id 'abc'"), "got: {cmd}");
+        assert!(cmd.contains("--append-system-prompt 'be terse'"), "got: {cmd}");
+    }
+
+    #[test]
+    fn claude_fresh_omits_the_session_flag_when_unpinned() {
+        let agent = builtin("claude");
+        let cmd = agent_invocation(&inv(&agent));
+        assert!(!cmd.contains("--session-id"), "got: {cmd}");
+    }
+
+    #[test]
+    fn a_fresh_custom_agent_runs_its_start_command() {
+        // The path a Goose/OpenCode provider tab takes: no session discovery, no
+        // resume — just the configured start command with the env exports.
+        let agent = AgentDefinition {
+            id: "goose".to_string(),
+            label: "Goose".to_string(),
+            kind: "custom",
+            capabilities: AgentCapabilities {
+                terminal: true,
+                in_app_chat: false,
+                conversation_history: false,
+                interrupt: false,
+                resume: false,
+                fork: false,
+            },
+            implementation: AgentImplementation::Custom(crate::domain::config::CustomAgentConfig {
+                label: "Goose".to_string(),
+                start_command: "goose session start ${PROMPT}".to_string(),
+                resume_command: None,
+            }),
+        };
+        let cmd = agent_invocation(&inv(&agent));
+        assert!(cmd.contains("goose session start"), "got: {cmd}");
+        // `${PROMPT}` is rewritten to the exported env var, not interpolated.
+        assert!(cmd.contains("SEBENZA_AGENT_PROMPT"), "got: {cmd}");
     }
 }

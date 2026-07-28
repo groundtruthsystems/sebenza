@@ -290,26 +290,32 @@ export default function TopBar({
                   {isMobile ? "C" : "Close"}
                 </Btn>
               )}
-              <Btn
-                variant="accent-outline"
-                onClick={onarchive}
-                disabled={archiving || worktree.creating}
-                title={worktree.archived ? "Restore archived worktree" : "Archive worktree"}
-              >
-                {isMobile
-                  ? worktree.archived
-                    ? "Re"
-                    : "A"
-                  : worktree.archived
-                    ? "Restore"
-                    : "Archive"}
-              </Btn>
-              <Btn variant="accent-outline" onClick={onmerge} title="Merge worktree">
-                {isMobile ? "M" : "Merge"}
-              </Btn>
-              <Btn variant="danger-outline" onClick={onremove} title="Remove worktree">
-                {isMobile ? "R" : "Remove"}
-              </Btn>
+              {/* The repository's own checkout can be closed and opened in an
+                  editor, but never archived, merged or removed. */}
+              {worktree.kind !== "main" && (
+                <>
+                  <Btn
+                    variant="accent-outline"
+                    onClick={onarchive}
+                    disabled={archiving || worktree.creating}
+                    title={worktree.archived ? "Restore archived worktree" : "Archive worktree"}
+                  >
+                    {isMobile
+                      ? worktree.archived
+                        ? "Re"
+                        : "A"
+                      : worktree.archived
+                        ? "Restore"
+                        : "Archive"}
+                  </Btn>
+                  <Btn variant="accent-outline" onClick={onmerge} title="Merge worktree">
+                    {isMobile ? "M" : "Merge"}
+                  </Btn>
+                  <Btn variant="danger-outline" onClick={onremove} title="Remove worktree">
+                    {isMobile ? "R" : "Remove"}
+                  </Btn>
+                </>
+              )}
             </>
           )}
 

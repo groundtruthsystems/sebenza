@@ -23,10 +23,46 @@ describe("worktree selection persistence", () => {
       resolveSelectedBranch(
         "feature/last-used",
         { branch: "feature/last-used" },
-        [{ branch: "feature/last-used", mux: "✗" }],
+        [{ branch: "feature/last-used", mux: "✗", kind: "linked" }],
         true,
       ),
     ).toBe("feature/last-used");
+  });
+
+  it("prefers an open worktree over the repo row", () => {
+    // A main session left open should not become the default landing selection
+    // ahead of actual work.
+    expect(
+      resolveSelectedBranch(
+        null,
+        undefined,
+        [
+          { branch: "main", mux: "✓", kind: "main" },
+          { branch: "feature/x", mux: "✓", kind: "linked" },
+        ],
+        true,
+      ),
+    ).toBe("feature/x");
+  });
+
+  it("prefers a closed worktree over an open repo row", () => {
+    expect(
+      resolveSelectedBranch(
+        null,
+        undefined,
+        [
+          { branch: "main", mux: "✓", kind: "main" },
+          { branch: "feature/x", mux: "✗", kind: "linked" },
+        ],
+        true,
+      ),
+    ).toBe("feature/x");
+  });
+
+  it("falls back to the repo row when it is the only entry", () => {
+    expect(
+      resolveSelectedBranch(null, undefined, [{ branch: "main", mux: "✓", kind: "main" }], true),
+    ).toBe("main");
   });
 
   it("falls back to an open worktree when the saved branch is gone", () => {
@@ -35,8 +71,8 @@ describe("worktree selection persistence", () => {
         "feature/missing",
         undefined,
         [
-          { branch: "feature/first", mux: "✗" },
-          { branch: "feature/open", mux: "✓" },
+          { branch: "feature/first", mux: "✗", kind: "linked" },
+          { branch: "feature/open", mux: "✓", kind: "linked" },
         ],
         true,
       ),

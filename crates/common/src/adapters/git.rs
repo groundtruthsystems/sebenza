@@ -113,6 +113,50 @@ fn worktree_entry_path_exists(entry: &GitWorktreeEntry) -> bool {
         .unwrap_or(false)
 }
 
+/// The set of branches checked out in any non-bare worktree.
+///
+/// Deliberately does **not** exclude the repo root: the main checkout holds the
+/// main branch, and that is exactly why the main branch must not be offered as
+/// available for a *new* worktree. Callers must pass the output of the non-live
+/// `list_worktrees` so stale registrations still count as occupied.
+pub fn checked_out_branch_names(entries: &[GitWorktreeEntry]) -> std::collections::BTreeSet<String> {
+    entries
+        .iter()
+        .filter(|entry| !entry.bare)
+        .filter_map(|entry| entry.branch.clone())
+        .collect()
+}
+
+/// Whether `entry` is the repository's primary checkout rather than a linked
+/// worktree. `git worktree list --porcelain` carries no marker for the primary
+/// checkout beyond being listed first, so this is a path comparison against an
+/// already-canonicalized repo root.
+pub fn is_repo_root_entry(entry: &GitWorktreeEntry, canonical_repo_root: &str) -> bool {
+    canonical_path(&entry.path) == canonical_repo_root
+}
+
+/// Split `entries` into the repo root's own entry and the linked worktrees,
+/// dropping bare entries. The single predicate every caller that needs to
+/// distinguish "the main checkout" from "a worktree" should go through.
+pub fn split_repo_root_entry(
+    entries: Vec<GitWorktreeEntry>,
+    canonical_repo_root: &str,
+) -> (Option<GitWorktreeEntry>, Vec<GitWorktreeEntry>) {
+    let mut root = None;
+    let mut linked = Vec::new();
+    for entry in entries {
+        if entry.bare {
+            continue;
+        }
+        if root.is_none() && is_repo_root_entry(&entry, canonical_repo_root) {
+            root = Some(entry);
+        } else {
+            linked.push(entry);
+        }
+    }
+    (root, linked)
+}
+
 /// Stateless git gateway. All methods shell out per-call (matching the TS adapter).
 #[derive(Clone, Default)]
 pub struct GitGateway;
@@ -416,7 +460,10 @@ fn is_registered_worktree(entries: &[GitWorktreeEntry], worktree_path: &str) -> 
         .any(|entry| canonical_path(&entry.path) == resolved)
 }
 
-fn canonical_path(path: &str) -> String {
+/// Canonicalize `path`, falling back to the input when it cannot be resolved
+/// (e.g. the directory no longer exists). Shared by every caller that has to
+/// compare a worktree entry's path against a known root.
+pub fn canonical_path(path: &str) -> String {
     fs::canonicalize(path)
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| path.to_string())
@@ -485,5 +532,82 @@ bare
         assert!(parse_git_worktree_porcelain("").is_empty());
         // Stray attribute lines with no preceding `worktree ` are ignored.
         assert!(parse_git_worktree_porcelain("branch refs/heads/x\nHEAD abc").is_empty());
+    }
+
+    fn entry(path: &str, branch: Option<&str>, bare: bool) -> GitWorktreeEntry {
+        GitWorktreeEntry {
+            path: path.to_string(),
+            branch: branch.map(str::to_string),
+            head: None,
+            detached: false,
+            bare,
+        }
+    }
+
+    #[test]
+    fn porcelain_includes_the_main_checkout_entry() {
+        // The primary checkout is always emitted first and is well-formed: git
+        // gives it no marker, which is why callers must compare paths.
+        let entries = parse_git_worktree_porcelain(
+            "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /repo/wt/a\nHEAD def\nbranch refs/heads/a\n",
+        );
+        assert_eq!(entries[0].path, "/repo");
+        assert_eq!(entries[0].branch.as_deref(), Some("main"));
+        assert!(!entries[0].bare);
+        assert!(!entries[0].detached);
+    }
+
+    #[test]
+    fn is_repo_root_entry_distinguishes_the_root_from_linked_worktrees() {
+        // Paths that don't exist fall back to themselves, so this is a pure
+        // string comparison here — the canonicalizing case is covered below.
+        assert!(is_repo_root_entry(&entry("/repo", Some("main"), false), "/repo"));
+        assert!(!is_repo_root_entry(&entry("/repo/wt/a", Some("a"), false), "/repo"));
+    }
+
+    #[test]
+    fn is_repo_root_entry_matches_through_symlinks() {
+        let tmp = std::env::temp_dir().join(format!("sebenza-git-root-{}", std::process::id()));
+        let real = tmp.join("real");
+        let link = tmp.join("link");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&real).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let canonical_root = canonical_path(&real.to_string_lossy());
+        // The entry names the symlink; the root names the real dir. They must match.
+        assert!(is_repo_root_entry(
+            &entry(&link.to_string_lossy(), Some("main"), false),
+            &canonical_root
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn split_repo_root_entry_returns_root_separately_and_drops_bare() {
+        let (root, linked) = split_repo_root_entry(
+            vec![
+                entry("/repo", Some("main"), false),
+                entry("/repo/.bare", None, true),
+                entry("/repo/wt/a", Some("a"), false),
+                entry("/repo/wt/b", Some("b"), false),
+            ],
+            "/repo",
+        );
+        assert_eq!(root.unwrap().branch.as_deref(), Some("main"));
+        assert_eq!(
+            linked.iter().map(|e| e.path.as_str()).collect::<Vec<_>>(),
+            vec!["/repo/wt/a", "/repo/wt/b"]
+        );
+    }
+
+    #[test]
+    fn split_repo_root_entry_returns_none_when_the_root_is_absent() {
+        // Happens when listing from inside a linked worktree of another repo.
+        let (root, linked) =
+            split_repo_root_entry(vec![entry("/other/wt/a", Some("a"), false)], "/repo");
+        assert!(root.is_none());
+        assert_eq!(linked.len(), 1);
     }
 }

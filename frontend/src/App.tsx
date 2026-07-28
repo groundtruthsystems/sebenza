@@ -16,6 +16,7 @@ import ProjectSwitcher from "./lib/ProjectSwitcher";
 import MigrationBanner from "./lib/MigrationBanner";
 import Toggle from "./lib/Toggle";
 import TabBar from "./lib/TabBar";
+import { agentCan } from "./lib/agent-capabilities";
 import DiffDialog from "./lib/DiffDialog";
 import TracksBoard from "./lib/TracksBoard";
 import type {
@@ -44,6 +45,7 @@ import {
   activePrefix,
   api,
   createWorktreeTab,
+  createWorktreeAgentTab,
   createWorktreeShellTab,
   deleteWorktreeTab,
   fetchWorktrees,
@@ -160,12 +162,7 @@ export default function App() {
   const worktreeSearchInputRef = useRef<HTMLInputElement>(null);
 
   function supportsWorktreeChat(worktree: WorktreeInfo | undefined): boolean {
-    if (!worktree?.agentName) return false;
-    const agent = config.agents.find((candidate) => candidate.id === worktree.agentName);
-    return (
-      agent?.capabilities.inAppChat ??
-      (worktree.agentName === "codex" || worktree.agentName === "claude")
-    );
+    return agentCan(config.agents, worktree?.agentName, "inAppChat");
   }
 
   // --- derived values ---
@@ -222,12 +219,12 @@ export default function App() {
   const canConnect =
     !!selectedBranch && selectedWorktree?.mux === "✓" && !selectedWorktree?.creating;
   const showWebChat = useWebChatUi && canConnect && supportsWorktreeChat(selectedWorktree);
-  // The tab bar shows for any connectable terminal worktree so a shell can be
-  // opened; forking (the "+") is only meaningful for the built-in agents that
-  // have a forkable session.
+  // The tab bar shows for any connectable terminal worktree: a shell or a fresh
+  // provider session is always available. Only *forking* needs a forkable
+  // session, which is a per-agent capability.
   const showTabBar = canConnect && !showWebChat;
-  const canFork =
-    selectedWorktree?.agentName === "claude" || selectedWorktree?.agentName === "codex";
+  const canFork = agentCan(config.agents, selectedWorktree?.agentName, "fork");
+  const isMainRepoSelected = selectedWorktree?.kind === "main";
   const isSelectedOpening = selectedBranch ? openingBranches.has(selectedBranch) : false;
   const isSelectedArchiving = selectedBranch ? archivingBranches.has(selectedBranch) : false;
   const isSelectedAgentTerminalRefreshing = selectedBranch
@@ -643,6 +640,12 @@ export default function App() {
         setPullMainError(
           `Fast-forward failed: ${result.error ?? "unknown error"}.\nForce pull will reset main to match remote.`,
         );
+      } else if (result.status === "skipped_wrong_branch") {
+        // Forcing would not help — force-pull skips for the same reason.
+        setPullMainForce(false);
+        setPullMainError(
+          `The repository is not on "${config.mainBranch ?? "main"}" right now, so nothing was pulled.\nSwitch it back before pulling.`,
+        );
       } else {
         setPullMainError(result.error ?? result.status);
       }
@@ -671,6 +674,12 @@ export default function App() {
         setPullLinkedRepoForce(true);
         setPullLinkedRepoError(
           `Fast-forward failed: ${result.error ?? "unknown error"}.\nForce pull will reset to match remote.`,
+        );
+      } else if (result.status === "skipped_wrong_branch") {
+        // Forcing would not help — force-pull skips for the same reason.
+        setPullLinkedRepoForce(false);
+        setPullLinkedRepoError(
+          "The repository is not on its main branch right now, so nothing was pulled.\nSwitch it back before pulling.",
         );
       } else {
         setPullLinkedRepoError(result.error ?? result.status);
@@ -755,6 +764,20 @@ export default function App() {
       await refresh();
     } catch (err) {
       error(`Failed to create tab: ${errorMessage(err)}`);
+    } finally {
+      setTabBusy(false);
+    }
+  }
+
+  async function handleCreateAgentTab(agentId: string): Promise<void> {
+    const branch = selectedBranch;
+    if (!branch || tabBusy) return;
+    setTabBusy(true);
+    try {
+      await createWorktreeAgentTab(branch, agentId);
+      await refresh();
+    } catch (err) {
+      error(`Failed to start session: ${errorMessage(err)}`);
     } finally {
       setTabBusy(false);
     }
@@ -847,10 +870,11 @@ export default function App() {
       openCreateDialog();
     } else if (e.key === "m" || e.key === "M") {
       e.preventDefault();
-      if (selectedBranch) setMergeBranch(selectedBranch);
+      // Neither merging nor removing applies to the repository's own checkout.
+      if (selectedBranch && !isMainRepoSelected) setMergeBranch(selectedBranch);
     } else if (e.key === "d" || e.key === "D") {
       e.preventDefault();
-      if (selectedBranch) setRemoveBranch(selectedBranch);
+      if (selectedBranch && !isMainRepoSelected) setRemoveBranch(selectedBranch);
     } else if (e.key === "Enter") {
       if (
         selectedWorktree &&
@@ -1139,17 +1163,12 @@ export default function App() {
                 }}
                 onremove={(b) => setRemoveBranch(b)}
                 oncreatesubworktree={openSubworktreeDialog}
+                onpull={() => {
+                  setPullMainConfirm(true);
+                  setPullMainForce(false);
+                  setPullMainError("");
+                }}
               />
-              {config.projectDir && (
-                <SidebarRepoRow
-                  label={config.mainBranch ?? "main"}
-                  onpull={() => {
-                    setPullMainConfirm(true);
-                    setPullMainForce(false);
-                    setPullMainError("");
-                  }}
-                />
-              )}
               {(config.linkedRepos ?? [])
                 .filter((lr) => lr.dir)
                 .map((lr) => (
@@ -1245,10 +1264,12 @@ export default function App() {
                 <TabBar
                   tabs={selectedWorktree.tabs}
                   activeTabId={selectedWorktree.activeTabId}
+                  agents={config.agents}
                   busy={tabBusy}
                   canFork={canFork}
                   oncreate={handleCreateTab}
                   oncreateshell={handleCreateShellTab}
+                  oncreateagent={handleCreateAgentTab}
                   onselect={handleSelectTab}
                   ondelete={handleDeleteTab}
                 />
@@ -1299,18 +1320,33 @@ export default function App() {
                   )}
                 </div>
                 <div className="flex flex-col items-center gap-1">
-                  {selectedWorktree.profile && (
-                    <span className="text-xs text-muted">Profile: {selectedWorktree.profile}</span>
-                  )}
-                  {(selectedWorktree.agentLabel ?? selectedWorktree.agentName) && (
-                    <span className="text-xs text-muted">
-                      Agent: {selectedWorktree.agentLabel ?? selectedWorktree.agentName}
-                    </span>
-                  )}
-                  {selectedWorktree.agentName && !supportsWorktreeChat(selectedWorktree) && (
-                    <span className="text-xs text-muted">
-                      This agent runs in the terminal only.
-                    </span>
+                  {isMainRepoSelected ? (
+                    <>
+                      {/* No profile or agent applies to the repo checkout — show
+                          where it lives instead. */}
+                      <span className="text-xs text-muted">{selectedWorktree.path}</span>
+                      <span className="text-xs text-muted">
+                        Opens a terminal in the main repository.
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      {selectedWorktree.profile && (
+                        <span className="text-xs text-muted">
+                          Profile: {selectedWorktree.profile}
+                        </span>
+                      )}
+                      {(selectedWorktree.agentLabel ?? selectedWorktree.agentName) && (
+                        <span className="text-xs text-muted">
+                          Agent: {selectedWorktree.agentLabel ?? selectedWorktree.agentName}
+                        </span>
+                      )}
+                      {selectedWorktree.agentName && !supportsWorktreeChat(selectedWorktree) && (
+                        <span className="text-xs text-muted">
+                          This agent runs in the terminal only.
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
                 <button

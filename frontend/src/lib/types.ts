@@ -6,6 +6,7 @@ import type {
   ServiceStatus,
   TrackFileResponse,
   WorktreeCreationPhase,
+  WorktreeKind,
   WorktreeSource,
   WorktreeTab,
 } from "./api-contract";
@@ -62,6 +63,7 @@ export type {
   WorktreeCreateMode,
   WorktreeDiffResponse,
   WorktreeListResponse,
+  WorktreeKind,
   WorktreeSource,
   WorktreeTab,
   TrackStatus,
@@ -141,6 +143,9 @@ export interface DiffDialogProps {
 
 export interface WorktreeInfo {
   branch: string;
+  /** "main" is the repository's own checkout: openable, but never merged,
+   *  archived or removed. */
+  kind: WorktreeKind;
   label: string | null;
   baseBranch?: string;
   archived: boolean;

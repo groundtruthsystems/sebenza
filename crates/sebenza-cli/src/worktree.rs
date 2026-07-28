@@ -91,11 +91,12 @@ fn usage(command: &str) -> String {
         "tab" => [
             "Usage:",
             "  sebenza-cli tab <branch>                 List the agent tabs (★ marks the active one)",
-            "  sebenza-cli tab <branch> new             Create a new forked tab",
+            "  sebenza-cli tab <branch> new             Create a new tab (forks the current session by default)",
             "  sebenza-cli tab <branch> switch <tabId>  Switch the visible agent pane to a tab",
-            "  sebenza-cli tab <branch> close <tabId>   Delete a forked tab",
+            "  sebenza-cli tab <branch> close <tabId>   Delete a tab",
             "",
             "Options:",
+            "  --agent <id>             With \"new\": start a fresh session of this agent instead of forking",
             "  --help                   Show this help message",
         ]
         .join("\n"),
@@ -359,18 +360,35 @@ struct TabArgs {
     branch: String,
     action: TabAction,
     tab_id: Option<String>,
+    /// Start a fresh session of this agent instead of forking.
+    agent: Option<String>,
 }
 
 fn parse_tab(args: &[String]) -> Result<Parse<TabArgs>> {
     let mut positional: Vec<String> = Vec::new();
-    for arg in args {
+    let mut agent: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
         if arg == "--help" || arg == "-h" {
             return Ok(Parse::Help);
+        }
+        // Options must be handled before the `-` rejection below.
+        if arg == "--agent" || arg.starts_with("--agent=") {
+            let (value, consumed) = read_option_value(args, index, "--agent")?;
+            let value = value.trim().to_string();
+            if value.is_empty() {
+                return Err(anyhow!("--agent requires a value"));
+            }
+            agent = Some(value);
+            index = consumed + 1;
+            continue;
         }
         if arg.starts_with('-') {
             return Err(anyhow!("Unknown option: {arg}"));
         }
         positional.push(arg.clone());
+        index += 1;
     }
 
     let branch = positional
@@ -395,7 +413,10 @@ fn parse_tab(args: &[String]) -> Result<Parse<TabArgs>> {
     if positional.len() > 3 {
         return Err(anyhow!("Unexpected argument: {}", positional[3]));
     }
-    Ok(Parse::Parsed(TabArgs { branch, action, tab_id }))
+    if agent.is_some() && !matches!(action, TabAction::New) {
+        return Err(anyhow!("--agent is only valid for the \"new\" action"));
+    }
+    Ok(Parse::Parsed(TabArgs { branch, action, tab_id, agent }))
 }
 
 struct ListArgs {
@@ -520,7 +541,8 @@ async fn run_inner(ctx: &WorktreeContext) -> Result<i32> {
             let closed: Vec<String> = snapshot
                 .worktrees
                 .iter()
-                .filter(|w| !w.mux)
+                // The repo root is never prunable — it is not a removable worktree.
+                .filter(|w| !w.mux && w.kind != "main")
                 .map(|w| w.branch.clone())
                 .collect();
             if closed.is_empty() {
@@ -642,7 +664,12 @@ async fn run_inner(ctx: &WorktreeContext) -> Result<i32> {
             let base = http.resolve_project_base(&ctx.project_dir).await?;
             match parsed.action {
                 TabAction::New => {
-                    let tab = http.create_tab(&base, &parsed.branch).await?;
+                    let tab = match parsed.agent.as_deref() {
+                        Some(agent) => {
+                            http.create_agent_tab(&base, &parsed.branch, agent).await?
+                        }
+                        None => http.create_tab(&base, &parsed.branch).await?,
+                    };
                     println!("Created {} ({}) in {}", tab.label, tab.tab_id, parsed.branch);
                 }
                 TabAction::Switch => {

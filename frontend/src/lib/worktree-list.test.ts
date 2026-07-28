@@ -11,6 +11,7 @@ import type { WorktreeInfo, WorktreeListRow } from "./types";
 function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
     branch,
+    kind: "linked",
     label: null,
     archived: false,
     agent: "waiting",
@@ -179,5 +180,74 @@ describe("branchesWithAgentStatus", () => {
 
   it("restricts matches to the given branch set when provided", () => {
     expect(branchesWithAgentStatus(rows, "waiting", new Set(["second"]))).toEqual(["second"]);
+  });
+});
+
+describe("buildWorktreeListRows with the repo row", () => {
+  it("hoists the repo row to the top of the tree", () => {
+    // The server sorts by branch, so without hoisting "main" would land
+    // alphabetically among the worktrees branched off it.
+    const rows = buildWorktreeListRows([
+      createWorktree("aaa-first"),
+      createWorktree("main", { kind: "main" }),
+      createWorktree("zzz-last"),
+    ]);
+    expect(rows[0].worktree.branch).toBe("main");
+    expect(rows[0].depth).toBe(0);
+  });
+
+  it("nests main-based worktrees under the repo row", () => {
+    // The tree gains its trunk: previously every main-based worktree was depth 0.
+    const rows = buildWorktreeListRows([
+      createWorktree("main", { kind: "main" }),
+      createWorktree("feature/a", { baseBranch: "main" }),
+      createWorktree("feature/b", { baseBranch: "main" }),
+    ]);
+    expect(rows.map((r) => [r.worktree.branch, r.depth])).toEqual([
+      ["main", 0],
+      ["feature/a", 1],
+      ["feature/b", 1],
+    ]);
+  });
+
+  it("keeps grandchildren nesting under their own parent", () => {
+    const rows = buildWorktreeListRows([
+      createWorktree("main", { kind: "main" }),
+      createWorktree("feature/a", { baseBranch: "main" }),
+      createWorktree("feature/a-fix", { baseBranch: "feature/a" }),
+    ]);
+    expect(rows.map((r) => r.depth)).toEqual([0, 1, 2]);
+  });
+
+  it("flattens children to depth zero when the repo row is filtered out by search", () => {
+    // parentBranchOf only nests when the base branch is present in the list.
+    const filtered = filterWorktrees(
+      [
+        createWorktree("main", { kind: "main" }),
+        createWorktree("feature/a", { baseBranch: "main" }),
+      ],
+      { query: "feature", showArchived: false },
+    );
+    const rows = buildWorktreeListRows(filtered);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].worktree.branch).toBe("feature/a");
+    expect(rows[0].depth).toBe(0);
+  });
+
+  it("does not treat the repo row as its own parent", () => {
+    // The main entry carries no baseBranch, but guard the self-parent case too.
+    const rows = buildWorktreeListRows([
+      createWorktree("main", { kind: "main", baseBranch: "main" }),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].depth).toBe(0);
+  });
+
+  it("leaves ordering unchanged when there is no repo row", () => {
+    const rows = buildWorktreeListRows([
+      createWorktree("aaa-first"),
+      createWorktree("zzz-last"),
+    ]);
+    expect(rows.map((r) => r.worktree.branch)).toEqual(["aaa-first", "zzz-last"]);
   });
 });

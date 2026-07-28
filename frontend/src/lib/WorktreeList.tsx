@@ -36,6 +36,7 @@ export default function WorktreeList({
   onmerge,
   onremove,
   oncreatesubworktree,
+  onpull,
 }: {
   rows: WorktreeListRow[];
   removing: Set<string>;
@@ -49,6 +50,8 @@ export default function WorktreeList({
   onmerge: (branch: string) => void;
   onremove: (branch: string) => void;
   oncreatesubworktree: (branch: string) => void;
+  /** Pull the main branch — offered only on the repo row. */
+  onpull: (branch: string) => void;
 }) {
   const selectedBranch = useStore((s) => s.selectedBranch);
 
@@ -227,7 +230,11 @@ export default function WorktreeList({
           const isArchived = wt.archived;
           const isBusy = isRemoving || isInitializing;
           const hasLabel = !!wt.label;
+          // The repository's own checkout: openable as a terminal, but never a
+          // thing to merge, archive, remove or branch a sub-worktree from.
+          const isMain = wt.kind === "main";
           const hasBadgeRow =
+            isMain ||
             isArchived ||
             isCreating ||
             isInitializing ||
@@ -280,6 +287,14 @@ export default function WorktreeList({
                         className="flex min-w-0 flex-wrap items-center gap-1.5"
                         data-worktree-badge-row
                       >
+                        {isMain && (
+                          <span
+                            className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-edge text-muted"
+                            title="The main repository checkout — terminal only"
+                          >
+                            repo
+                          </span>
+                        )}
                         {wt.source === "oneshot" && (
                           <span
                             className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-edge text-muted"
@@ -371,48 +386,63 @@ export default function WorktreeList({
                   >
                     Close
                   </button>
-                  <button
-                    type="button"
-                    disabled={isCreating || isArchiving}
-                    className="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      runMenuAction(wt.branch, onarchive);
-                    }}
-                  >
-                    {wt.archived ? "Restore" : "Archive"}
-                  </button>
-                  <button
-                    type="button"
-                    className="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      runMenuAction(wt.branch, onmerge);
-                    }}
-                  >
-                    Merge
-                  </button>
-                  <button
-                    type="button"
-                    disabled={isCreating}
-                    className="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      runMenuAction(wt.branch, oncreatesubworktree);
-                    }}
-                  >
-                    Create sub-worktree
-                  </button>
-                  <button
-                    type="button"
-                    className="w-full px-2 py-1.5 rounded text-left text-xs text-danger hover:bg-hover"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      runMenuAction(wt.branch, onremove);
-                    }}
-                  >
-                    Remove
-                  </button>
+                  {isMain ? (
+                    <button
+                      type="button"
+                      className="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        runMenuAction(wt.branch, onpull);
+                      }}
+                    >
+                      Pull
+                    </button>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        disabled={isCreating || isArchiving}
+                        className="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          runMenuAction(wt.branch, onarchive);
+                        }}
+                      >
+                        {wt.archived ? "Restore" : "Archive"}
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          runMenuAction(wt.branch, onmerge);
+                        }}
+                      >
+                        Merge
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isCreating}
+                        className="w-full px-2 py-1.5 rounded text-left text-xs text-primary hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          runMenuAction(wt.branch, oncreatesubworktree);
+                        }}
+                      >
+                        Create sub-worktree
+                      </button>
+                      <button
+                        type="button"
+                        className="w-full px-2 py-1.5 rounded text-left text-xs text-danger hover:bg-hover"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          runMenuAction(wt.branch, onremove);
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </>
+                  )}
                 </div>
               )}
             </li>

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 /// Collapse runs of whitespace into a single `-`.
 fn whitespace_to_dash(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -54,6 +56,44 @@ pub fn sanitize_branch_name(raw: &str) -> String {
 /// A branch name is valid iff it is non-empty and already in sanitized form.
 pub fn is_valid_branch_name(raw: &str) -> bool {
     !raw.is_empty() && sanitize_branch_name(raw) == raw
+}
+
+/// Branch names offerable as the target of a *new* worktree: valid, sorted,
+/// deduped, and excluding anything already checked out somewhere.
+///
+/// Because `checked_out` includes the main checkout's branch, the main branch is
+/// (correctly) never offered here — it already has a worktree, the repo root.
+pub fn available_branch_names(
+    local: &[String],
+    remote: &[String],
+    checked_out: &BTreeSet<String>,
+    include_remote: bool,
+) -> Vec<String> {
+    let mut names: BTreeSet<&str> = local
+        .iter()
+        .map(String::as_str)
+        .filter(|b| is_valid_branch_name(b))
+        .collect();
+    if include_remote {
+        names.extend(remote.iter().map(String::as_str).filter(|b| is_valid_branch_name(b)));
+    }
+    names
+        .into_iter()
+        .filter(|b| !checked_out.contains(*b))
+        .map(str::to_string)
+        .collect()
+}
+
+/// Branch names offerable as the *base* of a new worktree: valid, sorted,
+/// deduped. Unlike `available_branch_names` this keeps checked-out branches, so
+/// the main branch is offered — branching off it is the normal case.
+pub fn base_branch_names(local: &[String]) -> Vec<String> {
+    let names: BTreeSet<&str> = local
+        .iter()
+        .map(String::as_str)
+        .filter(|b| is_valid_branch_name(b))
+        .collect();
+    names.into_iter().map(str::to_string).collect()
 }
 
 /// Valid env-var key: `^[a-z_][a-z0-9_]*$` (case-insensitive).
@@ -190,6 +230,67 @@ mod tests {
         assert!(!is_valid_branch_name("has space"));
         assert!(!is_valid_branch_name("bad~char"));
         assert!(!is_valid_branch_name("-leading"));
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn main_is_excluded_from_available_branches_because_the_root_holds_it() {
+        // The repo root is a worktree checked out on `main`, so `main` is already
+        // occupied and must not be offered for a NEW worktree. This is why the
+        // checked-out set must NOT filter out the repo root — if someone
+        // "helpfully" applies the root filter there, `main` leaks back in here
+        // and creating a worktree on it fails later with a confusing error.
+        let checked_out = crate::adapters::git::checked_out_branch_names(
+            &crate::adapters::git::parse_git_worktree_porcelain(
+                "worktree /repo\nHEAD abc\nbranch refs/heads/main\n\n\
+                 worktree /repo/wt/feat-a\nHEAD def\nbranch refs/heads/feat-a\n",
+            ),
+        );
+        let available = available_branch_names(
+            &strings(&["main", "feat-a", "other-local"]),
+            &[],
+            &checked_out,
+            false,
+        );
+        assert_eq!(available, strings(&["other-local"]));
+    }
+
+    #[test]
+    fn base_branches_still_offer_main() {
+        // Branching off main is the normal case, so the base list keeps it even
+        // though it is checked out in the repo root.
+        assert_eq!(
+            base_branch_names(&strings(&["main", "feat-a"])),
+            strings(&["feat-a", "main"])
+        );
+    }
+
+    #[test]
+    fn available_branches_are_sorted_deduped_and_validated() {
+        let available = available_branch_names(
+            &strings(&["zeta", "alpha", "alpha", "Bad/Name"]),
+            &[],
+            &BTreeSet::new(),
+            false,
+        );
+        assert_eq!(available, strings(&["alpha", "zeta"]));
+    }
+
+    #[test]
+    fn remote_branches_are_included_only_when_requested() {
+        let local = strings(&["alpha"]);
+        let remote = strings(&["origin/beta"]);
+        assert_eq!(
+            available_branch_names(&local, &remote, &BTreeSet::new(), false),
+            strings(&["alpha"])
+        );
+        assert_eq!(
+            available_branch_names(&local, &remote, &BTreeSet::new(), true),
+            strings(&["alpha", "origin/beta"])
+        );
     }
 
     /// A repo whose basename matches a hub route must not be able to shadow it

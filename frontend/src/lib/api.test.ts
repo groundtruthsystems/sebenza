@@ -75,6 +75,52 @@ function urlOf(input: string | URL | Request): string {
   return input.url;
 }
 
+async function bodyOf(input: string | URL | Request, init?: RequestInit): Promise<string> {
+  if (typeof init?.body === "string") return init.body;
+  if (input instanceof Request) return input.text();
+  return "";
+}
+
+describe("createWorktreeAgentTab", () => {
+  it("posts the chosen agent to the agent-tabs route under the active prefix", async () => {
+    const seen: { url: string; method: string; body: string }[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      seen.push({
+        url: urlOf(input),
+        method: init?.method ?? (input instanceof Request ? input.method : "GET"),
+        body: await bodyOf(input, init),
+      });
+      // The contract declares 201 for tab creation, not 200.
+      return new Response(
+        JSON.stringify({
+          tab: {
+            tabId: "agent-codex-1",
+            kind: "agent",
+            label: "Codex",
+            seq: 1,
+            sessionId: null,
+            agent: "codex",
+            createdAt: "2026-01-01T00:00:00Z",
+          },
+        }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const api = await loadApiAt("/myproject/");
+    const tab = await api.createWorktreeAgentTab("feat/x", "codex");
+
+    expect(seen).toHaveLength(1);
+    // Branch names contain slashes, so the path segment must be encoded.
+    expect(seen[0].url).toContain("/myproject/api/worktrees/feat%2Fx/agent-tabs");
+    expect(seen[0].method).toBe("POST");
+    expect(JSON.parse(seen[0].body)).toEqual({ agent: "codex" });
+    expect(tab.kind).toBe("agent");
+    expect(tab.agent).toBe("codex");
+  });
+});
+
 describe("setUpProject", () => {
   it("returns the prefix immediately when the repo is already a project", async () => {
     vi.stubGlobal("fetch", vi.fn(async () =>

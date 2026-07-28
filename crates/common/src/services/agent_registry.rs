@@ -12,6 +12,9 @@ pub struct AgentCapabilities {
     pub conversation_history: bool,
     pub interrupt: bool,
     pub resume: bool,
+    /// Can a tab fork this agent's conversation? Requires session-id discovery,
+    /// which only the built-ins expose — so custom agents get `false`.
+    pub fork: bool,
 }
 
 #[derive(Clone)]
@@ -42,6 +45,7 @@ fn builtin(id: &str, label: &str) -> AgentDefinition {
             conversation_history: true,
             interrupt: true,
             resume: true,
+            fork: true,
         },
         implementation: AgentImplementation::Builtin(id.to_string()),
     }
@@ -62,6 +66,7 @@ fn build_custom_definition(id: &str, config: &CustomAgentConfig) -> AgentDefinit
             conversation_history: false,
             interrupt: false,
             resume: config.resume_command.is_some(),
+            fork: false,
         },
         implementation: AgentImplementation::Custom(config.clone()),
     }
@@ -125,6 +130,7 @@ pub struct AgentCapabilitiesWire {
     pub conversation_history: bool,
     pub interrupt: bool,
     pub resume: bool,
+    pub fork: bool,
 }
 
 #[derive(Serialize)]
@@ -156,6 +162,7 @@ fn to_details(agent: AgentDefinition) -> AgentDetailsWire {
             conversation_history: agent.capabilities.conversation_history,
             interrupt: agent.capabilities.interrupt,
             resume: agent.capabilities.resume,
+            fork: agent.capabilities.fork,
         },
         start_command,
         resume_command,

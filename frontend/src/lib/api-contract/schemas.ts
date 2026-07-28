@@ -37,6 +37,11 @@ export const AgentCapabilitiesSchema = z.object({
   conversationHistory: z.boolean(),
   interrupt: z.boolean(),
   resume: z.boolean(),
+  /** Can a tab fork this agent's conversation? Built-ins only.
+   *  Deliberately NOT `.default(false)`: responses are not validated at runtime,
+   *  so a default would silently lie about an older server. Read it through
+   *  `agentCan()` in lib/agent-capabilities.ts, which has an explicit fallback. */
+  fork: z.boolean().optional(),
 });
 
 export const AgentSummarySchema = z.object({
@@ -169,6 +174,8 @@ export const PullMainStatusSchema = z.enum([
   "already_up_to_date",
   "fetch_failed",
   "merge_failed",
+  /** The checkout is on some other branch — pulling would move the wrong one. */
+  "skipped_wrong_branch",
 ]);
 
 export const PullMainResponseSchema = z.object({
@@ -239,16 +246,30 @@ export const AppNotificationSchema = z.object({
 
 export const WorktreeTabSchema = z.object({
   tabId: z.string(),
-  kind: z.enum(["root", "fork", "shell"]),
+  /** `agent` is a fresh session of any configured provider, unlike `fork` which
+   *  continues the root conversation with the worktree's own agent. */
+  kind: z.enum(["root", "fork", "shell", "agent"]),
   label: z.string(),
   seq: z.number().nullable(),
   sessionId: z.string().nullable(),
   paneId: z.string().optional(),
+  /** Agent owning this tab's pane; absent on shell tabs and on tabs written
+   *  before per-tab agents existed. */
+  agent: AgentIdSchema.optional(),
   createdAt: z.string(),
 });
 
+export const CreateAgentTabRequestSchema = z.object({
+  agent: AgentIdSchema,
+});
+
+/** Whether a row is the repository's own checkout or a linked worktree. */
+export const WorktreeKindSchema = z.enum(["main", "linked"]);
+
 export const ProjectWorktreeSnapshotSchema = z.object({
   branch: z.string(),
+  /** Defaults to "linked" so an older server (which sends no kind) still parses. */
+  kind: WorktreeKindSchema.default("linked"),
   label: z.string().nullable(),
   baseBranch: z.string().optional(),
   path: z.string(),
@@ -700,6 +721,7 @@ export type CreateWorktreeRequest = z.infer<typeof CreateWorktreeRequestSchema>;
 export type OpenWorktreeRequest = z.infer<typeof OpenWorktreeRequestSchema>;
 export type LaunchWorktreeRequest = z.infer<typeof LaunchWorktreeRequestSchema>;
 export type WorktreeSource = z.infer<typeof WorktreeSourceSchema>;
+export type WorktreeKind = z.infer<typeof WorktreeKindSchema>;
 export type CreateWorktreeResponse = z.infer<typeof CreateWorktreeResponseSchema>;
 export type SetWorktreeArchivedRequest = z.infer<typeof SetWorktreeArchivedRequestSchema>;
 export type SetWorktreeArchivedResponse = z.infer<typeof SetWorktreeArchivedResponseSchema>;

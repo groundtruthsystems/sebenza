@@ -148,13 +148,19 @@ export function projectInitPhaseLabel(phase: ProjectInitPhase | null): string {
 export function resolveSelectedBranch(
   selectedBranch: string | null,
   selectedWorktree: Pick<WorktreeInfo, "branch"> | undefined,
-  selectableWorktrees: Array<Pick<WorktreeInfo, "branch" | "mux">>,
+  selectableWorktrees: Array<Pick<WorktreeInfo, "branch" | "mux" | "kind">>,
   hasLoadedWorktrees: boolean,
 ): string | null {
   if (selectedBranch && selectedWorktree) return selectedBranch;
   if (!hasLoadedWorktrees) return selectedBranch;
   if (selectableWorktrees.length === 0) return null;
 
-  const open = selectableWorktrees.find((worktree) => worktree.mux === "✓");
-  return (open ?? selectableWorktrees[0]).branch;
+  // Prefer a real worktree over the repo row: a main session left open should not
+  // become the default landing selection ahead of actual work. The repo row is
+  // still chosen when it is all there is.
+  const isWorktree = (w: Pick<WorktreeInfo, "kind">): boolean => w.kind !== "main";
+  const openWorktree = selectableWorktrees.find((w) => w.mux === "✓" && isWorktree(w));
+  const anyWorktree = selectableWorktrees.find(isWorktree);
+  const openAny = selectableWorktrees.find((w) => w.mux === "✓");
+  return (openWorktree ?? anyWorktree ?? openAny ?? selectableWorktrees[0]).branch;
 }

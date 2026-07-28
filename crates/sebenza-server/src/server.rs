@@ -5,7 +5,8 @@ use crate::config::project_root;
 use crate::config::{persist_local_custom_agent, persist_local_github_config, remove_local_custom_agent};
 use crate::domain::config::CustomAgentConfig;
 use crate::domain::model::{OneshotMeta, WorktreeSnapshot, WorktreeSource};
-use crate::domain::policies::is_valid_branch_name;
+use crate::adapters::git::checked_out_branch_names;
+use crate::domain::policies::{available_branch_names, base_branch_names, is_valid_branch_name};
 use crate::services::agent_registry::{
     get_agent_definition, get_agent_details, is_builtin_agent_id, list_agent_details,
     normalize_custom_agent_id, validate_custom_agent_input, AgentImplementation,
@@ -206,32 +207,49 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Guard that marks a branch busy for the lifetime of a mutating request and
-/// clears it on drop. Returns 409 if the branch is already busy.
+/// Guard that marks one or more branches busy for the lifetime of a mutating
+/// request and clears them on drop. Returns 409 if any is already busy.
 struct BusyGuard {
     busy: Arc<Mutex<HashSet<String>>>,
-    branch: String,
+    branches: Vec<String>,
 }
 
 impl BusyGuard {
     fn acquire(app: &ProjectApp, branch: &str) -> Result<BusyGuard, ApiError> {
+        Self::acquire_many(app, &[branch])
+    }
+
+    /// Acquire several branches atomically. Names are sorted and deduped first so
+    /// two concurrent multi-branch requests can never deadlock by taking them in
+    /// opposite orders; on partial failure nothing is left marked busy.
+    fn acquire_many(app: &ProjectApp, branches: &[&str]) -> Result<BusyGuard, ApiError> {
+        let mut wanted: Vec<String> = branches.iter().map(|b| b.to_string()).collect();
+        wanted.sort();
+        wanted.dedup();
+
         let mut set = app.busy.lock().unwrap();
-        if !set.insert(branch.to_string()) {
+        if let Some(taken) = wanted.iter().find(|branch| set.contains(*branch)) {
             return Err(ApiError::new(
                 409,
-                format!("Worktree {branch} is busy with another operation"),
+                format!("Worktree {taken} is busy with another operation"),
             ));
+        }
+        for branch in &wanted {
+            set.insert(branch.clone());
         }
         Ok(BusyGuard {
             busy: app.busy.clone(),
-            branch: branch.to_string(),
+            branches: wanted,
         })
     }
 }
 
 impl Drop for BusyGuard {
     fn drop(&mut self) {
-        self.busy.lock().unwrap().remove(&self.branch);
+        let mut set = self.busy.lock().unwrap();
+        for branch in &self.branches {
+            set.remove(branch);
+        }
     }
 }
 
@@ -289,6 +307,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/{prefix}/api/worktrees/{name}/track-file", get(fetch_track_file))
         .route("/{prefix}/api/worktrees/{name}/tabs", post(create_worktree_tab))
         .route("/{prefix}/api/worktrees/{name}/shell", post(create_worktree_shell_tab))
+        .route("/{prefix}/api/worktrees/{name}/agent-tabs", post(create_worktree_agent_tab))
         .route("/{prefix}/api/worktrees/{name}/tabs/{tabId}/select", post(select_worktree_tab))
         .route("/{prefix}/api/worktrees/{name}/tabs/{tabId}", delete(delete_worktree_tab))
         .route("/{prefix}/api/worktrees/{name}/agent-terminal/refresh", post(refresh_agent_terminal))
@@ -446,6 +465,14 @@ async fn create_agent(
     let app = state.project(&prefix)?;
     let agent = body.into_config()?;
     let agent_id = normalize_custom_agent_id(&agent.label);
+    // `none` is the sentinel the main checkout's meta uses for "no agent"; a real
+    // agent with that id would collide with it.
+    if agent_id == crate::domain::model::MAIN_REPO_AGENT_SENTINEL {
+        return Err(ApiError::new(
+            400,
+            format!("\"{agent_id}\" is a reserved agent id"),
+        ));
+    }
     if is_builtin_agent_id(&agent_id) || app.config().agents.contains_key(&agent_id) {
         return Err(ApiError::new(409, format!("Agent already exists: {agent_id}")));
     }
@@ -515,12 +542,7 @@ async fn set_auto_remove_on_merge(
 /// The set of branches checked out in any (non-bare) worktree — including stale
 /// registrations, so `listWorktrees` (not live) is used, matching the TS backend.
 fn checked_out_branches(app: &ProjectApp) -> BTreeSet<String> {
-    app.git
-        .list_worktrees(&app.path)
-        .into_iter()
-        .filter(|entry| !entry.bare)
-        .filter_map(|entry| entry.branch)
-        .collect()
+    checked_out_branch_names(&app.git.list_worktrees(&app.path))
 }
 
 async fn get_branches(
@@ -530,29 +552,15 @@ async fn get_branches(
 ) -> Result<Json<BranchListResponse>, ApiError> {
     let app = state.project(&prefix)?;
     let include_remote = query.include_remote.as_deref() == Some("true");
-
-    let mut names: BTreeSet<String> = app
-        .git
-        .list_local_branches(&app.path)
-        .into_iter()
-        .filter(|b| is_valid_branch_name(b))
-        .collect();
-
-    if include_remote {
-        names.extend(
-            app.git
-                .list_remote_branches(&app.path)
-                .into_iter()
-                .filter(|b| is_valid_branch_name(b)),
-        );
-    }
-
-    let checked_out = checked_out_branches(&app);
-    let branches = names
-        .into_iter()
-        .filter(|b| !checked_out.contains(b))
-        .map(|name| AvailableBranch { name })
-        .collect();
+    let branches = available_branch_names(
+        &app.git.list_local_branches(&app.path),
+        &app.git.list_remote_branches(&app.path),
+        &checked_out_branches(&app),
+        include_remote,
+    )
+    .into_iter()
+    .map(|name| AvailableBranch { name })
+    .collect();
 
     Ok(Json(BranchListResponse { branches }))
 }
@@ -562,20 +570,12 @@ async fn get_base_branches(
     Path(prefix): Path<String>,
 ) -> Result<Json<BranchListResponse>, ApiError> {
     let app = state.project(&prefix)?;
-    // BTreeSet gives sorted, deduped output (matches sort + local list).
-    let branches: BTreeSet<String> = app
-        .git
-        .list_local_branches(&app.path)
+    let branches = base_branch_names(&app.git.list_local_branches(&app.path))
         .into_iter()
-        .filter(|b| is_valid_branch_name(b))
+        .map(|name| AvailableBranch { name })
         .collect();
 
-    Ok(Json(BranchListResponse {
-        branches: branches
-            .into_iter()
-            .map(|name| AvailableBranch { name })
-            .collect(),
-    }))
+    Ok(Json(BranchListResponse { branches }))
 }
 
 /// Reconcile (throttled) then build the project snapshot from in-memory state.
@@ -764,7 +764,11 @@ async fn merge_worktree(
     Path((prefix, name)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let app = state.project(&prefix)?;
-    let _guard = BusyGuard::acquire(&app, &name)?;
+    // Merging checks out the main branch in the repo root, so the main branch is
+    // just as much a subject of this operation as the source worktree — hold both
+    // or a concurrent open/close of main could interleave with the checkout.
+    let main_branch = app.config().workspace.main_branch.clone();
+    let _guard = BusyGuard::acquire_many(&app, &[&name, &main_branch])?;
     let lifecycle = app.lifecycle();
     let branch = name.clone();
     run_blocking(move || lifecycle.merge_worktree(&branch)).await?;
@@ -888,6 +892,36 @@ async fn create_worktree_shell_tab(
     ))
 }
 
+#[derive(Deserialize)]
+struct CreateAgentTabBody {
+    /// Agent id to start a fresh session of. Built-in or custom.
+    agent: String,
+}
+
+/// A separate route from `/tabs` on purpose: `/tabs` forks the root conversation
+/// and takes no body, so overloading it would mean two different semantics behind
+/// one path and a compat problem for existing clients (the CLI posts `{}`).
+async fn create_worktree_agent_tab(
+    State(state): State<AppState>,
+    Path((prefix, name)): Path<(String, String)>,
+    Json(body): Json<CreateAgentTabBody>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let app = state.project(&prefix)?;
+    let agent = body.agent.trim().to_string();
+    if agent.is_empty() {
+        return Err(ApiError::new(400, "Agent id cannot be empty".to_string()));
+    }
+    let _guard = BusyGuard::acquire(&app, &name)?;
+    let lifecycle = app.lifecycle();
+    let branch = name.clone();
+    let tab =
+        run_blocking(move || lifecycle.create_worktree_agent_tab(&branch, &agent)).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "tab": serde_json::to_value(&tab).unwrap() })),
+    ))
+}
+
 async fn select_worktree_tab(
     State(state): State<AppState>,
     Path((prefix, name, tab_id)): Path<(String, String, String)>,
@@ -944,6 +978,17 @@ async fn send_worktree_prompt(
         return Err(ApiError::new(400, "text must not be empty".to_string()));
     }
     let app = state.project(&prefix)?;
+    // The main repo's visible pane is a plain login shell, not an agent prompt, so
+    // "sending a prompt" there would type the text plus Enter straight into a
+    // shell — arbitrary command execution. Guarded here because this handler does
+    // not go through LifecycleService.
+    if app.lifecycle().is_main_branch(&name) {
+        return Err(ApiError::new(
+            409,
+            "Cannot send a prompt to the main repository — its session is a terminal, not an agent"
+                .to_string(),
+        ));
+    }
     let _guard = BusyGuard::acquire(&app, &name)?;
 
     let (target, delay) = {

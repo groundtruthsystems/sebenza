@@ -4,9 +4,10 @@ import WorktreeList from "./WorktreeList";
 import { useStore } from "../store";
 import type { WorktreeInfo, WorktreeListRow } from "./types";
 
-function createWorktree(branch: string): WorktreeInfo {
+function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
     branch,
+    kind: "linked",
     label: null,
     archived: false,
     agent: "claude",
@@ -30,6 +31,7 @@ function createWorktree(branch: string): WorktreeInfo {
     oneshot: null,
     tabs: [],
     activeTabId: null,
+    ...overrides,
   };
 }
 
@@ -49,6 +51,7 @@ function baseProps() {
     onmerge: vi.fn(),
     oncreatesubworktree: vi.fn(),
     onremove: vi.fn(),
+    onpull: vi.fn(),
   };
 }
 
@@ -187,5 +190,51 @@ describe("WorktreeList", () => {
     fireEvent.click(screen.getByRole("button", { name: /actions for feature\/archiving/i }));
 
     expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled();
+  });
+  it("renders a repo badge on the main row", () => {
+    render(
+      <WorktreeList
+        {...baseProps()}
+        rows={[createRow(createWorktree("main", { kind: "main" }))]}
+      />,
+    );
+    expect(screen.getByText("repo")).toBeInTheDocument();
+  });
+
+  it("does not render a repo badge on a linked row", () => {
+    render(<WorktreeList {...baseProps()} rows={[createRow(createWorktree("feature/x"))]} />);
+    expect(screen.queryByText("repo")).toBeNull();
+  });
+
+  it("selects the main row like any other row", () => {
+    const props = baseProps();
+    render(
+      <WorktreeList {...props} rows={[createRow(createWorktree("main", { kind: "main" }))]} />,
+    );
+    fireEvent.click(screen.getByText("main"));
+    expect(props.onselect).toHaveBeenCalledWith("main");
+  });
+
+  it("offers Pull on the main row and routes it to onpull", () => {
+    const props = baseProps();
+    render(
+      <WorktreeList {...props} rows={[createRow(createWorktree("main", { kind: "main" }))]} />,
+    );
+    fireEvent.click(screen.getByLabelText("Actions for main"));
+    fireEvent.click(screen.getByRole("button", { name: "Pull" }));
+    expect(props.onpull).toHaveBeenCalledWith("main");
+  });
+
+  it("still offers Close on an open main row", () => {
+    const props = baseProps();
+    render(
+      <WorktreeList
+        {...props}
+        rows={[createRow(createWorktree("main", { kind: "main", mux: "\u2713" }))]}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText("Actions for main"));
+    fireEvent.click(screen.getByRole("button", { name: "Close" }));
+    expect(props.onclose).toHaveBeenCalledWith("main");
   });
 });
