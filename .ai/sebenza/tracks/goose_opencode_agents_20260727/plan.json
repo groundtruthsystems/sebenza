@@ -156,19 +156,21 @@
           "id": "phase-2-task-1",
           "name": "Write tests for opencode invocation and binary resolution",
           "description": "FR-3.2, FR-3.7. Failing tests for fresh/-c/-s/--fork argv, --auto appended like the other flag-based bypasses, --title/--agent/--model/--dir, and binary resolution that probes ~/.opencode/bin explicitly since a plain which() can fail on a working install.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "812ba79"
         },
         {
           "id": "phase-2-task-2",
           "name": "Implement the Opencode variant, invocations and binary probe",
           "description": "FR-3.1, FR-3.2, FR-3.7. Add Opencode to BuiltinAgentId as its own exhaustiveness sweep and handle every resulting error. Implement invocations and the ~/.opencode/bin-aware resolution.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "812ba79"
         },
         {
           "id": "phase-2-task-3",
           "name": "Write tests for the opencode plugin shim",
           "description": "FR-3.3, FR-3.4, FR-5.6. Failing tests asserting the generated .opencode/plugins/sebenza.js imports nothing, embeds no branch/worktree/profile literals (per-worktree data arrives via SEBENZA_* env vars), is byte-stable across worktrees, is written as a full overwrite, and maps the event hook correctly.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-2-task-4",
