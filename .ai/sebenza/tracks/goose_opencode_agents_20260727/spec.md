@@ -70,6 +70,35 @@ revised FR-3.6. Discovery remains possible but costs one `export` per candidate,
 orphan-adoption fallback only. Nothing here blocks Phase 2 — the mechanism changes, the capability does
 not.
 
+### FR-0.2 — `permission.ask` behaviour *(phase-0-task-2, PARTIAL — see Blocked)*
+
+Method: a probe plugin at `<worktree>/.opencode/plugins/probe.js` logging `permission.ask`,
+`tool.execute.before/after` and the generic `event` hook; four `opencode run` variants with
+`--print-logs --log-level DEBUG`.
+
+**Established:**
+
+| # | Finding |
+|---|---|
+| 1 | **`--auto` bypasses `permission.ask` entirely.** The bash tool executed; `tool.execute.before`/`after` both fired; `permission.ask` did **not**. So `--auto` and Sebenza-side gating are mutually exclusive **in the direction that matters** — with `--auto` on, the gate is dead. |
+| 2 | **`permission.ask` does not fire per tool call.** It is gated by a config-evaluated ruleset. With default config the debug log shows `evaluated permission=bash pattern="echo gated-ok" action.action=allow` — a wildcard *allow*, so no ask, and the run completed normally without `--auto`. |
+| 3 | **Session default permission config** is `[{question,*,deny},{plan_enter,*,deny},{plan_exit,*,deny}]`, recorded on the session row and echoed in `export`→`info.permission`. |
+| 4 | **`permission: { bash: "ask" }` in project `opencode.json` makes non-interactive `run` hang.** Config loads cleanly, then `message=init` and nothing for 60s — no session created. So an `ask` rule is not viable in `run` mode with nothing able to answer it. |
+| 5 | **Project-scope plugin auto-discovery works** from `<worktree>/.opencode/plugins/*.js` with a named export matching `Plugin = (input, options?) => Promise<Hooks>`. |
+| 6 | **`PluginInput` supplies `directory` and `worktree`** (both the worktree path) plus `$`, `client`, `project`, `serverUrl` — so the shim needs **no env var** to learn its worktree. |
+| 7 | **Real wire event names** (the design used SDK class names): `session.created`, `session.updated`, `session.status`, `session.idle`, `session.diff`, `message.updated`, `message.part.updated`, `message.part.delta`, `plugin.added`, `catalog.updated`, `reference.updated`, `integration.updated`. `session.idle` fires reliably at end of turn. |
+| 8 | Config precedence observed: `~/.config/opencode/{config.json,opencode.json,opencode.jsonc}` → `<worktree>/opencode.json` → `<worktree>/.opencode/opencode.json{,c}` → `~/.opencode/opencode.json{,c}`. |
+
+**Not established — the linchpin for Phase 3:** whether `permission.ask` can fire **at all** and have its
+`status` honoured. Findings 1–4 rule out the `run`-mode paths tried. The plausible hypothesis is that an
+`ask` verdict requires an interactive answering channel — the TUI (which is how Sebenza actually launches
+agents, in a tmux pane) or `opencode serve` — and that `run` simply has no such channel, hence finding 4's
+hang. **Confirming this needs a TUI or server harness, not another `run` variant.**
+
+**Impact:** Phases 0, 1 and 2 are unaffected. **Phase 3 is at risk** until this is answered — if
+`permission.ask` cannot be driven from the way Sebenza launches opencode, the gating feature is not
+buildable as designed.
+
 ---
 
 ## Functional Requirements

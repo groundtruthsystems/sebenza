@@ -472,14 +472,21 @@ opencode shim must construct that same normalized stdin JSON itself, making **th
 
 **opencode's mapping is now concrete** and lands mostly on the generic `event` hook:
 
-| Sebenza primitive | opencode source |
+| Sebenza primitive | opencode source *(wire `event.type`, verified 2026-07-28)* |
 |---|---|
-| session id capture | `EventSessionCreated` (via `event`) — replaces polling |
-| `status-changed --lifecycle running` | `tool.execute.before`, `chat.message` |
-| `agent-stopped` / idle | **`EventSessionIdle`** |
-| `runtime-error` | `EventSessionError` |
+| session id capture | `session.created` — replaces polling. `run --format json` also echoes `sessionID` on every event |
+| `status-changed --lifecycle running` | `tool.execute.before` (named hook), `session.status` |
+| `agent-stopped` / idle | **`session.idle`** — fires reliably at end of turn |
+| `runtime-error` | `session.error` |
 | PR detection | `tool.execute.after` — feed `tool`/args into the existing `maybe_send_pr_opened` |
-| *(future)* permission gate | `permission.ask` — mutable `status`; deferred to its own track |
+| permission gate | `permission.ask` — **fires only when the config ruleset evaluates to `ask`, and NOT at all under `--auto`.** Whether its `status` can be driven from a tmux-launched TUI is unconfirmed; see spec *Verified findings* FR-0.2 |
+
+Other observed event types, available on the same generic `event` hook and potentially useful:
+`session.updated`, `session.diff` (file-change summary), `message.updated`,
+`message.part.updated`/`delta`, `plugin.added`, `catalog.updated`.
+
+The shim also needs **no env var to learn its worktree** — `PluginInput` supplies `directory` and
+`worktree` directly, alongside `$`, `client`, `project` and `serverUrl`.
 
 > **There are TWO builtin agent registries, and the design must touch both.**
 > `crates/common/src/services/config_view.rs:25-48` defines its own `builtin_agent_summaries()` —
