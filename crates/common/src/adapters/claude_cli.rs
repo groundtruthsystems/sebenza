@@ -41,7 +41,10 @@ fn truncate(text: &str) -> String {
         return text.to_string();
     }
     let head: String = text.chars().take(TOOL_PAYLOAD_TRUNCATE_LIMIT).collect();
-    format!("{head}… (truncated, {} more chars)", count - TOOL_PAYLOAD_TRUNCATE_LIMIT)
+    format!(
+        "{head}… (truncated, {} more chars)",
+        count - TOOL_PAYLOAD_TRUNCATE_LIMIT
+    )
 }
 
 fn extract_tool_result_text(content: &Value) -> String {
@@ -82,7 +85,11 @@ fn parse_session_records(text: &str) -> Vec<Value> {
 }
 
 /// Parse a Claude JSONL session into structured messages.
-pub fn build_claude_session_from_text(path: &str, session_id: &str, text: &str) -> ClaudeCliSession {
+pub fn build_claude_session_from_text(
+    path: &str,
+    session_id: &str,
+    text: &str,
+) -> ClaudeCliSession {
     let records = parse_session_records(text);
     let mut messages: Vec<ClaudeCliMessage> = Vec::new();
     let mut cwd: Option<String> = None;
@@ -117,7 +124,9 @@ pub fn build_claude_session_from_text(path: &str, session_id: &str, text: &str) 
         if rec_type == Some("user")
             && role == Some("user")
             && let (Some(content), Some(uuid)) = (
-                message.and_then(|m| m.get("content")).and_then(Value::as_str),
+                message
+                    .and_then(|m| m.get("content"))
+                    .and_then(Value::as_str),
                 uuid,
             )
             && !content.trim().is_empty()
@@ -143,7 +152,9 @@ pub fn build_claude_session_from_text(path: &str, session_id: &str, text: &str) 
         // User tool_result records: message.content is an array.
         if rec_type == Some("user")
             && role == Some("user")
-            && let Some(content) = message.and_then(|m| m.get("content")).and_then(Value::as_array)
+            && let Some(content) = message
+                .and_then(|m| m.get("content"))
+                .and_then(Value::as_array)
         {
             for entry in content {
                 if entry.get("type").and_then(Value::as_str) != Some("tool_result") {
@@ -155,7 +166,12 @@ pub fn build_claude_session_from_text(path: &str, session_id: &str, text: &str) 
                 }
                 let tool_call_id = entry.get("tool_use_id").and_then(read_string);
                 messages.push(ClaudeCliMessage {
-                    id: format!("tool_result:{}", tool_call_id.clone().unwrap_or_else(|| uuid.unwrap_or("").to_string())),
+                    id: format!(
+                        "tool_result:{}",
+                        tool_call_id
+                            .clone()
+                            .unwrap_or_else(|| uuid.unwrap_or("").to_string())
+                    ),
                     turn_id: turn_id.clone(),
                     role: "user".to_string(),
                     kind: "toolResult".to_string(),
@@ -172,7 +188,10 @@ pub fn build_claude_session_from_text(path: &str, session_id: &str, text: &str) 
         if rec_type != Some("assistant") || role != Some("assistant") {
             continue;
         }
-        let Some(content) = message.and_then(|m| m.get("content")).and_then(Value::as_array) else {
+        let Some(content) = message
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_array)
+        else {
             continue;
         };
         let message_id = message
@@ -183,7 +202,9 @@ pub fn build_claude_session_from_text(path: &str, session_id: &str, text: &str) 
 
         for block in content {
             let index = {
-                let counter = block_index_by_message.entry(message_id.clone()).or_insert(0);
+                let counter = block_index_by_message
+                    .entry(message_id.clone())
+                    .or_insert(0);
                 let i = *counter;
                 *counter += 1;
                 i
@@ -214,7 +235,9 @@ pub fn build_claude_session_from_text(path: &str, session_id: &str, text: &str) 
                         .unwrap_or("tool")
                         .to_string();
                     let tool_call_id = block.get("id").and_then(read_string);
-                    let text = truncate(&compact_json(block.get("input").unwrap_or(&serde_json::json!({}))));
+                    let text = truncate(&compact_json(
+                        block.get("input").unwrap_or(&serde_json::json!({})),
+                    ));
                     messages.push(ClaudeCliMessage {
                         id: format!("{message_id}:{index}"),
                         turn_id: turn_id.clone(),
@@ -304,9 +327,15 @@ fn stream_blocks_from_assistant(raw: &Value) -> Vec<ClaudeStreamBlock> {
                 })
             }
             Some("tool_use") => {
-                let tool_name = block.get("name").and_then(Value::as_str).unwrap_or("tool").to_string();
+                let tool_name = block
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("tool")
+                    .to_string();
                 let tool_call_id = block.get("id").and_then(read_string);
-                let text = truncate(&compact_json(block.get("input").unwrap_or(&serde_json::json!({}))));
+                let text = truncate(&compact_json(
+                    block.get("input").unwrap_or(&serde_json::json!({})),
+                ));
                 Some(ClaudeStreamBlock {
                     role: "assistant".into(),
                     kind: "toolUse".into(),
@@ -402,7 +431,10 @@ pub fn parse_claude_stream_line(line: &str) -> Option<ParsedClaudeStreamLine> {
             let is_error = parsed.get("is_error").and_then(Value::as_bool) == Some(true);
             if is_error {
                 out.error = Some(
-                    parsed.get("result").and_then(read_string).unwrap_or_else(|| "Claude returned an error".to_string()),
+                    parsed
+                        .get("result")
+                        .and_then(read_string)
+                        .unwrap_or_else(|| "Claude returned an error".to_string()),
                 );
             } else {
                 out.complete_session_id = parsed.get("session_id").and_then(read_string);
@@ -410,7 +442,10 @@ pub fn parse_claude_stream_line(line: &str) -> Option<ParsedClaudeStreamLine> {
         }
         Some("error") => {
             out.error = Some(
-                parsed.get("message").and_then(read_string).unwrap_or_else(|| "Claude returned an error".to_string()),
+                parsed
+                    .get("message")
+                    .and_then(read_string)
+                    .unwrap_or_else(|| "Claude returned an error".to_string()),
             );
         }
         _ => {}
@@ -419,7 +454,9 @@ pub fn parse_claude_stream_line(line: &str) -> Option<ParsedClaudeStreamLine> {
 }
 
 fn claude_projects_root() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".claude").join("projects"))
+    std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(".claude").join("projects"))
 }
 
 /// `.jsonl` files in `dir`, most-recently-modified first.
@@ -475,7 +512,11 @@ pub fn latest_session(cwd: &str) -> Option<ClaudeCliSession> {
     let path = candidates.into_iter().next()?;
     let text = fs::read_to_string(&path).ok()?;
     let session_id = path.file_stem()?.to_string_lossy().to_string();
-    Some(build_claude_session_from_text(&path.to_string_lossy(), &session_id, &text))
+    Some(build_claude_session_from_text(
+        &path.to_string_lossy(),
+        &session_id,
+        &text,
+    ))
 }
 
 #[cfg(test)]
@@ -484,7 +525,10 @@ mod tests {
 
     #[test]
     fn encode_dir_replaces_non_alnum() {
-        assert_eq!(encode_claude_project_dir("/home/u/my.proj"), "-home-u-my-proj");
+        assert_eq!(
+            encode_claude_project_dir("/home/u/my.proj"),
+            "-home-u-my-proj"
+        );
     }
 
     #[test]
@@ -547,17 +591,33 @@ mod tests {
             if parsed.assistant_delta.is_some() {
                 text_deltas += 1;
             }
-            assistant_blocks += parsed.blocks.iter().filter(|b| b.role == "assistant").count();
+            assistant_blocks += parsed
+                .blocks
+                .iter()
+                .filter(|b| b.role == "assistant")
+                .count();
             if let Some(c) = parsed.complete_session_id {
                 complete = Some(c);
             }
         }
 
         assert!(session_id.is_some(), "stream should carry a session id");
-        assert!(message_id.is_some(), "message_start should set a message id");
-        assert_eq!(text_deltas, 1, "one text_delta in the captured run (thinking_deltas ignored)");
-        assert!(assistant_blocks > 0, "should finalize at least one assistant block");
-        assert_eq!(complete, session_id, "result line resolves the same session id");
+        assert!(
+            message_id.is_some(),
+            "message_start should set a message id"
+        );
+        assert_eq!(
+            text_deltas, 1,
+            "one text_delta in the captured run (thinking_deltas ignored)"
+        );
+        assert!(
+            assistant_blocks > 0,
+            "should finalize at least one assistant block"
+        );
+        assert_eq!(
+            complete, session_id,
+            "result line resolves the same session id"
+        );
     }
 
     #[test]

@@ -67,13 +67,18 @@ impl NotificationStore {
             RuntimeEvent::PrOpened { branch, url, .. } => {
                 ("pr_opened", format!("PR opened on {branch}"), url.clone())
             }
-            RuntimeEvent::RuntimeError { branch, message, .. } => {
-                ("runtime_error", format!("Runtime error on {branch}: {message}"), None)
-            }
+            RuntimeEvent::RuntimeError {
+                branch, message, ..
+            } => (
+                "runtime_error",
+                format!("Runtime error on {branch}: {message}"),
+                None,
+            ),
             // Neither warrants a user-visible notification: one is routine status churn,
             // the other is internal bookkeeping.
-            RuntimeEvent::AgentStatusChanged { .. }
-            | RuntimeEvent::ConversationStarted { .. } => return None,
+            RuntimeEvent::AgentStatusChanged { .. } | RuntimeEvent::ConversationStarted { .. } => {
+                return None;
+            }
         };
         let id = (self.next_id.fetch_add(1, Ordering::Relaxed) + 1) as i64;
         let notification = crate::domain::model::NotificationView {
@@ -152,12 +157,21 @@ impl ProjectApp {
 }
 
 /// Build a `ProjectApp` for a resolved project root.
-fn create_project_app(prefix: String, root: String, control_base_url: String, added_at: u64) -> Arc<ProjectApp> {
+fn create_project_app(
+    prefix: String,
+    root: String,
+    control_base_url: String,
+    added_at: u64,
+) -> Arc<ProjectApp> {
     let config = load_config(&root);
     let git = GitGateway::new();
     let tmux = TmuxGateway::new();
     let runtime = Arc::new(Mutex::new(ProjectRuntime::new()));
-    let reconciliation = Arc::new(ReconciliationService::new(config.clone(), git.clone(), tmux.clone()));
+    let reconciliation = Arc::new(ReconciliationService::new(
+        config.clone(),
+        git.clone(),
+        tmux.clone(),
+    ));
     Arc::new(ProjectApp {
         prefix,
         path: root,
@@ -256,7 +270,12 @@ impl ProjectManager {
         let taken: Vec<String> = projects.keys().cloned().collect();
         let prefix = derive_project_prefix(&root, taken.iter().map(String::as_str));
         let added_at = self.added_seq.fetch_add(1, Ordering::Relaxed);
-        let app = create_project_app(prefix.clone(), root, self.control_base_url.clone(), added_at);
+        let app = create_project_app(
+            prefix.clone(),
+            root,
+            self.control_base_url.clone(),
+            added_at,
+        );
         projects.insert(prefix, app.clone());
         drop(projects);
 

@@ -1,38 +1,44 @@
 use crate::adapters::fs::{read_worktree_archive_state, write_worktree_archive_state};
 use crate::adapters::git::GitGateway;
+use crate::adapters::git::checked_out_branch_names;
 use crate::adapters::terminal::{TerminalAttachTarget, TerminalEvent, TerminalManager};
 use crate::config::project_root;
-use crate::config::{persist_local_custom_agent, persist_local_github_config, remove_local_custom_agent};
+use crate::config::{
+    persist_local_custom_agent, persist_local_github_config, remove_local_custom_agent,
+};
 use crate::domain::config::CustomAgentConfig;
 use crate::domain::model::{OneshotMeta, WorktreeSnapshot, WorktreeSource};
-use crate::adapters::git::checked_out_branch_names;
 use crate::domain::policies::{available_branch_names, base_branch_names, is_valid_branch_name};
 use crate::services::agent_registry::{
-    get_agent_definition, get_agent_details, is_builtin_agent_id, list_agent_details,
-    normalize_custom_agent_id, validate_custom_agent_input, AgentImplementation,
+    AgentImplementation, get_agent_definition, get_agent_details, is_builtin_agent_id,
+    list_agent_details, normalize_custom_agent_id, validate_custom_agent_input,
 };
-use crate::services::archive_service::{build_archived_worktree_path_set, prune_archived_worktree_state};
-use crate::services::auto_pull_service::{force_pull_main_branch, pull_main_branch, PullMainResult};
-use crate::services::config_view::{build_app_config, AppConfig};
+use crate::services::archive_service::{
+    build_archived_worktree_path_set, prune_archived_worktree_state,
+};
+use crate::services::auto_pull_service::{
+    PullMainResult, force_pull_main_branch, pull_main_branch,
+};
+use crate::services::config_view::{AppConfig, build_app_config};
 use crate::services::lifecycle_service::{CreateMode, CreateWorktreesInput, LifecycleError};
 use crate::services::project_manager::{ProjectApp, ProjectManager};
 use crate::services::snapshot::build_project_snapshot;
 use crate::services::worktree_service::build_create_worktree_targets;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::{header, StatusCode, Uri};
+use axum::http::{StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
-use rust_embed::RustEmbed;
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tower_http::services::{ServeDir, ServeFile};
 
 /// Global server state. Per-project state lives in `ProjectApp` (resolved by URL
@@ -96,8 +102,8 @@ pub fn spawn_background_loops(state: AppState) {
                 for app in state.manager.list() {
                     let app = app.clone();
                     let _ = tokio::task::spawn_blocking(move || {
-                        let saved_at = chrono::Utc::now()
-                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                        let saved_at =
+                            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
                         crate::services::session_restore_service::save_open_sessions_snapshot(
                             &app.git, &app.tmux, &app.path, saved_at,
                         );
@@ -113,7 +119,7 @@ pub fn spawn_background_loops(state: AppState) {
     {
         let state = state.clone();
         tokio::spawn(async move {
-            use crate::services::oneshot_watcher_service::{WatchStates, POLL_INTERVAL_MS};
+            use crate::services::oneshot_watcher_service::{POLL_INTERVAL_MS, WatchStates};
             use std::collections::HashMap;
             use std::sync::{Arc, Mutex};
             let mut per_project: HashMap<String, Arc<Mutex<WatchStates>>> = HashMap::new();
@@ -203,7 +209,11 @@ impl From<LifecycleError> for ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status, Json(serde_json::json!({ "error": self.message }))).into_response()
+        (
+            self.status,
+            Json(serde_json::json!({ "error": self.message })),
+        )
+            .into_response()
     }
 }
 
@@ -292,38 +302,107 @@ pub fn build_router(state: AppState) -> Router {
         .route("/{prefix}/api/branches", get(get_branches))
         .route("/{prefix}/api/base-branches", get(get_base_branches))
         .route("/{prefix}/api/project", get(get_project))
-        .route("/{prefix}/api/project/auto-name", get(fetch_auto_name_config))
-        .route("/{prefix}/api/worktrees", get(get_worktrees).post(create_worktree))
+        .route(
+            "/{prefix}/api/project/auto-name",
+            get(fetch_auto_name_config),
+        )
+        .route(
+            "/{prefix}/api/worktrees",
+            get(get_worktrees).post(create_worktree),
+        )
         .route("/{prefix}/api/worktrees/{name}", delete(remove_worktree))
         .route("/{prefix}/api/worktrees/{name}/merge", post(merge_worktree))
-        .route("/{prefix}/api/worktrees/{name}/label", put(set_worktree_label))
-        .route("/{prefix}/api/worktrees/{name}/archive", put(set_worktree_archived))
+        .route(
+            "/{prefix}/api/worktrees/{name}/label",
+            put(set_worktree_label),
+        )
+        .route(
+            "/{prefix}/api/worktrees/{name}/archive",
+            put(set_worktree_archived),
+        )
         .route("/{prefix}/api/worktrees/{name}/close", post(close_worktree))
         .route("/{prefix}/api/worktrees/{name}/open", post(open_worktree))
-        .route("/{prefix}/api/worktrees/{name}/launch", post(launch_worktree))
-        .route("/{prefix}/api/worktrees/{name}/send", post(send_worktree_prompt))
-        .route("/{prefix}/api/worktrees/{name}/diff", get(fetch_worktree_diff))
+        .route(
+            "/{prefix}/api/worktrees/{name}/launch",
+            post(launch_worktree),
+        )
+        .route(
+            "/{prefix}/api/worktrees/{name}/send",
+            post(send_worktree_prompt),
+        )
+        .route(
+            "/{prefix}/api/worktrees/{name}/diff",
+            get(fetch_worktree_diff),
+        )
         .route("/{prefix}/api/worktrees/{name}/tracks", get(fetch_tracks))
-        .route("/{prefix}/api/worktrees/{name}/track-file", get(fetch_track_file))
-        .route("/{prefix}/api/worktrees/{name}/tabs", post(create_worktree_tab))
-        .route("/{prefix}/api/worktrees/{name}/shell", post(create_worktree_shell_tab))
-        .route("/{prefix}/api/worktrees/{name}/agent-tabs", post(create_worktree_agent_tab))
-        .route("/{prefix}/api/worktrees/{name}/tabs/{tabId}/select", post(select_worktree_tab))
-        .route("/{prefix}/api/worktrees/{name}/tabs/{tabId}", delete(delete_worktree_tab))
-        .route("/{prefix}/api/worktrees/{name}/agent-terminal/refresh", post(refresh_agent_terminal))
-        .route("/{prefix}/api/worktrees/{name}/sync-prs", post(sync_worktree_prs))
+        .route(
+            "/{prefix}/api/worktrees/{name}/track-file",
+            get(fetch_track_file),
+        )
+        .route(
+            "/{prefix}/api/worktrees/{name}/tabs",
+            post(create_worktree_tab),
+        )
+        .route(
+            "/{prefix}/api/worktrees/{name}/shell",
+            post(create_worktree_shell_tab),
+        )
+        .route(
+            "/{prefix}/api/worktrees/{name}/agent-tabs",
+            post(create_worktree_agent_tab),
+        )
+        .route(
+            "/{prefix}/api/worktrees/{name}/tabs/{tabId}/select",
+            post(select_worktree_tab),
+        )
+        .route(
+            "/{prefix}/api/worktrees/{name}/tabs/{tabId}",
+            delete(delete_worktree_tab),
+        )
+        .route(
+            "/{prefix}/api/worktrees/{name}/agent-terminal/refresh",
+            post(refresh_agent_terminal),
+        )
+        .route(
+            "/{prefix}/api/worktrees/{name}/sync-prs",
+            post(sync_worktree_prs),
+        )
         .route("/{prefix}/api/pull-main", post(pull_main))
         .route("/{prefix}/api/ci-logs/{runId}", get(fetch_ci_logs))
-        .route("/{prefix}/api/agents/worktrees/{name}/attach", post(agents_attach))
-        .route("/{prefix}/api/agents/worktrees/{name}/history", get(agents_history))
-        .route("/{prefix}/api/agents/worktrees/{name}/messages", post(agents_send))
-        .route("/{prefix}/api/agents/worktrees/{name}/interrupt", post(agents_interrupt))
-        .route("/{prefix}/ws/agents/worktrees/{name}", get(ws_agents_stream))
-        .route("/{prefix}/api/notifications/{id}/dismiss", post(dismiss_notification))
+        .route(
+            "/{prefix}/api/agents/worktrees/{name}/attach",
+            post(agents_attach),
+        )
+        .route(
+            "/{prefix}/api/agents/worktrees/{name}/history",
+            get(agents_history),
+        )
+        .route(
+            "/{prefix}/api/agents/worktrees/{name}/messages",
+            post(agents_send),
+        )
+        .route(
+            "/{prefix}/api/agents/worktrees/{name}/interrupt",
+            post(agents_interrupt),
+        )
+        .route(
+            "/{prefix}/ws/agents/worktrees/{name}",
+            get(ws_agents_stream),
+        )
+        .route(
+            "/{prefix}/api/notifications/{id}/dismiss",
+            post(dismiss_notification),
+        )
         .route("/{prefix}/api/agents", get(list_agents).post(create_agent))
         .route("/{prefix}/api/agents/validate", post(validate_agent))
-        .route("/{prefix}/api/agents/{id}", put(update_agent).delete(delete_agent))
-        .route("/{prefix}/api/github/auto-remove-on-merge", put(set_auto_remove_on_merge))
+        .route(
+            "/{prefix}/api/agents/{id}",
+            put(update_agent).delete(delete_agent),
+        )
+        .route(
+            "/{prefix}/api/github/auto-remove-on-merge",
+            put(set_auto_remove_on_merge),
+        )
         .route("/{prefix}/ws/{worktree}", get(ws_terminal))
         .with_state(state);
 
@@ -392,7 +471,9 @@ async fn fetch_auto_name_config(
     Path(prefix): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let app = state.project(&prefix)?;
-    Ok(Json(serde_json::json!({ "autoName": app.config().auto_name })))
+    Ok(Json(
+        serde_json::json!({ "autoName": app.config().auto_name }),
+    ))
 }
 
 // --- Agents CRUD + GitHub settings ---
@@ -411,7 +492,10 @@ impl UpsertAgentBody {
         let label = self.label.trim().to_string();
         let start_command = self.start_command.trim().to_string();
         if label.is_empty() || start_command.is_empty() {
-            return Err(ApiError::new(400, "label and startCommand are required".to_string()));
+            return Err(ApiError::new(
+                400,
+                "label and startCommand are required".to_string(),
+            ));
         }
         let resume_command = self
             .resume_command
@@ -430,7 +514,9 @@ async fn list_agents(
     Path(prefix): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let app = state.project(&prefix)?;
-    Ok(Json(serde_json::json!({ "agents": list_agent_details(&app.config()) })))
+    Ok(Json(
+        serde_json::json!({ "agents": list_agent_details(&app.config()) }),
+    ))
 }
 
 async fn validate_agent(
@@ -448,7 +534,11 @@ async fn validate_agent(
 }
 
 /// Persist a custom agent to the local overlay and swap it into the live config.
-fn upsert_agent(app: &ProjectApp, agent_id: &str, agent: CustomAgentConfig) -> Result<(), ApiError> {
+fn upsert_agent(
+    app: &ProjectApp,
+    agent_id: &str,
+    agent: CustomAgentConfig,
+) -> Result<(), ApiError> {
     persist_local_custom_agent(&app.path, agent_id, &agent)
         .map_err(|e| ApiError::new(500, e.to_string()))?;
     let mut config = (*app.config()).clone();
@@ -474,11 +564,18 @@ async fn create_agent(
         ));
     }
     if is_builtin_agent_id(&agent_id) || app.config().agents.contains_key(&agent_id) {
-        return Err(ApiError::new(409, format!("Agent already exists: {agent_id}")));
+        return Err(ApiError::new(
+            409,
+            format!("Agent already exists: {agent_id}"),
+        ));
     }
     upsert_agent(&app, &agent_id, agent)?;
-    let details = get_agent_details(&app.config(), &agent_id)
-        .ok_or_else(|| ApiError::new(500, format!("Created agent could not be loaded: {agent_id}")))?;
+    let details = get_agent_details(&app.config(), &agent_id).ok_or_else(|| {
+        ApiError::new(
+            500,
+            format!("Created agent could not be loaded: {agent_id}"),
+        )
+    })?;
     Ok(Json(serde_json::json!({ "agent": details })))
 }
 
@@ -489,15 +586,22 @@ async fn update_agent(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let app = state.project(&prefix)?;
     if is_builtin_agent_id(&agent_id) {
-        return Err(ApiError::new(400, format!("Built-in agent cannot be edited: {agent_id}")));
+        return Err(ApiError::new(
+            400,
+            format!("Built-in agent cannot be edited: {agent_id}"),
+        ));
     }
     if !app.config().agents.contains_key(&agent_id) {
         return Err(ApiError::new(404, format!("Unknown agent: {agent_id}")));
     }
     let agent = body.into_config()?;
     upsert_agent(&app, &agent_id, agent)?;
-    let details = get_agent_details(&app.config(), &agent_id)
-        .ok_or_else(|| ApiError::new(500, format!("Updated agent could not be loaded: {agent_id}")))?;
+    let details = get_agent_details(&app.config(), &agent_id).ok_or_else(|| {
+        ApiError::new(
+            500,
+            format!("Updated agent could not be loaded: {agent_id}"),
+        )
+    })?;
     Ok(Json(serde_json::json!({ "agent": details })))
 }
 
@@ -507,7 +611,10 @@ async fn delete_agent(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let app = state.project(&prefix)?;
     if is_builtin_agent_id(&agent_id) {
-        return Err(ApiError::new(400, format!("Built-in agent cannot be deleted: {agent_id}")));
+        return Err(ApiError::new(
+            400,
+            format!("Built-in agent cannot be deleted: {agent_id}"),
+        ));
     }
     if !app.config().agents.contains_key(&agent_id) {
         return Err(ApiError::new(404, format!("Unknown agent: {agent_id}")));
@@ -536,7 +643,9 @@ async fn set_auto_remove_on_merge(
     let mut config = (*app.config()).clone();
     config.integrations.github.auto_remove_on_merge = body.enabled;
     app.set_config(config);
-    Ok(Json(serde_json::json!({ "ok": true, "enabled": body.enabled })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "enabled": body.enabled }),
+    ))
 }
 
 /// The set of branches checked out in any (non-bare) worktree — including stale
@@ -583,7 +692,13 @@ fn reconcile_and_snapshot(app: &ProjectApp) -> crate::domain::model::ProjectSnap
     app.reconciliation.reconcile(&app.path, &app.runtime, false);
     let worktrees = app.runtime.lock().unwrap().list_worktrees();
     let archived = current_archived_paths(app, &worktrees);
-    build_project_snapshot(&app.config(), &worktrees, Utc::now(), &archived, app.notifications.list())
+    build_project_snapshot(
+        &app.config(),
+        &worktrees,
+        Utc::now(),
+        &archived,
+        app.notifications.list(),
+    )
 }
 
 /// Read the project archive state, prune entries whose worktree no longer exists
@@ -661,27 +776,40 @@ async fn create_worktree(
         Some("existing") => CreateMode::Existing,
         _ => CreateMode::New,
     };
-    let base_branch = body.base_branch.as_deref().map(str::trim).filter(|b| !b.is_empty());
+    let base_branch = body
+        .base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty());
     if let Some(base) = base_branch {
         if !is_valid_branch_name(base) {
             return Err(ApiError::new(400, "Invalid base branch name".to_string()));
         }
         if mode == CreateMode::Existing {
-            return Err(ApiError::new(400, "Base branch is only supported for new branches".to_string()));
+            return Err(ApiError::new(
+                400,
+                "Base branch is only supported for new branches".to_string(),
+            ));
         }
     }
 
     let selected_agents: Vec<String> = match &body.agents {
         Some(agents) if !agents.is_empty() => agents.clone(),
-        _ => vec![body
-            .agent
-            .clone()
-            .unwrap_or_else(|| app.config().workspace.default_agent.clone())],
+        _ => vec![
+            body.agent
+                .clone()
+                .unwrap_or_else(|| app.config().workspace.default_agent.clone()),
+        ],
     };
 
     // Lock every target branch for the duration of the create.
     let mut guards: Vec<BusyGuard> = Vec::new();
-    if let Some(branch) = body.branch.as_deref().map(str::trim).filter(|b| !b.is_empty()) {
+    if let Some(branch) = body
+        .branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+    {
         let targets = build_create_worktree_targets(branch, &selected_agents);
         for target in &targets {
             guards.push(BusyGuard::acquire(&app, &target.branch)?);
@@ -784,8 +912,8 @@ async fn set_worktree_label(
     let _guard = BusyGuard::acquire(&app, &name)?;
     let lifecycle = app.lifecycle();
     let branch = name.clone();
-    let label = run_blocking(move || lifecycle.set_worktree_label(&branch, body.label.as_deref()))
-        .await?;
+    let label =
+        run_blocking(move || lifecycle.set_worktree_label(&branch, body.label.as_deref())).await?;
     Ok(Json(serde_json::json!({ "ok": true, "label": label })))
 }
 
@@ -800,7 +928,9 @@ async fn set_worktree_archived(
     let branch = name.clone();
     let archived = body.archived;
     run_blocking(move || lifecycle.set_worktree_archived(&branch, archived)).await?;
-    Ok(Json(serde_json::json!({ "ok": true, "archived": archived })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "archived": archived }),
+    ))
 }
 
 async fn close_worktree(
@@ -849,12 +979,10 @@ async fn open_worktree(
     let _guard = BusyGuard::acquire(&app, &name)?;
     let lifecycle = app.lifecycle();
     let branch = name.clone();
-    let prompt = body
-        .prompt
-        .and_then(|p| {
-            let t = p.trim().to_string();
-            (!t.is_empty()).then_some(t)
-        });
+    let prompt = body.prompt.and_then(|p| {
+        let t = p.trim().to_string();
+        (!t.is_empty()).then_some(t)
+    });
     let oneshot = body.oneshot.as_ref().map(|o| OneshotMeta {
         auto_close_on_done: o.auto_close_on_done.unwrap_or(false),
     });
@@ -914,8 +1042,7 @@ async fn create_worktree_agent_tab(
     let _guard = BusyGuard::acquire(&app, &name)?;
     let lifecycle = app.lifecycle();
     let branch = name.clone();
-    let tab =
-        run_blocking(move || lifecycle.create_worktree_agent_tab(&branch, &agent)).await?;
+    let tab = run_blocking(move || lifecycle.create_worktree_agent_tab(&branch, &agent)).await?;
     Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({ "tab": serde_json::to_value(&tab).unwrap() })),
@@ -965,7 +1092,9 @@ fn submit_delay_for_branch(app: &ProjectApp, branch: &str) -> u64 {
     };
     match get_agent_definition(&app.config(), &agent_name).map(|a| a.implementation) {
         // Codex needs a beat between opening its composer and submitting.
-        Some(AgentImplementation::Builtin(common::services::agent_registry::BuiltinAgentId::Codex)) => 200,
+        Some(AgentImplementation::Builtin(
+            common::services::agent_registry::BuiltinAgentId::Codex,
+        )) => 200,
         _ => 0,
     }
 }
@@ -996,8 +1125,12 @@ async fn send_worktree_prompt(
         let app = app.clone();
         let branch = name.clone();
         tokio::task::spawn_blocking(move || {
-            resolve_terminal_target(&app, &branch)
-                .map(|resolved| (resolved.attach_target, submit_delay_for_branch(&app, &branch)))
+            resolve_terminal_target(&app, &branch).map(|resolved| {
+                (
+                    resolved.attach_target,
+                    submit_delay_for_branch(&app, &branch),
+                )
+            })
         })
         .await
         .map_err(|_| ApiError::new(500, "task panicked".to_string()))?
@@ -1153,7 +1286,11 @@ struct PullMainBody {
     repo: Option<String>,
 }
 
-fn pull_main_impl(app: &ProjectApp, force: bool, repo: Option<String>) -> Result<PullMainResult, LifecycleError> {
+fn pull_main_impl(
+    app: &ProjectApp,
+    force: bool,
+    repo: Option<String>,
+) -> Result<PullMainResult, LifecycleError> {
     let config = app.config();
     let project_root = match repo.as_deref().filter(|r| !r.is_empty()) {
         None => app.path.clone(),
@@ -1214,19 +1351,28 @@ async fn refresh_agent_terminal(
             .worktrees
             .into_iter()
             .find(|w| w.branch == branch)
-            .ok_or(LifecycleError { message: format!("Worktree not found: {branch}"), status: 404 })?;
-        let conversation_id = common::services::conversation_router::resolve_conversation_id(&worktree)
-            .ok_or_else(|| LifecycleError {
-                message: format!(
-                    "Refreshing the agent terminal is only available for these agents: {}",
-                    common::services::conversation_router::conversation_capable_agent_ids().join(", ")
-                ),
-                status: 409,
+            .ok_or(LifecycleError {
+                message: format!("Worktree not found: {branch}"),
+                status: 404,
             })?;
+        let conversation_id = common::services::conversation_router::resolve_conversation_id(
+            &worktree,
+        )
+        .ok_or_else(|| LifecycleError {
+            message: format!(
+                "Refreshing the agent terminal is only available for these agents: {}",
+                common::services::conversation_router::conversation_capable_agent_ids().join(", ")
+            ),
+            status: 409,
+        })?;
         if conversation_id.contains("-pending:") {
-            return Err(LifecycleError { message: "No conversation is available to refresh".to_string(), status: 409 });
+            return Err(LifecycleError {
+                message: "No conversation is available to refresh".to_string(),
+                status: 409,
+            });
         }
-        app.lifecycle().refresh_agent_terminal(&branch, &conversation_id)
+        app.lifecycle()
+            .refresh_agent_terminal(&branch, &conversation_id)
     })
     .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
@@ -1288,15 +1434,18 @@ async fn agents_conversation(
             .into_iter()
             .find(|w| w.branch == branch)
             .ok_or((404u16, format!("Worktree not found: {branch}")))?;
-        common::services::conversation_router::read_worktree_conversation(&worktree).ok_or_else(|| {
-            (
-                409u16,
-                format!(
-                    "Worktree chat is only available for these agents: {}",
-                    common::services::conversation_router::conversation_capable_agent_ids().join(", ")
-                ),
-            )
-        })
+        common::services::conversation_router::read_worktree_conversation(&worktree).ok_or_else(
+            || {
+                (
+                    409u16,
+                    format!(
+                        "Worktree chat is only available for these agents: {}",
+                        common::services::conversation_router::conversation_capable_agent_ids()
+                            .join(", ")
+                    ),
+                )
+            },
+        )
     })
     .await
     .map_err(|_| ApiError::new(500, "task panicked".to_string()))?
@@ -1352,19 +1501,24 @@ fn prepare_agent_send(
                 409u16,
                 format!(
                     "Streaming chat is only available for these agents: {}",
-                    common::services::conversation_router::conversation_capable_agent_ids().join(", ")
+                    common::services::conversation_router::conversation_capable_agent_ids()
+                        .join(", ")
                 ),
             )
         })?;
     if !worktree.mux {
-        return Err((409, "Open this worktree in the main dashboard before sending messages here".to_string()));
+        return Err((
+            409,
+            "Open this worktree in the main dashboard before sending messages here".to_string(),
+        ));
     }
 
     let git_dir = app
         .git
         .resolve_worktree_git_dir(&worktree.path)
         .map_err(|e| (422u16, e))?;
-    let meta = read_worktree_meta(&git_dir).ok_or((409u16, "Worktree metadata is missing".to_string()))?;
+    let meta =
+        read_worktree_meta(&git_dir).ok_or((409u16, "Worktree metadata is missing".to_string()))?;
 
     let config = app.config();
     let profile = config
@@ -1372,15 +1526,22 @@ fn prepare_agent_send(
         .get(&meta.profile)
         .ok_or((400u16, format!("Unknown profile: {}", meta.profile)))?;
     if meta.runtime != "host" {
-        return Err((409, "Streaming chat is only available for host-runtime worktrees".to_string()));
+        return Err((
+            409,
+            "Streaming chat is only available for host-runtime worktrees".to_string(),
+        ));
     }
 
     // Resolve the current conversation id (real session id, or a pending placeholder)
     // through the worktree's own agent adapter — the same path interrupt and streaming
     // use, so all three cannot disagree about which session a worktree owns.
     let conversation_id = common::services::conversation_router::resolve_conversation_id(&worktree)
-        .ok_or((409u16, "No conversation adapter for this worktree's agent".to_string()))?;
-    let resume_session_id = (!conversation_id.contains("-pending:")).then(|| conversation_id.clone());
+        .ok_or((
+            409u16,
+            "No conversation adapter for this worktree's agent".to_string(),
+        ))?;
+    let resume_session_id =
+        (!conversation_id.contains("-pending:")).then(|| conversation_id.clone());
 
     let mut extra = std::collections::HashMap::new();
     extra.insert("SEBENZA_WORKTREE_PATH".to_string(), worktree.path.clone());
@@ -1457,7 +1618,8 @@ async fn agents_interrupt(
                 409,
                 format!(
                     "Interrupt is only available for these agents: {}",
-                    common::services::conversation_router::conversation_capable_agent_ids().join(", ")
+                    common::services::conversation_router::conversation_capable_agent_ids()
+                        .join(", ")
                 ),
             )
         })?
@@ -1470,7 +1632,10 @@ async fn agents_interrupt(
             "interrupted": true,
             "streaming": true,
         }))),
-        None => Err(ApiError::new(409, "No active agent response to interrupt".to_string())),
+        None => Err(ApiError::new(
+            409,
+            "No active agent response to interrupt".to_string(),
+        )),
     }
 }
 
@@ -1511,17 +1676,27 @@ impl AgentsStreamSession {
     }
 
     /// Convert a live stream event into a wire JSON frame.
-    fn frame_for(&mut self, event: crate::services::agent_stream::StreamEvent) -> serde_json::Value {
+    fn frame_for(
+        &mut self,
+        event: crate::services::agent_stream::StreamEvent,
+    ) -> serde_json::Value {
         use crate::services::agent_stream::StreamEvent;
         match event {
-            StreamEvent::Status { running, active_turn_id } => serde_json::json!({
+            StreamEvent::Status {
+                running,
+                active_turn_id,
+            } => serde_json::json!({
                 "type": "conversationStatus",
                 "revision": self.next_revision(),
                 "conversationId": self.conversation_id,
                 "running": running,
                 "activeTurnId": active_turn_id,
             }),
-            StreamEvent::Delta { turn_id, item_id, delta } => {
+            StreamEvent::Delta {
+                turn_id,
+                item_id,
+                delta,
+            } => {
                 let order = self.reserve_order(&item_id);
                 serde_json::json!({
                     "type": "messageDelta",
@@ -1551,7 +1726,10 @@ impl AgentsStreamSession {
     }
 }
 
-fn message_to_json(m: &crate::services::agent_stream::DraftMessage, order: u64) -> serde_json::Value {
+fn message_to_json(
+    m: &crate::services::agent_stream::DraftMessage,
+    order: u64,
+) -> serde_json::Value {
     let mut obj = serde_json::json!({
         "id": m.id,
         "turnId": m.turn_id,
@@ -1595,12 +1773,17 @@ async fn agents_stream_socket(
         let branch = branch.clone();
         tokio::task::spawn_blocking(move || {
             let snapshot = reconcile_and_snapshot(&app);
-            snapshot.worktrees.into_iter().find(|w| w.branch == branch).and_then(|w| {
-                // Route through the worktree's own agent adapter — see `agents_interrupt`.
-                let conv = common::services::conversation_router::read_worktree_conversation(&w)?
-                    .conversation;
-                Some((conv.conversation_id, conv.messages.len() as u64))
-            })
+            snapshot
+                .worktrees
+                .into_iter()
+                .find(|w| w.branch == branch)
+                .and_then(|w| {
+                    // Route through the worktree's own agent adapter — see `agents_interrupt`.
+                    let conv =
+                        common::services::conversation_router::read_worktree_conversation(&w)?
+                            .conversation;
+                    Some((conv.conversation_id, conv.messages.len() as u64))
+                })
         })
         .await
         .ok()
@@ -1611,7 +1794,9 @@ async fn agents_stream_socket(
     let Some((conversation_id, next_order)) = resolved else {
         let _ = sink
             .send(Message::Text(
-                serde_json::json!({"type":"error","message":"Worktree not found"}).to_string().into(),
+                serde_json::json!({"type":"error","message":"Worktree not found"})
+                    .to_string()
+                    .into(),
             ))
             .await;
         return;
@@ -1623,7 +1808,11 @@ async fn agents_stream_socket(
         Some(subscription) => {
             for event in subscription.replay {
                 let frame = session.frame_for(event);
-                if sink.send(Message::Text(frame.to_string().into())).await.is_err() {
+                if sink
+                    .send(Message::Text(frame.to_string().into()))
+                    .await
+                    .is_err()
+                {
                     return;
                 }
             }
@@ -1705,8 +1894,7 @@ async fn fetch_registry_file(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let RegistryFileQuery { project, path: rel } = query;
     let response = run_blocking(move || {
-        let read =
-            common::services::portfolio_service::read_registry_track_file(&project, &rel);
+        let read = common::services::portfolio_service::read_registry_track_file(&project, &rel);
         track_file_json(read, rel)
     })
     .await?;
@@ -1714,7 +1902,8 @@ async fn fetch_registry_file(
 }
 
 async fn list_projects(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let projects: Vec<ProjectSummary> = state.manager.list().iter().map(|a| to_summary(a)).collect();
+    let projects: Vec<ProjectSummary> =
+        state.manager.list().iter().map(|a| to_summary(a)).collect();
     Json(serde_json::json!({ "projects": projects }))
 }
 
@@ -1735,7 +1924,10 @@ async fn add_project(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let input = body.path.trim();
     if input.is_empty() {
-        return Err(ApiError::new(400, "Request body must be { path: string }".to_string()));
+        return Err(ApiError::new(
+            400,
+            "Request body must be { path: string }".to_string(),
+        ));
     }
     if GitGateway::new().resolve_repo_root(input).is_none() {
         return Err(ApiError::new(400, format!("Not a git repository: {input}")));
@@ -1790,8 +1982,18 @@ async fn add_project(
             &state.project_inits,
             &root_owned,
             analyzer_available,
-            || init_authoring::scaffold_config(&init_authoring::detect_init_project_context(&root_owned, agent)),
-            || init_authoring::analyze_config(&init_authoring::detect_init_project_context(&root_owned, agent), &unique),
+            || {
+                init_authoring::scaffold_config(&init_authoring::detect_init_project_context(
+                    &root_owned,
+                    agent,
+                ))
+            },
+            || {
+                init_authoring::analyze_config(
+                    &init_authoring::detect_init_project_context(&root_owned, agent),
+                    &unique,
+                )
+            },
             || {
                 let app = state.manager.add(&root_owned);
                 (app.prefix.clone(), app.config().name.clone())
@@ -1847,14 +2049,14 @@ async fn runtime_event(
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
-    let expected = crate::adapters::control_token::load_control_token()
-        .map_err(|e| ApiError::new(500, e))?;
+    let expected =
+        crate::adapters::control_token::load_control_token().map_err(|e| ApiError::new(500, e))?;
     if token != Some(expected.as_str()) {
         return Err(ApiError::new(401, "Unauthorized".to_string()));
     }
 
-    let raw: serde_json::Value =
-        serde_json::from_slice(&body).map_err(|_| ApiError::new(400, "Invalid JSON".to_string()))?;
+    let raw: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| ApiError::new(400, "Invalid JSON".to_string()))?;
     let event = crate::domain::events::parse_runtime_event(&raw)
         .ok_or_else(|| ApiError::new(400, "Invalid runtime event body".to_string()))?;
 
@@ -1986,12 +2188,16 @@ impl OutFrame {
         match self {
             OutFrame::Output(data) => Message::Text(format!("o{data}").into()),
             OutFrame::Scrollback(data) => Message::Text(format!("s{data}").into()),
-            OutFrame::Exit(exit_code) => {
-                Message::Text(serde_json::json!({ "type": "exit", "exitCode": exit_code }).to_string().into())
-            }
-            OutFrame::Error(message) => {
-                Message::Text(serde_json::json!({ "type": "error", "message": message }).to_string().into())
-            }
+            OutFrame::Exit(exit_code) => Message::Text(
+                serde_json::json!({ "type": "exit", "exitCode": exit_code })
+                    .to_string()
+                    .into(),
+            ),
+            OutFrame::Error(message) => Message::Text(
+                serde_json::json!({ "type": "error", "message": message })
+                    .to_string()
+                    .into(),
+            ),
         }
     }
 }
@@ -2181,8 +2387,16 @@ async fn terminal_socket(
             } => {
                 if attach_id.is_none() {
                     // First resize = client reporting real dimensions. Attach now.
-                    match attach_flow(&app, &terminal, &branch, cols, rows, initial_pane, out_tx.clone())
-                        .await
+                    match attach_flow(
+                        &app,
+                        &terminal,
+                        &branch,
+                        cols,
+                        rows,
+                        initial_pane,
+                        out_tx.clone(),
+                    )
+                    .await
                     {
                         Ok((id, task)) => {
                             attach_id = Some(id);

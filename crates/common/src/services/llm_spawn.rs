@@ -7,11 +7,17 @@ use std::time::{Duration, Instant};
 const DEFAULT_CLAUDE_MODEL: &str = "claude-haiku-4-5-20251001";
 
 fn escape_toml_string(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 /// The CLI argv for a one-shot generation with the given prompts.
-pub fn build_llm_args(config: &AutoNameConfig, system_prompt: &str, user_prompt: &str) -> Vec<String> {
+pub fn build_llm_args(
+    config: &AutoNameConfig,
+    system_prompt: &str,
+    user_prompt: &str,
+) -> Vec<String> {
     match config.provider {
         AutoNameProvider::Claude => vec![
             "claude".into(),
@@ -22,7 +28,10 @@ pub fn build_llm_args(config: &AutoNameConfig, system_prompt: &str, user_prompt:
             "text".into(),
             "--no-session-persistence".into(),
             "--model".into(),
-            config.model.clone().unwrap_or_else(|| DEFAULT_CLAUDE_MODEL.to_string()),
+            config
+                .model
+                .clone()
+                .unwrap_or_else(|| DEFAULT_CLAUDE_MODEL.to_string()),
             "--effort".into(),
             "low".into(),
             user_prompt.into(),
@@ -46,7 +55,10 @@ pub fn build_llm_args(config: &AutoNameConfig, system_prompt: &str, user_prompt:
             let mut args = vec![
                 "codex".into(),
                 "-c".into(),
-                format!("developer_instructions=\"{}\"", escape_toml_string(system_prompt)),
+                format!(
+                    "developer_instructions=\"{}\"",
+                    escape_toml_string(system_prompt)
+                ),
                 "exec".into(),
                 "--ephemeral".into(),
             ];
@@ -61,10 +73,16 @@ pub fn build_llm_args(config: &AutoNameConfig, system_prompt: &str, user_prompt:
 }
 
 pub enum RunLlmResult {
-    Ok { stdout: String },
+    Ok {
+        stdout: String,
+    },
     Timeout,
     SpawnError,
-    ExitNonzero { exit_code: i32, stdout: String, stderr: String },
+    ExitNonzero {
+        exit_code: i32,
+        stdout: String,
+        stderr: String,
+    },
 }
 
 /// Spawn the LLM CLI, draining its pipes on background threads and killing it if
@@ -100,7 +118,11 @@ pub fn run_short_llm_task(
                 return if code == 0 {
                     RunLlmResult::Ok { stdout }
                 } else {
-                    RunLlmResult::ExitNonzero { exit_code: code, stdout, stderr }
+                    RunLlmResult::ExitNonzero {
+                        exit_code: code,
+                        stdout,
+                        stderr,
+                    }
                 };
             }
             Ok(None) => {
@@ -161,7 +183,11 @@ mod tests {
 
     #[test]
     fn opencode_args_use_run_and_fold_the_system_prompt_into_the_message() {
-        let args = build_llm_args(&config(AutoNameProvider::Opencode, Some("google/gemini")), "sys", "name this");
+        let args = build_llm_args(
+            &config(AutoNameProvider::Opencode, Some("google/gemini")),
+            "sys",
+            "name this",
+        );
         assert_eq!(args[0], "opencode");
         assert_eq!(args[1], "run");
         assert!(args.contains(&"--model".to_string()));
@@ -170,15 +196,28 @@ mod tests {
         // Acceptable for a one-shot naming call; it would NOT be for an interactive
         // session, where it would silently alter the transcript.
         let last = args.last().unwrap();
-        assert!(last.contains("sys") && last.contains("name this"), "got {last}");
-        assert_eq!(llm_provider_label(&config(AutoNameProvider::Opencode, None)), "opencode");
+        assert!(
+            last.contains("sys") && last.contains("name this"),
+            "got {last}"
+        );
+        assert_eq!(
+            llm_provider_label(&config(AutoNameProvider::Opencode, None)),
+            "opencode"
+        );
     }
 
     #[test]
     fn codex_args_embed_developer_instructions_and_model() {
-        let args = build_llm_args(&config(AutoNameProvider::Codex, Some("gpt-x")), "sy\"s", "u");
+        let args = build_llm_args(
+            &config(AutoNameProvider::Codex, Some("gpt-x")),
+            "sy\"s",
+            "u",
+        );
         assert_eq!(args[0], "codex");
-        assert!(args.iter().any(|a| a.contains("developer_instructions=\"sy\\\"s\"")));
+        assert!(
+            args.iter()
+                .any(|a| a.contains("developer_instructions=\"sy\\\"s\""))
+        );
         assert!(args.contains(&"-m".to_string()));
         assert!(args.contains(&"gpt-x".to_string()));
         assert!(args.contains(&"--ephemeral".to_string()));

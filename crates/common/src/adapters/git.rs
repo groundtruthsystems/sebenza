@@ -93,7 +93,12 @@ pub fn parse_git_worktree_porcelain(output: &str) -> Vec<GitWorktreeEntry> {
         };
 
         if let Some(branch) = line.strip_prefix("branch ") {
-            entry.branch = Some(branch.strip_prefix("refs/heads/").unwrap_or(branch).to_string());
+            entry.branch = Some(
+                branch
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(branch)
+                    .to_string(),
+            );
         } else if let Some(head) = line.strip_prefix("HEAD ") {
             entry.head = Some(head.to_string());
         } else if line == "detached" {
@@ -119,7 +124,9 @@ fn worktree_entry_path_exists(entry: &GitWorktreeEntry) -> bool {
 /// main branch, and that is exactly why the main branch must not be offered as
 /// available for a *new* worktree. Callers must pass the output of the non-live
 /// `list_worktrees` so stale registrations still count as occupied.
-pub fn checked_out_branch_names(entries: &[GitWorktreeEntry]) -> std::collections::BTreeSet<String> {
+pub fn checked_out_branch_names(
+    entries: &[GitWorktreeEntry],
+) -> std::collections::BTreeSet<String> {
     entries
         .iter()
         .filter(|entry| !entry.bare)
@@ -254,10 +261,7 @@ impl GitGateway {
 
         GitWorktreeStatus {
             dirty: !dirty_output.is_empty(),
-            ahead_count: ahead
-                .ok()
-                .and_then(|s| s.parse::<i32>().ok())
-                .unwrap_or(0),
+            ahead_count: ahead.ok().and_then(|s| s.parse::<i32>().ok()).unwrap_or(0),
             current_commit: commit.ok().filter(|s| !s.is_empty()),
         }
     }
@@ -293,7 +297,12 @@ impl GitGateway {
         run_git(&args, &opts.repo_root).map(|_| ())
     }
 
-    pub fn remove_worktree(&self, repo_root: &str, worktree_path: &str, force: bool) -> Result<(), String> {
+    pub fn remove_worktree(
+        &self,
+        repo_root: &str,
+        worktree_path: &str,
+        force: bool,
+    ) -> Result<(), String> {
         let mut args: Vec<&str> = vec!["worktree", "remove"];
         if force {
             args.push("--force");
@@ -312,12 +321,15 @@ impl GitGateway {
         if is_registered_worktree(&remaining, worktree_path) {
             return Err(failure);
         }
-        remove_directory(worktree_path)
-            .map_err(|e| format!("{failure}; cleanup failed: {e}"))
+        remove_directory(worktree_path).map_err(|e| format!("{failure}; cleanup failed: {e}"))
     }
 
     pub fn delete_branch(&self, repo_root: &str, branch: &str, force: bool) -> Result<(), String> {
-        run_git(&["branch", if force { "-D" } else { "-d" }, branch], repo_root).map(|_| ())
+        run_git(
+            &["branch", if force { "-D" } else { "-d" }, branch],
+            repo_root,
+        )
+        .map(|_| ())
     }
 
     /// Merge `source_branch` into `target_branch` with `--no-ff`, restoring the
@@ -390,7 +402,10 @@ impl GitGateway {
     pub fn list_unpushed_commits(&self, cwd: &str) -> Vec<UnpushedCommit> {
         let mut result = try_run_git(&["log", "--oneline", "@{upstream}..HEAD"], cwd);
         if result.is_err() {
-            result = try_run_git(&["log", "--oneline", "HEAD", "--not", "--remotes=origin"], cwd);
+            result = try_run_git(
+                &["log", "--oneline", "HEAD", "--not", "--remotes=origin"],
+                cwd,
+            );
         }
         let Ok(stdout) = result else {
             return Vec::new();
@@ -561,8 +576,14 @@ bare
     fn is_repo_root_entry_distinguishes_the_root_from_linked_worktrees() {
         // Paths that don't exist fall back to themselves, so this is a pure
         // string comparison here — the canonicalizing case is covered below.
-        assert!(is_repo_root_entry(&entry("/repo", Some("main"), false), "/repo"));
-        assert!(!is_repo_root_entry(&entry("/repo/wt/a", Some("a"), false), "/repo"));
+        assert!(is_repo_root_entry(
+            &entry("/repo", Some("main"), false),
+            "/repo"
+        ));
+        assert!(!is_repo_root_entry(
+            &entry("/repo/wt/a", Some("a"), false),
+            "/repo"
+        ));
     }
 
     #[test]

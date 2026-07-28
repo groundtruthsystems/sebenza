@@ -1,13 +1,13 @@
 pub mod agent_runtime;
 pub mod claude_cli;
 pub mod codex_session_log;
-pub mod opencode_session_log;
 pub mod control_token;
 pub mod docker;
 pub mod fs;
 pub mod git;
 pub mod hooks;
 pub mod instance_registry;
+pub mod opencode_session_log;
 pub mod projects_registry;
 pub mod sebenza_registry;
 pub mod session_discovery;

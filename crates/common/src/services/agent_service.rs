@@ -25,7 +25,10 @@ const DOCKER_PATH_FALLBACK: &str =
     "/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin:/root/.opencode/bin";
 
 fn docker_runtime_bootstrap(runtime_env_path: &str) -> String {
-    format!("{}; export PATH=\"$PATH:{DOCKER_PATH_FALLBACK}\"", runtime_bootstrap(runtime_env_path))
+    format!(
+        "{}; export PATH=\"$PATH:{DOCKER_PATH_FALLBACK}\"",
+        runtime_bootstrap(runtime_env_path)
+    )
 }
 
 fn docker_exec_command(container: &str, worktree_path: &str, command: &str) -> String {
@@ -45,12 +48,20 @@ pub fn build_docker_agent_pane_command(
     runtime_env_path: &str,
     inv: &AgentInvocation,
 ) -> String {
-    let inner = format!("{}; {}", docker_runtime_bootstrap(runtime_env_path), agent_invocation(inv));
+    let inner = format!(
+        "{}; {}",
+        docker_runtime_bootstrap(runtime_env_path),
+        agent_invocation(inv)
+    );
     docker_exec_command(container, worktree_path, &inner)
 }
 
 /// Shell pane command for a docker-runtime worktree.
-pub fn build_docker_shell_command(container: &str, worktree_path: &str, runtime_env_path: &str) -> String {
+pub fn build_docker_shell_command(
+    container: &str,
+    worktree_path: &str,
+    runtime_env_path: &str,
+) -> String {
     let inner = format!(
         "{}; if [ -x '/bin/bash' ]; then exec '/bin/bash' -i; elif [ -x /bin/sh ]; then exec /bin/sh -i; else echo 'sebenza: no shell found in container' >&2; exit 127; fi",
         docker_runtime_bootstrap(runtime_env_path)
@@ -77,7 +88,11 @@ pub struct AgentInvocation<'a> {
 /// Claude's launch argv. Kept byte-identical to the pre-refactor behaviour — see the
 /// `GOLDEN` table in this module's tests.
 fn claude_invocation(inv: &AgentInvocation, prompt_suffix: &str) -> String {
-    let yolo = if inv.yolo { " --dangerously-skip-permissions" } else { "" };
+    let yolo = if inv.yolo {
+        " --dangerously-skip-permissions"
+    } else {
+        ""
+    };
     if inv.launch_mode == AgentLaunchMode::Fork
         && let Some(fork) = inv.fork_from_session_id
     {
@@ -120,7 +135,10 @@ fn codex_invocation(inv: &AgentInvocation, prompt_suffix: &str) -> String {
     if inv.launch_mode == AgentLaunchMode::Fork
         && let Some(fork) = inv.fork_from_session_id
     {
-        return format!("codex{hooks}{yolo} fork {}{prompt_suffix}", quote_shell(fork));
+        return format!(
+            "codex{hooks}{yolo} fork {}{prompt_suffix}",
+            quote_shell(fork)
+        );
     }
     if inv.launch_mode == AgentLaunchMode::Resume {
         let target = inv
@@ -158,7 +176,10 @@ fn opencode_invocation(inv: &AgentInvocation) -> String {
         && let Some(fork) = inv.fork_from_session_id
     {
         // --fork requires --session or --continue; it branches rather than resuming.
-        return format!("opencode{yolo} --session {} --fork{prompt}", quote_shell(fork));
+        return format!(
+            "opencode{yolo} --session {} --fork{prompt}",
+            quote_shell(fork)
+        );
     }
     if inv.launch_mode == AgentLaunchMode::Resume {
         let target = inv
@@ -204,15 +225,24 @@ fn render_custom_template(template: &str) -> String {
     out
 }
 
-fn custom_invocation(config: &crate::domain::config::CustomAgentConfig, inv: &AgentInvocation) -> String {
+fn custom_invocation(
+    config: &crate::domain::config::CustomAgentConfig,
+    inv: &AgentInvocation,
+) -> String {
     let template = if inv.launch_mode == AgentLaunchMode::Resume {
-        config.resume_command.as_deref().unwrap_or(&config.start_command)
+        config
+            .resume_command
+            .as_deref()
+            .unwrap_or(&config.start_command)
     } else {
         &config.start_command
     };
     let exports: Vec<String> = [
         ("SEBENZA_AGENT_PROMPT", inv.prompt.unwrap_or("")),
-        ("SEBENZA_AGENT_SYSTEM_PROMPT", inv.system_prompt.unwrap_or("")),
+        (
+            "SEBENZA_AGENT_SYSTEM_PROMPT",
+            inv.system_prompt.unwrap_or(""),
+        ),
         ("SEBENZA_AGENT_WORKTREE_PATH", inv.worktree_path),
         ("SEBENZA_AGENT_REPO_PATH", inv.repo_root),
         ("SEBENZA_AGENT_BRANCH", inv.branch),
@@ -221,7 +251,11 @@ fn custom_invocation(config: &crate::domain::config::CustomAgentConfig, inv: &Ag
     .iter()
     .map(|(k, v)| format!("export {k}={}", quote_shell(v)))
     .collect();
-    format!("{}; {}", exports.join("; "), render_custom_template(template))
+    format!(
+        "{}; {}",
+        exports.join("; "),
+        render_custom_template(template)
+    )
 }
 
 fn agent_invocation(inv: &AgentInvocation) -> String {
@@ -233,7 +267,11 @@ fn agent_invocation(inv: &AgentInvocation) -> String {
 
 /// The agent pane command: source the runtime env, then exec the agent.
 pub fn build_agent_pane_command(runtime_env_path: &str, inv: &AgentInvocation) -> String {
-    format!("{}; {}", runtime_bootstrap(runtime_env_path), agent_invocation(inv))
+    format!(
+        "{}; {}",
+        runtime_bootstrap(runtime_env_path),
+        agent_invocation(inv)
+    )
 }
 
 /// The managed shell pane command: source the runtime env, then exec an
@@ -279,23 +317,71 @@ mod tests {
     /// strings — this table is the proof that it is behaviour-preserving.
     const GOLDEN: &[(BuiltinAgentId, &str, &str)] = &[
         (BuiltinAgentId::Claude, "fresh", "claude"),
-        (BuiltinAgentId::Claude, "fresh+yolo", "claude --dangerously-skip-permissions"),
-        (BuiltinAgentId::Claude, "fresh+sys+prompt", "claude --append-system-prompt 'be x' -- 'do y'"),
+        (
+            BuiltinAgentId::Claude,
+            "fresh+yolo",
+            "claude --dangerously-skip-permissions",
+        ),
+        (
+            BuiltinAgentId::Claude,
+            "fresh+sys+prompt",
+            "claude --append-system-prompt 'be x' -- 'do y'",
+        ),
         (BuiltinAgentId::Claude, "resume+last", "claude --continue"),
         (BuiltinAgentId::Claude, "resume+id", "claude --resume 'sid'"),
-        (BuiltinAgentId::Claude, "fork", "claude --resume 'fid' --fork-session --session-id 'pin'"),
+        (
+            BuiltinAgentId::Claude,
+            "fork",
+            "claude --resume 'fid' --fork-session --session-id 'pin'",
+        ),
         (BuiltinAgentId::Codex, "fresh", "codex --enable hooks"),
-        (BuiltinAgentId::Codex, "fresh+yolo", "codex --enable hooks --yolo"),
-        (BuiltinAgentId::Codex, "fresh+sys+prompt", "codex --enable hooks -c 'developer_instructions=be x' -- 'do y'"),
-        (BuiltinAgentId::Codex, "resume+last", "codex --enable hooks resume --last"),
-        (BuiltinAgentId::Codex, "resume+id", "codex --enable hooks resume 'sid'"),
-        (BuiltinAgentId::Codex, "fork", "codex --enable hooks fork 'fid'"),
+        (
+            BuiltinAgentId::Codex,
+            "fresh+yolo",
+            "codex --enable hooks --yolo",
+        ),
+        (
+            BuiltinAgentId::Codex,
+            "fresh+sys+prompt",
+            "codex --enable hooks -c 'developer_instructions=be x' -- 'do y'",
+        ),
+        (
+            BuiltinAgentId::Codex,
+            "resume+last",
+            "codex --enable hooks resume --last",
+        ),
+        (
+            BuiltinAgentId::Codex,
+            "resume+id",
+            "codex --enable hooks resume 'sid'",
+        ),
+        (
+            BuiltinAgentId::Codex,
+            "fork",
+            "codex --enable hooks fork 'fid'",
+        ),
         (BuiltinAgentId::Opencode, "fresh", "opencode"),
         (BuiltinAgentId::Opencode, "fresh+yolo", "opencode --auto"),
-        (BuiltinAgentId::Opencode, "fresh+sys+prompt", "opencode --prompt 'do y'"),
-        (BuiltinAgentId::Opencode, "resume+last", "opencode --continue"),
-        (BuiltinAgentId::Opencode, "resume+id", "opencode --session 'sid'"),
-        (BuiltinAgentId::Opencode, "fork", "opencode --session 'fid' --fork"),
+        (
+            BuiltinAgentId::Opencode,
+            "fresh+sys+prompt",
+            "opencode --prompt 'do y'",
+        ),
+        (
+            BuiltinAgentId::Opencode,
+            "resume+last",
+            "opencode --continue",
+        ),
+        (
+            BuiltinAgentId::Opencode,
+            "resume+id",
+            "opencode --session 'sid'",
+        ),
+        (
+            BuiltinAgentId::Opencode,
+            "fork",
+            "opencode --session 'fid' --fork",
+        ),
     ];
 
     fn apply_case<'a>(i: &mut AgentInvocation<'a>, case: &str) {
@@ -340,9 +426,17 @@ mod tests {
         for id in BuiltinAgentId::ALL {
             assert_eq!(BuiltinAgentId::from_wire(id.as_str()), Some(*id));
         }
-        assert_eq!(BuiltinAgentId::from_wire("goose"), None, "goose is not a builtin in this track");
+        assert_eq!(
+            BuiltinAgentId::from_wire("goose"),
+            None,
+            "goose is not a builtin in this track"
+        );
         assert_eq!(BuiltinAgentId::from_wire("some-custom"), None);
-        assert_eq!(BuiltinAgentId::from_wire("Claude"), None, "wire ids are case-sensitive");
+        assert_eq!(
+            BuiltinAgentId::from_wire("Claude"),
+            None,
+            "wire ids are case-sensitive"
+        );
     }
 
     #[test]
@@ -422,7 +516,10 @@ mod tests {
         invocation.system_prompt = Some("be terse");
         let cmd = agent_invocation(&invocation);
         assert!(cmd.contains("--session-id 'abc'"), "got: {cmd}");
-        assert!(cmd.contains("--append-system-prompt 'be terse'"), "got: {cmd}");
+        assert!(
+            cmd.contains("--append-system-prompt 'be terse'"),
+            "got: {cmd}"
+        );
     }
 
     #[test]

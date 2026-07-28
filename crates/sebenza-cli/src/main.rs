@@ -63,14 +63,44 @@ Environment:
 }
 
 const ROOT_COMMANDS: &[&str] = &[
-    "serve", "init", "service", "update", "add", "oneshot", "list", "open", "close", "refresh",
-    "archive", "unarchive", "label", "remove", "merge", "send", "tab", "prune", "restore",
-    "project", "completion",
+    "serve",
+    "init",
+    "service",
+    "update",
+    "add",
+    "oneshot",
+    "list",
+    "open",
+    "close",
+    "refresh",
+    "archive",
+    "unarchive",
+    "label",
+    "remove",
+    "merge",
+    "send",
+    "tab",
+    "prune",
+    "restore",
+    "project",
+    "completion",
 ];
 
 const WORKTREE_COMMANDS: &[&str] = &[
-    "add", "list", "open", "close", "refresh", "archive", "unarchive", "label", "remove", "merge",
-    "send", "tab", "prune", "restore",
+    "add",
+    "list",
+    "open",
+    "close",
+    "refresh",
+    "archive",
+    "unarchive",
+    "label",
+    "remove",
+    "merge",
+    "send",
+    "tab",
+    "prune",
+    "restore",
 ];
 
 fn is_serve_root_option(value: &str) -> bool {
@@ -120,8 +150,12 @@ fn parse_root_args(args: &[String]) -> Result<ParsedRoot, String> {
 
         match arg.as_str() {
             "--port" => {
-                let value = args.get(index + 1).ok_or("Error: --port requires a numeric value")?;
-                port = value.parse().map_err(|_| "Error: --port requires a numeric value".to_string())?;
+                let value = args
+                    .get(index + 1)
+                    .ok_or("Error: --port requires a numeric value")?;
+                port = value
+                    .parse()
+                    .map_err(|_| "Error: --port requires a numeric value".to_string())?;
                 port_explicit = true;
                 index += 1;
             }
@@ -137,7 +171,9 @@ fn parse_root_args(args: &[String]) -> Result<ParsedRoot, String> {
             }
             other => {
                 if !ROOT_COMMANDS.contains(&other) {
-                    return Err(format!("Unknown command or option: {other}\nRun sebenza-cli --help for usage."));
+                    return Err(format!(
+                        "Unknown command or option: {other}\nRun sebenza-cli --help for usage."
+                    ));
                 }
                 command = Some(other.to_string());
             }
@@ -145,7 +181,14 @@ fn parse_root_args(args: &[String]) -> Result<ParsedRoot, String> {
         index += 1;
     }
 
-    Ok(ParsedRoot { port, port_explicit, debug, app, command, command_args })
+    Ok(ParsedRoot {
+        port,
+        port_explicit,
+        debug,
+        app,
+        command,
+        command_args,
+    })
 }
 
 #[tokio::main]
@@ -198,7 +241,11 @@ async fn main() {
     } else {
         let resolved = resolve_live_server_port(parsed.port, &cwd);
         if parsed.debug && resolved.source != port::PortSource::Default {
-            eprintln!("[sebenza-cli] resolved port {} from live instance ({})", resolved.port, resolved.source.as_str());
+            eprintln!(
+                "[sebenza-cli] resolved port {} from live instance ({})",
+                resolved.port,
+                resolved.source.as_str()
+            );
         }
         resolved.port
     };
@@ -207,8 +254,9 @@ async fn main() {
     // that reaches a project — except `project migrate`, which consolidates them.
     let is_project_migrate =
         command == "project" && parsed.command_args.first().map(String::as_str) == Some("migrate");
-    let reaches_project =
-        command == "oneshot" || command == "project" || WORKTREE_COMMANDS.contains(&command.as_str());
+    let reaches_project = command == "oneshot"
+        || command == "project"
+        || WORKTREE_COMMANDS.contains(&command.as_str());
     if reaches_project && !is_project_migrate {
         migrate::warn_if_other_instances(effective_port);
     }

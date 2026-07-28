@@ -1,5 +1,5 @@
 use crate::domain::config::ProjectConfig;
-use crate::services::agent_registry::{list_agent_details, AgentCapabilitiesWire};
+use crate::services::agent_registry::{AgentCapabilitiesWire, list_agent_details};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -164,12 +164,10 @@ pub fn build_app_config(config: &ProjectConfig, project_dir: &str) -> AppConfig 
             .iter()
             .map(|lr| LinkedRepoView {
                 alias: lr.alias.clone(),
-                dir: lr.dir.as_ref().map(|d| {
-                    Path::new(project_dir)
-                        .join(d)
-                        .to_string_lossy()
-                        .to_string()
-                }),
+                dir: lr
+                    .dir
+                    .as_ref()
+                    .map(|d| Path::new(project_dir).join(d).to_string_lossy().to_string()),
             })
             .collect(),
         auto_remove_on_merge: config.integrations.github.auto_remove_on_merge,
@@ -181,8 +179,8 @@ pub fn build_app_config(config: &ProjectConfig, project_dir: &str) -> AppConfig 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::config::CustomAgentConfig;
     use crate::config::default_config;
+    use crate::domain::config::CustomAgentConfig;
     use crate::services::agent_registry::list_agent_definitions;
 
     fn config_with_customs() -> ProjectConfig {

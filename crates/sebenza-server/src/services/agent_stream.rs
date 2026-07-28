@@ -51,10 +51,22 @@ pub struct DraftMessage {
 /// Live event broadcast to subscribers (order + revision are stamped per-subscriber).
 #[derive(Clone)]
 pub enum StreamEvent {
-    Status { running: bool, active_turn_id: Option<String> },
-    Delta { turn_id: String, item_id: String, delta: String },
-    Upsert { message: DraftMessage, order_key: String },
-    Error { message: String },
+    Status {
+        running: bool,
+        active_turn_id: Option<String>,
+    },
+    Delta {
+        turn_id: String,
+        item_id: String,
+        delta: String,
+    },
+    Upsert {
+        message: DraftMessage,
+        order_key: String,
+    },
+    Error {
+        message: String,
+    },
 }
 
 struct RunState {
@@ -202,7 +214,10 @@ fn emit_status(run: &RunState, running: bool) {
 }
 
 fn emit_upsert(run: &RunState, message: DraftMessage, order_key: String) {
-    run.live.lock().unwrap().insert(message.id.clone(), message.clone());
+    run.live
+        .lock()
+        .unwrap()
+        .insert(message.id.clone(), message.clone());
     let _ = run.tx.send(StreamEvent::Upsert { message, order_key });
 }
 
@@ -224,7 +239,10 @@ fn finish_run(run: &RunState, status: &str) {
     };
     for message in finalized {
         let key = message.id.clone();
-        let _ = run.tx.send(StreamEvent::Upsert { message, order_key: key });
+        let _ = run.tx.send(StreamEvent::Upsert {
+            message,
+            order_key: key,
+        });
     }
     emit_status(run, false);
 }
@@ -265,7 +283,9 @@ async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
-            let _ = run.tx.send(StreamEvent::Error { message: format!("failed to spawn claude: {e}") });
+            let _ = run.tx.send(StreamEvent::Error {
+                message: format!("failed to spawn claude: {e}"),
+            });
             return;
         }
     };
@@ -358,11 +378,18 @@ fn handle_stream_line(
 
     for block in parsed.blocks {
         let id = if block.kind == "toolResult" {
-            format!("tool_result:{}", block.tool_call_id.clone().unwrap_or_default())
+            format!(
+                "tool_result:{}",
+                block.tool_call_id.clone().unwrap_or_default()
+            )
         } else {
             format!(
                 "{}:{}",
-                block.message_id.clone().or_else(|| message_id.clone()).unwrap_or_else(|| "msg".to_string()),
+                block
+                    .message_id
+                    .clone()
+                    .or_else(|| message_id.clone())
+                    .unwrap_or_else(|| "msg".to_string()),
                 block_index
             )
         };
@@ -416,7 +443,9 @@ async fn run_codex(input: StartRunInput, run: Arc<RunState>) {
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
-            let _ = run.tx.send(StreamEvent::Error { message: format!("failed to spawn codex: {e}") });
+            let _ = run.tx.send(StreamEvent::Error {
+                message: format!("failed to spawn codex: {e}"),
+            });
             return;
         }
     };
@@ -454,7 +483,11 @@ fn handle_codex_line(line: &str, run: &RunState) {
             let Some(item) = event.get("item") else {
                 return;
             };
-            let id = item.get("id").and_then(Value::as_str).unwrap_or("item").to_string();
+            let id = item
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("item")
+                .to_string();
             let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
             let (role, kind) = match item_type {
                 "agent_message" => ("assistant", "text"),
@@ -466,7 +499,12 @@ fn handle_codex_line(line: &str, run: &RunState) {
                 .get("text")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .unwrap_or_else(|| item.get("command").and_then(Value::as_str).unwrap_or("").to_string());
+                .unwrap_or_else(|| {
+                    item.get("command")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_string()
+                });
             let status = if event.get("type").and_then(Value::as_str) == Some("item.started") {
                 "inProgress"
             } else {
@@ -486,7 +524,11 @@ fn handle_codex_line(line: &str, run: &RunState) {
             emit_upsert(run, message, id);
         }
         Some("error") => {
-            let msg = event.get("message").and_then(Value::as_str).unwrap_or("codex error").to_string();
+            let msg = event
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("codex error")
+                .to_string();
             let _ = run.tx.send(StreamEvent::Error { message: msg });
         }
         _ => {}

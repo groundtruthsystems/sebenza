@@ -50,12 +50,16 @@ pub fn decide(
     let is_terminal = matches!(lifecycle, AgentLifecycle::Stopped | AgentLifecycle::Error);
     let needs_grace = matches!(lifecycle, AgentLifecycle::Idle | AgentLifecycle::Closed);
     if !is_terminal && !needs_grace {
-        return OneshotDecision::Wait { idle_since_ms: None };
+        return OneshotDecision::Wait {
+            idle_since_ms: None,
+        };
     }
     let idle_since = idle_since_ms.unwrap_or(now_ms);
     let stable = is_terminal || now_ms.saturating_sub(idle_since) >= idle_grace_ms;
     if !stable {
-        return OneshotDecision::Wait { idle_since_ms: Some(idle_since) };
+        return OneshotDecision::Wait {
+            idle_since_ms: Some(idle_since),
+        };
     }
     let reason = if is_terminal {
         format!("agent {}", lifecycle_label(lifecycle))
@@ -99,7 +103,16 @@ pub fn run_oneshot_watch(
         {
             continue;
         }
-        process_worktree(states, runtime, lifecycle, &wt.branch, &wt.path, wt.agent.lifecycle, !wt.prs.is_empty(), now_ms);
+        process_worktree(
+            states,
+            runtime,
+            lifecycle,
+            &wt.branch,
+            &wt.path,
+            wt.agent.lifecycle,
+            !wt.prs.is_empty(),
+            now_ms,
+        );
     }
 }
 
@@ -138,20 +151,39 @@ fn process_worktree(
     let decision = decide(agent_lifecycle, has_pr, prior, now_ms, IDLE_GRACE_MS);
     let reason = match decision {
         OneshotDecision::Wait { idle_since_ms } => {
-            states.lock().unwrap().states.get_mut(branch).unwrap().idle_since_ms = idle_since_ms;
+            states
+                .lock()
+                .unwrap()
+                .states
+                .get_mut(branch)
+                .unwrap()
+                .idle_since_ms = idle_since_ms;
             return;
         }
         OneshotDecision::Fire { reason } => reason,
     };
 
-    states.lock().unwrap().states.get_mut(branch).unwrap().in_flight = true;
+    states
+        .lock()
+        .unwrap()
+        .states
+        .get_mut(branch)
+        .unwrap()
+        .in_flight = true;
     tracing::info!("[oneshot-watcher] {branch}: {reason} — firing end-of-run actions");
 
-    let auto_close = meta.oneshot.as_ref().map(|o| o.auto_close_on_done).unwrap_or(false);
+    let auto_close = meta
+        .oneshot
+        .as_ref()
+        .map(|o| o.auto_close_on_done)
+        .unwrap_or(false);
     if auto_close {
         // Re-read meta immediately before closing: a user interaction during this
         // window must abort the close.
-        if resolve_meta(lifecycle, path).and_then(|m| m.oneshot).is_none() {
+        if resolve_meta(lifecycle, path)
+            .and_then(|m| m.oneshot)
+            .is_none()
+        {
             tracing::info!("[oneshot-watcher] {branch}: disarmed before close — skipping");
             states.lock().unwrap().states.remove(branch);
             return;
@@ -165,7 +197,11 @@ fn process_worktree(
     // Disarm so the watcher doesn't re-trigger, then mirror to the in-memory
     // runtime so snapshots reflect the disarm without waiting for a reconcile.
     lifecycle.disarm_oneshot(branch);
-    let worktree_id = runtime.lock().unwrap().get_worktree_by_branch(branch).map(|w| w.worktree_id);
+    let worktree_id = runtime
+        .lock()
+        .unwrap()
+        .get_worktree_by_branch(branch)
+        .map(|w| w.worktree_id);
     if let Some(id) = worktree_id {
         runtime.lock().unwrap().set_oneshot(&id, None);
     }
@@ -190,7 +226,13 @@ mod tests {
     fn awaiting_permission_never_fires_and_resets_the_idle_timer() {
         // A oneshot run blocked on a permission prompt is waiting for a HUMAN. Firing here
         // would auto-close the worktree and kill the agent mid-task.
-        let decision = decide(AgentLifecycle::AwaitingPermission, false, Some(0), 10_000_000, 1_000);
+        let decision = decide(
+            AgentLifecycle::AwaitingPermission,
+            false,
+            Some(0),
+            10_000_000,
+            1_000,
+        );
         match decision {
             OneshotDecision::Wait { idle_since_ms } => assert_eq!(
                 idle_since_ms, None,
@@ -210,7 +252,9 @@ mod tests {
     fn non_terminal_running_resets_timer() {
         assert_eq!(
             decide(AgentLifecycle::Running, false, Some(1_000), 5_000, 15_000),
-            OneshotDecision::Wait { idle_since_ms: None }
+            OneshotDecision::Wait {
+                idle_since_ms: None
+            }
         );
     }
 
@@ -218,7 +262,9 @@ mod tests {
     fn terminal_stopped_fires_immediately() {
         assert_eq!(
             decide(AgentLifecycle::Stopped, false, None, 0, 15_000),
-            OneshotDecision::Fire { reason: "agent stopped".to_string() }
+            OneshotDecision::Fire {
+                reason: "agent stopped".to_string()
+            }
         );
     }
 
@@ -227,17 +273,23 @@ mod tests {
         // First observation starts the timer.
         assert_eq!(
             decide(AgentLifecycle::Idle, true, None, 100, 15_000),
-            OneshotDecision::Wait { idle_since_ms: Some(100) }
+            OneshotDecision::Wait {
+                idle_since_ms: Some(100)
+            }
         );
         // Still within grace.
         assert_eq!(
             decide(AgentLifecycle::Idle, true, Some(100), 10_000, 15_000),
-            OneshotDecision::Wait { idle_since_ms: Some(100) }
+            OneshotDecision::Wait {
+                idle_since_ms: Some(100)
+            }
         );
         // Grace elapsed → fires with the PR-aware reason.
         assert_eq!(
             decide(AgentLifecycle::Idle, true, Some(100), 20_000, 15_000),
-            OneshotDecision::Fire { reason: "agent idle after opening PR".to_string() }
+            OneshotDecision::Fire {
+                reason: "agent idle after opening PR".to_string()
+            }
         );
     }
 
@@ -245,7 +297,9 @@ mod tests {
     fn closed_uses_grace_and_dedicated_reason() {
         assert_eq!(
             decide(AgentLifecycle::Closed, false, Some(0), 20_000, 15_000),
-            OneshotDecision::Fire { reason: "agent closed without resuming".to_string() }
+            OneshotDecision::Fire {
+                reason: "agent closed without resuming".to_string()
+            }
         );
     }
 }

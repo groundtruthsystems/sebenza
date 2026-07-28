@@ -4,15 +4,18 @@
 //! so this command regenerates + restarts services rather than fetching a build.
 
 use crate::service_units::{
-    generate_service_file, list_installed_services, read_port_from_unit, resolve_server_path,
-    InstalledService, Platform, ServiceConfig,
+    InstalledService, Platform, ServiceConfig, generate_service_file, list_installed_services,
+    read_port_from_unit, resolve_server_path,
 };
 
 const DEFAULT_PORT: u16 = 5111;
 
 fn run(cmd: &[&str]) -> (bool, String) {
     match std::process::Command::new(cmd[0]).args(&cmd[1..]).output() {
-        Ok(out) => (out.status.success(), String::from_utf8_lossy(&out.stderr).to_string()),
+        Ok(out) => (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ),
         Err(e) => (false, e.to_string()),
     }
 }
@@ -72,12 +75,19 @@ pub fn run_update() -> i32 {
         print_binary_note();
         return 0;
     }
-    println!("Refreshing {} installed Sebenza service(s)...", services.len());
+    println!(
+        "Refreshing {} installed Sebenza service(s)...",
+        services.len()
+    );
     for svc in &services {
         let regenerated = regenerate(svc);
         match reload_and_restart(svc, regenerated) {
             Ok(()) => {
-                let what = if regenerated { "regenerated unit, restarted" } else { "restarted" };
+                let what = if regenerated {
+                    "regenerated unit, restarted"
+                } else {
+                    "restarted"
+                };
                 println!("  {}: {what}", svc.name);
             }
             Err(e) => println!("  {}: failed — {e}", svc.name),

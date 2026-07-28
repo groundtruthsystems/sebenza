@@ -6,7 +6,7 @@
 //! sink the whole view, so every registry entry comes back with a `status` and
 //! the reader decides how to render it.
 
-use crate::adapters::fs::{read_track_file_in, TrackFileError};
+use crate::adapters::fs::{TrackFileError, read_track_file_in};
 use crate::adapters::sebenza_registry::{RegistryRead, SebenzaRegistry};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -52,7 +52,11 @@ pub struct Portfolio {
 /// resolving it against the project root rather than the server's cwd.
 fn resolve_tracks_file(project_path: &str, tracks_file: &str) -> PathBuf {
     let p = Path::new(tracks_file);
-    if p.is_absolute() { p.to_path_buf() } else { Path::new(project_path).join(p) }
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        Path::new(project_path).join(p)
+    }
 }
 
 /// The Sebenza workspace dir for a registered project — the parent of its
@@ -95,7 +99,11 @@ fn load_from(registry: &SebenzaRegistry) -> Portfolio {
 fn resolve_project(entry: crate::adapters::sebenza_registry::RegistryProject) -> PortfolioProject {
     let tracks_path = resolve_tracks_file(&entry.path, &entry.tracks_file);
     let (status, tracks, error) = if !Path::new(&entry.path).is_dir() {
-        (ProjectStatus::MissingPath, None, Some(format!("Project directory not found: {}", entry.path)))
+        (
+            ProjectStatus::MissingPath,
+            None,
+            Some(format!("Project directory not found: {}", entry.path)),
+        )
     } else {
         match std::fs::read_to_string(&tracks_path) {
             Err(e) => (ProjectStatus::MissingTracks, None, Some(e.to_string())),
@@ -138,8 +146,10 @@ mod tests {
     use std::fs;
 
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("sebenza-portfolio-{tag}-{}", crate::util::id::random_hex(8)));
+        let dir = std::env::temp_dir().join(format!(
+            "sebenza-portfolio-{tag}-{}",
+            crate::util::id::random_hex(8)
+        ));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -153,7 +163,11 @@ mod tests {
         let good = root.join("good");
         let good_ws = good.join(".ai").join("sebenza");
         fs::create_dir_all(&good_ws).unwrap();
-        fs::write(good_ws.join("tracks.json"), r#"{"tracks":[{"track_id":"a_20260727"}]}"#).unwrap();
+        fs::write(
+            good_ws.join("tracks.json"),
+            r#"{"tracks":[{"track_id":"a_20260727"}]}"#,
+        )
+        .unwrap();
 
         // Exists on disk, but its workspace was never created.
         let orphan = root.join("orphan");
@@ -183,7 +197,10 @@ mod tests {
         assert_eq!(portfolio.projects.len(), 3, "no project may be dropped");
 
         assert_eq!(portfolio.projects[0].status, ProjectStatus::Ok);
-        assert_eq!(portfolio.projects[0].tracks.as_ref().unwrap()["tracks"][0]["track_id"], "a_20260727");
+        assert_eq!(
+            portfolio.projects[0].tracks.as_ref().unwrap()["tracks"][0]["track_id"],
+            "a_20260727"
+        );
 
         assert_eq!(portfolio.projects[1].status, ProjectStatus::MissingTracks);
         assert!(portfolio.projects[1].error.is_some());

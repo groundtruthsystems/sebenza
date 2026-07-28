@@ -73,7 +73,12 @@ fn detect_main_branch(git_root: &str) -> String {
 
     if let Some(head) = trimmed(run(
         "git",
-        &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+        &[
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "refs/remotes/origin/HEAD",
+        ],
         cwd,
     )) && let Some(branch) = head.rsplit('/').next()
         && !branch.is_empty()
@@ -150,7 +155,8 @@ pub fn build_init_prompt_spec(context: &InitProjectContext) -> InitPromptSpec {
 
     InitPromptSpec {
         system_prompt,
-        user_prompt: "Adapt the existing starter `.ai/sebenza.yaml` for this repository.".to_string(),
+        user_prompt: "Adapt the existing starter `.ai/sebenza.yaml` for this repository."
+            .to_string(),
     }
 }
 
@@ -491,7 +497,16 @@ mod tests {
         let prompt = build_init_prompt_spec(&ctx());
         let spec = build_init_agent_command(InitAgent::Codex, &prompt, "abc123");
         assert_eq!(spec.cmd, "codex");
-        assert!(spec.summary_path.as_ref().unwrap().contains("sebenza-init-abc123"));
-        assert!(spec.args.iter().any(|a| a.starts_with("developer_instructions=")));
+        assert!(
+            spec.summary_path
+                .as_ref()
+                .unwrap()
+                .contains("sebenza-init-abc123")
+        );
+        assert!(
+            spec.args
+                .iter()
+                .any(|a| a.starts_with("developer_instructions="))
+        );
     }
 }

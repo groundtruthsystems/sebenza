@@ -32,7 +32,10 @@ pub struct OpencodeSession {
 }
 
 fn part_text(part: &Value) -> String {
-    part.get("text").and_then(Value::as_str).unwrap_or_default().to_string()
+    part.get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Map one `messages[]` entry's parts onto `AgentsUiMessage`s.
@@ -127,7 +130,10 @@ fn map_message(message: &Value, turn_id: &str, order: &mut usize) -> Vec<AgentsU
 
                 // Its result. `state.metadata.exit` gives a real exit code, so no
                 // Codex-style scraping of output text is needed.
-                let output = state.get("output").and_then(Value::as_str).unwrap_or_default();
+                let output = state
+                    .get("output")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let exit_code = state
                     .get("metadata")
                     .and_then(|m| m.get("exit"))
@@ -191,8 +197,14 @@ pub fn parse_export(text: &str) -> Option<OpencodeSession> {
 
     Some(OpencodeSession {
         id,
-        directory: info.get("directory").and_then(Value::as_str).map(str::to_string),
-        version: info.get("version").and_then(Value::as_str).map(str::to_string),
+        directory: info
+            .get("directory")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        version: info
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_string),
         messages,
     })
 }
@@ -221,7 +233,10 @@ mod tests {
     fn reads_session_metadata_needed_for_correlation_and_version_gating() {
         let s = parsed();
         assert!(s.id.starts_with("ses_"), "session id: {}", s.id);
-        assert_eq!(s.directory.as_deref(), Some("/repo/worktrees/example-branch"));
+        assert_eq!(
+            s.directory.as_deref(),
+            Some("/repo/worktrees/example-branch")
+        );
         assert_eq!(s.version.as_deref(), Some("1.18.7"));
     }
 
@@ -246,7 +261,11 @@ mod tests {
             Some(0),
             "exit code comes from state.metadata.exit, not from scraping output text"
         );
-        assert!(result.text.contains("hello-from-tool"), "result text: {}", result.text);
+        assert!(
+            result.text.contains("hello-from-tool"),
+            "result text: {}",
+            result.text
+        );
         // The pair must correlate.
         assert_eq!(use_msg.tool_call_id, result.tool_call_id);
     }
@@ -273,7 +292,10 @@ mod tests {
             !session_belongs_to(&s, "/repo/worktrees/example-branch-2"),
             "a longer sibling path must not match"
         );
-        assert!(!session_belongs_to(&s, "/repo/worktrees"), "a parent must not match");
+        assert!(
+            !session_belongs_to(&s, "/repo/worktrees"),
+            "a parent must not match"
+        );
     }
 
     #[test]
@@ -285,7 +307,10 @@ mod tests {
             {"info":{"role":"assistant"},"parts":[{"type":"brand-new-part"},{"type":"text"}]}
         ]}"#;
         let s = parse_export(odd).expect("parses despite unknown part");
-        assert!(s.messages.is_empty(), "empty text is skipped, unknown type ignored");
+        assert!(
+            s.messages.is_empty(),
+            "empty text is skipped, unknown type ignored"
+        );
         assert_eq!(s.directory, None);
     }
 }

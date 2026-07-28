@@ -57,9 +57,9 @@ fn map_worktree_snapshot(
         base_branch: state.base_branch.clone().filter(|b| !b.is_empty()),
         path: state.path.clone(),
         dir: state.path.clone(),
-        archived: archived_paths.contains(&crate::services::archive_service::normalize_archive_path(
-            &state.path,
-        )),
+        archived: archived_paths.contains(
+            &crate::services::archive_service::normalize_archive_path(&state.path),
+        ),
         profile: state.profile.clone(),
         agent_name: state.agent_name.clone(),
         agent_label: agent_label(config, state.agent_name.as_deref()),
@@ -122,22 +122,40 @@ mod tests {
         assert_eq!(format_elapsed_since(None, now), "");
         assert_eq!(format_elapsed_since(Some("not-a-date"), now), "");
         // 30s → 0m
-        assert_eq!(format_elapsed_since(Some("2024-01-01T23:59:30Z"), now), "0m");
+        assert_eq!(
+            format_elapsed_since(Some("2024-01-01T23:59:30Z"), now),
+            "0m"
+        );
         // 59m
-        assert_eq!(format_elapsed_since(Some("2024-01-01T23:01:00Z"), now), "59m");
+        assert_eq!(
+            format_elapsed_since(Some("2024-01-01T23:01:00Z"), now),
+            "59m"
+        );
         // exactly 1h
-        assert_eq!(format_elapsed_since(Some("2024-01-01T23:00:00Z"), now), "1h");
+        assert_eq!(
+            format_elapsed_since(Some("2024-01-01T23:00:00Z"), now),
+            "1h"
+        );
         // 25h → 1d
-        assert_eq!(format_elapsed_since(Some("2024-01-01T00:00:00Z"), now), "1d");
+        assert_eq!(
+            format_elapsed_since(Some("2024-01-01T00:00:00Z"), now),
+            "1d"
+        );
     }
 
     #[test]
     fn future_start_clamps_to_zero() {
         let now = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
-        assert_eq!(format_elapsed_since(Some("2100-01-01T00:00:00Z"), now), "0m");
+        assert_eq!(
+            format_elapsed_since(Some("2100-01-01T00:00:00Z"), now),
+            "0m"
+        );
     }
 
-    fn state(branch: &str, kind: crate::domain::model::WorktreeKind) -> ManagedWorktreeRuntimeState {
+    fn state(
+        branch: &str,
+        kind: crate::domain::model::WorktreeKind,
+    ) -> ManagedWorktreeRuntimeState {
         use crate::domain::model::{
             AgentLifecycle, AgentRuntimeState, GitWorktreeRuntimeState, SessionRuntimeState,
             WorktreeSource,

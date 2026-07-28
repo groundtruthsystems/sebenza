@@ -1,6 +1,8 @@
 use crate::adapters::codex_session_log::latest_codex_session;
 use crate::domain::model::WorktreeSnapshot;
-use crate::services::agents_ui::{build_worktree_summary, AgentsUiConversationResponse, ConversationState};
+use crate::services::agents_ui::{
+    AgentsUiConversationResponse, ConversationState, build_worktree_summary,
+};
 
 /// Read the latest Codex conversation for a worktree.
 pub fn read_worktree_conversation(worktree: &WorktreeSnapshot) -> AgentsUiConversationResponse {

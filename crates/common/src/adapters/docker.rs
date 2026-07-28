@@ -22,24 +22,42 @@ pub struct LaunchContainerOpts {
 fn sanitise_branch_for_name(branch: &str) -> String {
     let mut s: String = branch
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-') { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-') {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
     // Collapse runs of '-'.
     while s.contains("--") {
         s = s.replace("--", "-");
     }
     // Strip leading non-alnum and trailing '-'.
-    let s = s.trim_start_matches(|c: char| !c.is_ascii_alphanumeric()).trim_end_matches('-');
+    let s = s
+        .trim_start_matches(|c: char| !c.is_ascii_alphanumeric())
+        .trim_end_matches('-');
     let sliced: String = s.chars().take(46).collect();
-    if sliced.is_empty() { "x".to_string() } else { sliced }
+    if sliced.is_empty() {
+        "x".to_string()
+    } else {
+        sliced
+    }
 }
 
 fn container_name(branch: &str) -> String {
-    format!("sebenza-{}-{}", sanitise_branch_for_name(branch), chrono::Utc::now().timestamp_millis())
+    format!(
+        "sebenza-{}-{}",
+        sanitise_branch_for_name(branch),
+        chrono::Utc::now().timestamp_millis()
+    )
 }
 
 fn is_valid_port(s: &str) -> bool {
-    s.parse::<u32>().map(|n| (1..=65535).contains(&n)).unwrap_or(false)
+    s.parse::<u32>()
+        .map(|n| (1..=65535).contains(&n))
+        .unwrap_or(false)
 }
 
 fn is_valid_env_key(s: &str) -> bool {
@@ -63,11 +81,16 @@ pub fn build_docker_run_args(
     let wt = &opts.wt_dir;
     let repo = &opts.main_repo_dir;
     let mut args: Vec<String> = vec![
-        "run".into(), "-d".into(),
-        "--name".into(), name.into(),
-        "-w".into(), wt.clone(),
-        "--add-host".into(), "host.docker.internal:host-gateway".into(),
-        "--user".into(), format!("{host_uid}:{host_gid}"),
+        "run".into(),
+        "-d".into(),
+        "--name".into(),
+        name.into(),
+        "-w".into(),
+        wt.clone(),
+        "--add-host".into(),
+        "host.docker.internal:host-gateway".into(),
+        "--user".into(),
+        format!("{host_uid}:{host_gid}"),
     ];
 
     // Publish service ports on loopback only.
@@ -84,11 +107,22 @@ pub fn build_docker_run_args(
     }
 
     let reserved: HashSet<&str> = [
-        "HOME", "TERM", "IS_SANDBOX", "SSH_AUTH_SOCK",
-        "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0",
-        "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1",
-    ].into_iter().collect();
-    let e = |args: &mut Vec<String>, kv: String| { args.push("-e".into()); args.push(kv); };
+        "HOME",
+        "TERM",
+        "IS_SANDBOX",
+        "SSH_AUTH_SOCK",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_KEY_0",
+        "GIT_CONFIG_VALUE_0",
+        "GIT_CONFIG_KEY_1",
+        "GIT_CONFIG_VALUE_1",
+    ]
+    .into_iter()
+    .collect();
+    let e = |args: &mut Vec<String>, kv: String| {
+        args.push("-e".into());
+        args.push(kv);
+    };
     e(&mut args, "HOME=/root".into());
     e(&mut args, "TERM=xterm-256color".into());
     e(&mut args, "IS_SANDBOX=1".into());
@@ -116,7 +150,10 @@ pub fn build_docker_run_args(
     }
 
     // Core mounts.
-    let v = |args: &mut Vec<String>, m: String| { args.push("-v".into()); args.push(m); };
+    let v = |args: &mut Vec<String>, m: String| {
+        args.push("-v".into());
+        args.push(m);
+    };
     v(&mut args, format!("{wt}:{wt}"));
     v(&mut args, format!("{repo}/.git:{repo}/.git"));
     v(&mut args, format!("{repo}:{repo}:ro"));
@@ -135,8 +172,14 @@ pub fn build_docker_run_args(
     // session from the host. Both are mounted unconditionally, matching the claude/codex
     // mounts above, so host and docker have the same capabilities rather than history
     // silently depending on the runtime.
-    v(&mut args, format!("{home}/.config/opencode:/root/.config/opencode"));
-    v(&mut args, format!("{home}/.local/share/opencode:/root/.local/share/opencode"));
+    v(
+        &mut args,
+        format!("{home}/.config/opencode:/root/.config/opencode"),
+    );
+    v(
+        &mut args,
+        format!("{home}/.local/share/opencode:/root/.local/share/opencode"),
+    );
 
     // Guest paths already covered by configured mounts (explicit mounts win).
     let mut extra_guest: HashSet<String> = HashSet::new();
@@ -177,8 +220,15 @@ pub fn build_docker_run_args(
         if !host_path.starts_with('/') {
             continue;
         }
-        let guest_path = mount.guest_path.clone().unwrap_or_else(|| host_path.clone());
-        let suffix = if mount.writable == Some(true) { "" } else { ":ro" };
+        let guest_path = mount
+            .guest_path
+            .clone()
+            .unwrap_or_else(|| host_path.clone());
+        let suffix = if mount.writable == Some(true) {
+            ""
+        } else {
+            ":ro"
+        };
         v(&mut args, format!("{host_path}:{guest_path}{suffix}"));
     }
 
@@ -280,7 +330,11 @@ pub fn launch_container(opts: &LaunchContainerOpts) -> Result<String, String> {
                         s.read_to_string(&mut b).ok().map(|_| b)
                     })
                     .unwrap_or_default();
-                return Err(format!("docker run failed (exit {}): {}", status.code().unwrap_or(-1), stderr.trim()));
+                return Err(format!(
+                    "docker run failed (exit {}): {}",
+                    status.code().unwrap_or(-1),
+                    stderr.trim()
+                ));
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
@@ -313,7 +367,9 @@ fn docker_ps_names(branch: &str, all: bool) -> Vec<String> {
         .lines()
         .map(str::trim)
         .filter(|n| {
-            n.starts_with(&prefix) && n[prefix.len()..].chars().all(|c| c.is_ascii_digit()) && n.len() > prefix.len()
+            n.starts_with(&prefix)
+                && n[prefix.len()..].chars().all(|c| c.is_ascii_digit())
+                && n.len() > prefix.len()
         })
         .map(str::to_string)
         .collect()
@@ -348,14 +404,17 @@ mod tests {
             env_passthrough: vec![],
             mounts: vec![],
             service_port_envs: vec!["PORT".to_string()],
-            runtime_env: HashMap::from([("PORT".to_string(), "5111".to_string()), ("FOO".to_string(), "bar".to_string())]),
+            runtime_env: HashMap::from([
+                ("PORT".to_string(), "5111".to_string()),
+                ("FOO".to_string(), "bar".to_string()),
+            ]),
         }
     }
 
-
     #[test]
     fn opencode_gets_both_a_config_and_a_session_data_mount() {
-        let args = build_docker_run_args(&opts(), &HashSet::new(), "/home/u", "c1", None, 1000, 1000);
+        let args =
+            build_docker_run_args(&opts(), &HashSet::new(), "/home/u", "c1", None, 1000, 1000);
         let joined = args.join(" ");
 
         // Both are required, unlike claude/codex which need only one each: opencode keeps
@@ -377,7 +436,15 @@ mod tests {
 
     #[test]
     fn run_args_have_core_flags_ports_env_mounts_image() {
-        let args = build_docker_run_args(&opts(), &HashSet::new(), "/home/u", "sebenza-feat-1", None, 1000, 1000);
+        let args = build_docker_run_args(
+            &opts(),
+            &HashSet::new(),
+            "/home/u",
+            "sebenza-feat-1",
+            None,
+            1000,
+            1000,
+        );
         let joined = args.join(" ");
         assert!(joined.starts_with("run -d --name sebenza-feat-1 -w /repo/__wt/feat"));
         assert!(joined.contains("--user 1000:1000"));

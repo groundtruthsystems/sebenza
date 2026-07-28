@@ -1,4 +1,4 @@
-use crate::domain::model::{WorktreeMeta, WorktreeTab, WorktreeTabKind, ROOT_TAB_ID};
+use crate::domain::model::{ROOT_TAB_ID, WorktreeMeta, WorktreeTab, WorktreeTabKind};
 
 pub fn list_tabs(meta: &WorktreeMeta) -> Vec<WorktreeTab> {
     meta.tabs.clone().unwrap_or_default()
@@ -289,13 +289,27 @@ mod tests {
         let updated = update_tab(
             m,
             "fork-1",
-            TabPatch { session_id: None, pane_id: Some(Some("%9".to_string())) },
+            TabPatch {
+                session_id: None,
+                pane_id: Some(Some("%9".to_string())),
+            },
         );
         let tab = find_tab(&updated, "fork-1").unwrap();
         assert_eq!(tab.pane_id.as_deref(), Some("%9"));
         assert_eq!(tab.session_id.as_deref(), Some("sess-a"));
         // A missing tab id is a no-op.
-        assert_eq!(list_tabs(&update_tab(updated, "nope", TabPatch { session_id: Some(None), pane_id: None })).len(), 1);
+        assert_eq!(
+            list_tabs(&update_tab(
+                updated,
+                "nope",
+                TabPatch {
+                    session_id: Some(None),
+                    pane_id: None
+                }
+            ))
+            .len(),
+            1
+        );
     }
 
     #[test]
@@ -409,7 +423,10 @@ mod tests {
         };
         assert_eq!(tab_agent_id(&legacy, &m), "codex");
 
-        let explicit = WorktreeTab { agent: Some("claude".to_string()), ..legacy };
+        let explicit = WorktreeTab {
+            agent: Some("claude".to_string()),
+            ..legacy
+        };
         assert_eq!(tab_agent_id(&explicit, &m), "claude");
     }
 }

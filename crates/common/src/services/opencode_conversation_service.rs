@@ -13,7 +13,7 @@
 use crate::adapters::opencode_session_log::{parse_export, session_belongs_to};
 use crate::domain::model::WorktreeSnapshot;
 use crate::services::agents_ui::{
-    build_worktree_summary, AgentsUiConversationResponse, ConversationState,
+    AgentsUiConversationResponse, ConversationState, build_worktree_summary,
 };
 
 /// Where the opencode binary may live. `~/.opencode/bin` is not a conventional directory,
@@ -21,7 +21,10 @@ use crate::services::agents_ui::{
 /// server started from systemd/launchd, which need not inherit the login shell's PATH.
 fn opencode_binary() -> String {
     if let Some(home) = std::env::var_os("HOME") {
-        let candidate = std::path::Path::new(&home).join(".opencode").join("bin").join("opencode");
+        let candidate = std::path::Path::new(&home)
+            .join(".opencode")
+            .join("bin")
+            .join("opencode");
         if candidate.is_file() {
             return candidate.to_string_lossy().to_string();
         }
@@ -100,7 +103,10 @@ mod tests {
         let session = parse_export(FIXTURE).expect("fixture parses");
         // The fixture belongs to /repo/worktrees/example-branch.
         assert!(!session_belongs_to(&session, "/some/other/worktree"));
-        assert!(session_belongs_to(&session, "/repo/worktrees/example-branch"));
+        assert!(session_belongs_to(
+            &session,
+            "/repo/worktrees/example-branch"
+        ));
     }
 
     #[test]
@@ -109,6 +115,9 @@ mod tests {
         // always yield something runnable rather than an empty string.
         let bin = opencode_binary();
         assert!(!bin.is_empty());
-        assert!(bin == "opencode" || bin.ends_with("/.opencode/bin/opencode"), "got {bin}");
+        assert!(
+            bin == "opencode" || bin.ends_with("/.opencode/bin/opencode"),
+            "got {bin}"
+        );
     }
 }

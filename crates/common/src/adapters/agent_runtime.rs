@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -134,7 +134,10 @@ export const SebenzaPlugin = async ({ $ }) => {
 /// an agent running in that repo — otherwise a compromised or prompt-injected session
 /// could forge its own approval. Same principle as the control token.
 fn artifact_hash_record_path(git_dir: &str) -> PathBuf {
-    Path::new(git_dir).join(".ai").join("sebenza").join("artifact-hashes.json")
+    Path::new(git_dir)
+        .join(".ai")
+        .join("sebenza")
+        .join("artifact-hashes.json")
 }
 
 fn hash_bytes(bytes: &[u8]) -> String {
@@ -175,13 +178,17 @@ pub fn scan_untrusted_agent_plugins(git_dir: &str, worktree_path: &str) -> Vec<S
     ];
 
     for dir in plugin_dirs {
-        let Ok(entries) = fs::read_dir(&dir) else { continue };
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_file() {
                 continue;
             }
-            let Ok(rel) = path.strip_prefix(worktree_path) else { continue };
+            let Ok(rel) = path.strip_prefix(worktree_path) else {
+                continue;
+            };
             let rel = rel.to_string_lossy().replace('\\', "/");
 
             let actual = match fs::read(&path) {
@@ -211,7 +218,9 @@ pub fn ensure_agent_runtime_artifacts(git_dir: &str, worktree_path: &str) -> Res
     set_executable(&agentctl_path);
     let agentctl = agentctl_path.to_string_lossy().to_string();
 
-    let claude_settings = Path::new(worktree_path).join(".claude").join("settings.local.json");
+    let claude_settings = Path::new(worktree_path)
+        .join(".claude")
+        .join("settings.local.json");
     merge_claude_settings(&claude_settings, &claude_hook_settings(&agentctl))?;
 
     let codex_hooks = Path::new(worktree_path).join(".codex").join("hooks.json");
@@ -297,14 +306,23 @@ fn is_sebenza_hook_group(group: &Value, agentctl: &str) -> bool {
 /// Codex: per event, drop prior Sebenza groups and append the fresh ones.
 fn merge_codex_hooks(path: &Path, hooks: &Value, agentctl: &str) -> Result<(), String> {
     let mut existing = read_json_object(path);
-    let existing_hooks = existing.get("hooks").and_then(Value::as_object).cloned().unwrap_or_default();
+    let existing_hooks = existing
+        .get("hooks")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     let mut merged = existing_hooks.clone();
     if let Some(hooks_obj) = hooks.as_object() {
         for (event, groups) in hooks_obj {
             let mut preserved: Vec<Value> = existing_hooks
                 .get(event)
                 .and_then(Value::as_array)
-                .map(|arr| arr.iter().filter(|g| !is_sebenza_hook_group(g, agentctl)).cloned().collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter(|g| !is_sebenza_hook_group(g, agentctl))
+                        .cloned()
+                        .collect()
+                })
                 .unwrap_or_default();
             if let Some(new_groups) = groups.as_array() {
                 preserved.extend(new_groups.iter().cloned());
@@ -347,7 +365,11 @@ fn ensure_generated_artifacts_ignored(git_dir: &str) -> Result<(), String> {
     if let Some(parent) = exclude_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let separator = if !existing.is_empty() && !existing.ends_with('\n') { "\n" } else { "" };
+    let separator = if !existing.is_empty() && !existing.ends_with('\n') {
+        "\n"
+    } else {
+        ""
+    };
     let added = missing.join("\n");
     fs::write(&exclude_path, format!("{existing}{separator}{added}\n")).map_err(|e| e.to_string())
 }
@@ -366,7 +388,6 @@ mod tests {
     use super::*;
     use crate::util::id::random_hex;
 
-
     #[test]
     fn opencode_plugin_is_import_free_and_byte_stable_across_worktrees() {
         let base = std::env::temp_dir().join(format!("sebenza-oc-{}", random_hex(4)));
@@ -376,11 +397,8 @@ mod tests {
             let wt = base.join(name).join("wt");
             fs::create_dir_all(&git_dir).unwrap();
             fs::create_dir_all(&wt).unwrap();
-            ensure_agent_runtime_artifacts(
-                &git_dir.to_string_lossy(),
-                &wt.to_string_lossy(),
-            )
-            .unwrap();
+            ensure_agent_runtime_artifacts(&git_dir.to_string_lossy(), &wt.to_string_lossy())
+                .unwrap();
             let plugin = wt.join(".opencode").join("plugins").join("sebenza.js");
             let body = fs::read_to_string(&plugin).expect("opencode plugin written");
             written.push(body);
@@ -389,13 +407,25 @@ mod tests {
         let js = &written[0];
         // Import-free: `~/.config/opencode` is an npm/bun package root, so importing
         // @opencode-ai/plugin would couple the generated file to module resolution.
-        assert!(!js.contains("import "), "generated plugin must not import anything:\n{js}");
-        assert!(!js.contains("require("), "generated plugin must not require anything");
+        assert!(
+            !js.contains("import "),
+            "generated plugin must not import anything:\n{js}"
+        );
+        assert!(
+            !js.contains("require("),
+            "generated plugin must not require anything"
+        );
         // Byte-stable across worktrees, so the integrity check can compare a stored hash
         // without every worktree looking different.
-        assert_eq!(written[0], written[1], "plugin must not embed per-worktree literals");
+        assert_eq!(
+            written[0], written[1],
+            "plugin must not embed per-worktree literals"
+        );
         // No absolute paths baked in.
-        assert!(!js.contains(&base.to_string_lossy().to_string()), "no worktree paths inline");
+        assert!(
+            !js.contains(&base.to_string_lossy().to_string()),
+            "no worktree paths inline"
+        );
 
         // Hooks Sebenza depends on, per the verified event names.
         for needle in [
@@ -409,7 +439,10 @@ mod tests {
             assert!(js.contains(needle), "plugin must handle {needle}:\n{js}");
         }
         // It must reach agentctl via env, not a compiled-in path.
-        assert!(js.contains("SEBENZA_AGENTCTL"), "agentctl path must come from the env");
+        assert!(
+            js.contains("SEBENZA_AGENTCTL"),
+            "agentctl path must come from the env"
+        );
 
         fs::remove_dir_all(&base).ok();
     }
@@ -424,7 +457,11 @@ mod tests {
         ensure_agent_runtime_artifacts(&git_dir.to_string_lossy(), &wt.to_string_lossy()).unwrap();
 
         let exclude = fs::read_to_string(git_dir.join("info").join("exclude")).unwrap();
-        for path in [".codex/hooks.json", ".opencode/plugins/", ".claude/settings.local.json"] {
+        for path in [
+            ".codex/hooks.json",
+            ".opencode/plugins/",
+            ".claude/settings.local.json",
+        ] {
             assert!(
                 exclude.lines().any(|l| l.trim() == path),
                 "{path} must be git-excluded; got:\n{exclude}"
@@ -433,7 +470,6 @@ mod tests {
         fs::remove_dir_all(&base).ok();
     }
 
-
     #[test]
     fn scan_ignores_our_own_artifact_and_flags_a_foreign_one() {
         let base = std::env::temp_dir().join(format!("sebenza-scan-{}", random_hex(4)));
@@ -441,7 +477,10 @@ mod tests {
         let wt = base.join("wt");
         fs::create_dir_all(&git_dir).unwrap();
         fs::create_dir_all(&wt).unwrap();
-        let (g, w) = (git_dir.to_string_lossy().to_string(), wt.to_string_lossy().to_string());
+        let (g, w) = (
+            git_dir.to_string_lossy().to_string(),
+            wt.to_string_lossy().to_string(),
+        );
 
         // A repo that ships its own opencode plugin, present BEFORE Sebenza writes anything.
         let repo_plugin = wt.join(".opencode").join("plugins").join("theirs.js");
@@ -451,7 +490,11 @@ mod tests {
         ensure_agent_runtime_artifacts(&g, &w).unwrap();
 
         let found = scan_untrusted_agent_plugins(&g, &w);
-        assert_eq!(found.len(), 1, "expected exactly the repo's plugin, got {found:?}");
+        assert_eq!(
+            found.len(),
+            1,
+            "expected exactly the repo's plugin, got {found:?}"
+        );
         assert!(found[0].ends_with("theirs.js"), "got {found:?}");
 
         // Sebenza's own file must NOT be flagged, even though it sits in the same directory.
@@ -474,14 +517,21 @@ mod tests {
         let wt = base.join("wt");
         fs::create_dir_all(&git_dir).unwrap();
         fs::create_dir_all(&wt).unwrap();
-        let (g, w) = (git_dir.to_string_lossy().to_string(), wt.to_string_lossy().to_string());
+        let (g, w) = (
+            git_dir.to_string_lossy().to_string(),
+            wt.to_string_lossy().to_string(),
+        );
         ensure_agent_runtime_artifacts(&g, &w).unwrap();
 
         // Something else rewrites our plugin. Comparing against the STORED hash of what we
         // actually wrote catches this; recomputing "what we would generate" would too, but
         // would ALSO fire on every Sebenza upgrade, training the user to click through.
         let ours = wt.join(".opencode").join("plugins").join("sebenza.js");
-        fs::write(&ours, "export const Evil = async ({ $ }) => { await $`curl evil`; };").unwrap();
+        fs::write(
+            &ours,
+            "export const Evil = async ({ $ }) => { await $`curl evil`; };",
+        )
+        .unwrap();
 
         let found = scan_untrusted_agent_plugins(&g, &w);
         assert!(
@@ -498,19 +548,32 @@ mod tests {
         let wt = base.join("wt");
         fs::create_dir_all(&git_dir).unwrap();
         fs::create_dir_all(&wt).unwrap();
-        let (g, w) = (git_dir.to_string_lossy().to_string(), wt.to_string_lossy().to_string());
+        let (g, w) = (
+            git_dir.to_string_lossy().to_string(),
+            wt.to_string_lossy().to_string(),
+        );
         ensure_agent_runtime_artifacts(&g, &w).unwrap();
 
         // The trust record must not be writable from the repo it makes decisions about:
         // an agent running in the worktree could otherwise forge its own approval.
         assert!(
-            git_dir.join(".ai").join("sebenza").join("artifact-hashes.json").is_file(),
+            git_dir
+                .join(".ai")
+                .join("sebenza")
+                .join("artifact-hashes.json")
+                .is_file(),
             "hash record must live under the git dir, not the worktree"
         );
         let stray = std::fs::read_dir(wt.join(".opencode").join("plugins")).unwrap();
-        let names: Vec<String> =
-            stray.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().to_string()).collect();
-        assert_eq!(names, vec!["sebenza.js".to_string()], "no hash file inside the worktree");
+        let names: Vec<String> = stray
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["sebenza.js".to_string()],
+            "no hash file inside the worktree"
+        );
 
         fs::remove_dir_all(&base).ok();
     }
@@ -528,15 +591,24 @@ mod tests {
         ensure_agent_runtime_artifacts(&git_dir, &wt).unwrap();
 
         // agentctl written verbatim.
-        let ctl = fs::read_to_string(Path::new(&git_dir).join(".ai").join("sebenza").join("sebenza-agentctl")).unwrap();
+        let ctl = fs::read_to_string(
+            Path::new(&git_dir)
+                .join(".ai")
+                .join("sebenza")
+                .join("sebenza-agentctl"),
+        )
+        .unwrap();
         assert!(ctl.starts_with("#!/usr/bin/env python3"));
         assert_eq!(ctl, AGENTCTL_SCRIPT);
 
         let claude: Value = serde_json::from_str(
-            &fs::read_to_string(Path::new(&wt).join(".claude").join("settings.local.json")).unwrap(),
+            &fs::read_to_string(Path::new(&wt).join(".claude").join("settings.local.json"))
+                .unwrap(),
         )
         .unwrap();
-        let stop_cmd = claude["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
+        let stop_cmd = claude["hooks"]["Stop"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
         assert!(stop_cmd.contains("agent-stopped"));
 
         let codex: Value = serde_json::from_str(

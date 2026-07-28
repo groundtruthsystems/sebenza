@@ -11,8 +11,8 @@ use common::config::project_root;
 use common::domain::policies::is_valid_env_key;
 
 use crate::service_units::{
-    detect_platform, generate_service_file, read_port_from_unit, resolve_server_path, unit_path,
-    Platform, ServiceConfig, RESERVED_ENV_KEYS, SERVICE_NAME,
+    Platform, RESERVED_ENV_KEYS, SERVICE_NAME, ServiceConfig, detect_platform,
+    generate_service_file, read_port_from_unit, resolve_server_path, unit_path,
 };
 
 const DEFAULT_PORT: u16 = 5111;
@@ -51,7 +51,10 @@ struct Args {
 }
 
 fn parse_args(args: &[String]) -> Result<Args, String> {
-    let mut port = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(DEFAULT_PORT);
+    let mut port = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
     let mut port_explicit = false;
     let mut auto_confirm = false;
     let mut env: Vec<(String, String)> = Vec::new();
@@ -62,14 +65,18 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         match arg.as_str() {
             "--port" => {
                 let v = args.get(i + 1).ok_or("--port requires a numeric value")?;
-                port = v.parse().map_err(|_| "--port requires a numeric value".to_string())?;
+                port = v
+                    .parse()
+                    .map_err(|_| "--port requires a numeric value".to_string())?;
                 port_explicit = true;
                 i += 1;
             }
             "--yes" | "-y" => auto_confirm = true,
             "--no-auto-env" => {}
             "--env" => {
-                let raw = args.get(i + 1).ok_or("--env requires a KEY=VALUE argument")?;
+                let raw = args
+                    .get(i + 1)
+                    .ok_or("--env requires a KEY=VALUE argument")?;
                 let (k, v) = parse_env(raw)?;
                 env.push((k, v));
                 i += 1;
@@ -82,7 +89,12 @@ fn parse_args(args: &[String]) -> Result<Args, String> {
         }
         i += 1;
     }
-    Ok(Args { port, port_explicit, auto_confirm, env })
+    Ok(Args {
+        port,
+        port_explicit,
+        auto_confirm,
+        env,
+    })
 }
 
 fn parse_env(raw: &str) -> Result<(String, String), String> {
@@ -95,7 +107,9 @@ fn parse_env(raw: &str) -> Result<(String, String), String> {
         return Err(format!("--env key is not a valid identifier: {key}"));
     }
     if RESERVED_ENV_KEYS.contains(&key.as_str()) {
-        return Err(format!("--env cannot set {key} — it is managed by the service unit"));
+        return Err(format!(
+            "--env cannot set {key} — it is managed by the service unit"
+        ));
     }
     Ok((key, raw[eq + 1..].to_string()))
 }
@@ -108,14 +122,22 @@ fn manager_bin(platform: Platform) -> &'static str {
 }
 
 fn which(bin: &str) -> bool {
-    Command::new("which").arg(bin).stdout(Stdio::null()).stderr(Stdio::null())
-        .status().map(|s| s.success()).unwrap_or(false)
+    Command::new("which")
+        .arg(bin)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 /// Run a command, capturing output; returns (ok, stderr).
 fn run(bin: &str, args: &[&str]) -> (bool, String) {
     match Command::new(bin).args(args).output() {
-        Ok(out) => (out.status.success(), String::from_utf8_lossy(&out.stderr).to_string()),
+        Ok(out) => (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ),
         Err(e) => (false, e.to_string()),
     }
 }
@@ -175,8 +197,12 @@ fn confirm(message: &str) -> bool {
 
 fn should_persist_project(cwd: &str) -> Option<(String, String)> {
     let root = project_root(cwd);
-    let has_config = std::path::Path::new(&root).join(".ai/sebenza.yaml").exists()
-        || std::path::Path::new(&root).join(".ai/sebenza.local.yaml").exists();
+    let has_config = std::path::Path::new(&root)
+        .join(".ai/sebenza.yaml")
+        .exists()
+        || std::path::Path::new(&root)
+            .join(".ai/sebenza.local.yaml")
+            .exists();
     if !has_config {
         return None;
     }
@@ -233,14 +259,20 @@ fn install(platform: Platform, mgr: &str, args: Args, cwd: &str) -> i32 {
             .iter()
             .map(|(k, v)| {
                 let ku = k.to_uppercase();
-                if ["TOKEN", "KEY", "PASSWORD", "SECRET"].iter().any(|s| ku.ends_with(s)) {
+                if ["TOKEN", "KEY", "PASSWORD", "SECRET"]
+                    .iter()
+                    .any(|s| ku.ends_with(s))
+                {
                     format!("    {k}=••• ({} chars)", v.len())
                 } else {
                     format!("    {k}={v}")
                 }
             })
             .collect();
-        println!("  Environment variables baked into the unit:\n{}", redacted.join("\n"));
+        println!(
+            "  Environment variables baked into the unit:\n{}",
+            redacted.join("\n")
+        );
     }
     if let Some((path, name)) = &persist {
         println!("  Will also register this project: {name} ({path})");
@@ -256,7 +288,11 @@ fn install(platform: Platform, mgr: &str, args: Args, cwd: &str) -> i32 {
                 return 0;
             }
         } else {
-            let verb = if already { "reinstalling" } else { "installing" };
+            let verb = if already {
+                "reinstalling"
+            } else {
+                "installing"
+            };
             println!(
                 "Non-interactive environment — not {verb}. Re-run with --yes to confirm and apply the plan above."
             );
@@ -267,7 +303,10 @@ fn install(platform: Platform, mgr: &str, args: Args, cwd: &str) -> i32 {
     // Reinstall: tear down the old unit first.
     if already {
         for cmd in uninstall_commands(platform) {
-            let _ = run(&cmd[0], &cmd[1..].iter().map(String::as_str).collect::<Vec<_>>());
+            let _ = run(
+                &cmd[0],
+                &cmd[1..].iter().map(String::as_str).collect::<Vec<_>>(),
+            );
         }
     }
 
@@ -285,7 +324,8 @@ fn install(platform: Platform, mgr: &str, args: Args, cwd: &str) -> i32 {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            if let Err(e) = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)) {
+            if let Err(e) = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))
+            {
                 println!("Wrote {} but could not chmod 600: {e}", file.display());
             }
         }
@@ -294,8 +334,15 @@ fn install(platform: Platform, mgr: &str, args: Args, cwd: &str) -> i32 {
 
     // Register the project.
     if let Some((path, name)) = persist {
-        let added_at = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        ProjectsRegistry::new().add(ProjectEntry { path: path.clone(), name: name.clone(), added_at });
+        let added_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        ProjectsRegistry::new().add(ProjectEntry {
+            path: path.clone(),
+            name: name.clone(),
+            added_at,
+        });
         println!("Registered project {name} ({path})");
     }
 
@@ -323,10 +370,21 @@ fn install_commands(platform: Platform) -> Vec<Vec<String>> {
     match platform {
         Platform::Linux => vec![
             vec!["systemctl".into(), "--user".into(), "daemon-reload".into()],
-            vec!["systemctl".into(), "--user".into(), "enable".into(), "--now".into(), SERVICE_NAME.into()],
+            vec![
+                "systemctl".into(),
+                "--user".into(),
+                "enable".into(),
+                "--now".into(),
+                SERVICE_NAME.into(),
+            ],
         ],
         Platform::Macos => {
-            vec![vec!["launchctl".into(), "load".into(), "-w".into(), unit_path(platform).to_string_lossy().to_string()]]
+            vec![vec![
+                "launchctl".into(),
+                "load".into(),
+                "-w".into(),
+                unit_path(platform).to_string_lossy().to_string(),
+            ]]
         }
     }
 }
@@ -334,11 +392,26 @@ fn install_commands(platform: Platform) -> Vec<Vec<String>> {
 fn uninstall_commands(platform: Platform) -> Vec<Vec<String>> {
     match platform {
         Platform::Linux => vec![
-            vec!["systemctl".into(), "--user".into(), "stop".into(), SERVICE_NAME.into()],
-            vec!["systemctl".into(), "--user".into(), "disable".into(), SERVICE_NAME.into()],
+            vec![
+                "systemctl".into(),
+                "--user".into(),
+                "stop".into(),
+                SERVICE_NAME.into(),
+            ],
+            vec![
+                "systemctl".into(),
+                "--user".into(),
+                "disable".into(),
+                SERVICE_NAME.into(),
+            ],
         ],
         Platform::Macos => {
-            vec![vec!["launchctl".into(), "unload".into(), "-w".into(), unit_path(platform).to_string_lossy().to_string()]]
+            vec![vec![
+                "launchctl".into(),
+                "unload".into(),
+                "-w".into(),
+                unit_path(platform).to_string_lossy().to_string(),
+            ]]
         }
     }
 }

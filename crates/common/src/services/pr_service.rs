@@ -84,11 +84,18 @@ fn summarize_checks(checks: &Option<Vec<GhCheckEntry>>) -> String {
     let all_pass = checks.iter().all(|c| match c {
         GhCheckEntry::StatusContext { state, .. } => state == "SUCCESS",
         GhCheckEntry::CheckRun { conclusion, .. } => {
-            matches!(conclusion.as_deref(), Some("SUCCESS") | Some("NEUTRAL") | Some("SKIPPED"))
+            matches!(
+                conclusion.as_deref(),
+                Some("SUCCESS") | Some("NEUTRAL") | Some("SKIPPED")
+            )
         }
         GhCheckEntry::Unknown => true,
     });
-    if all_pass { "success".to_string() } else { "failed".to_string() }
+    if all_pass {
+        "success".to_string()
+    } else {
+        "failed".to_string()
+    }
 }
 
 /// Parse a GitHub Actions run id from a details URL (`.../actions/runs/<id>`).
@@ -106,7 +113,9 @@ fn derive_check_status(check: &GhCheckEntry) -> String {
             "PENDING" | "EXPECTED" => "pending",
             _ => "failed",
         },
-        GhCheckEntry::CheckRun { status, conclusion, .. } => {
+        GhCheckEntry::CheckRun {
+            status, conclusion, ..
+        } => {
             if status != "COMPLETED" {
                 "pending"
             } else {
@@ -130,10 +139,14 @@ fn map_checks(checks: &Option<Vec<GhCheckEntry>>) -> Vec<CiCheck> {
         .iter()
         .filter_map(|c| {
             let (name, url) = match c {
-                GhCheckEntry::StatusContext { context, target_url, .. } => {
-                    (context.clone(), target_url.clone())
-                }
-                GhCheckEntry::CheckRun { name, details_url, .. } => (name.clone(), details_url.clone()),
+                GhCheckEntry::StatusContext {
+                    context,
+                    target_url,
+                    ..
+                } => (context.clone(), target_url.clone()),
+                GhCheckEntry::CheckRun {
+                    name, details_url, ..
+                } => (name.clone(), details_url.clone()),
                 GhCheckEntry::Unknown => return None,
             };
             let run_id = parse_run_id(url.as_deref());
@@ -149,7 +162,10 @@ fn map_checks(checks: &Option<Vec<GhCheckEntry>>) -> Vec<CiCheck> {
 
 /// Parse `gh pr list --json` output into a branch → PrEntry map (first PR per
 /// branch wins). Errors on invalid JSON.
-fn parse_pr_response(json: &str, repo_label: Option<&str>) -> Result<HashMap<String, PrEntry>, String> {
+fn parse_pr_response(
+    json: &str,
+    repo_label: Option<&str>,
+) -> Result<HashMap<String, PrEntry>, String> {
     let entries: Vec<GhPrEntry> = serde_json::from_str(json).map_err(|e| e.to_string())?;
     let mut prs = HashMap::new();
     for entry in entries {
@@ -161,7 +177,12 @@ fn parse_pr_response(json: &str, repo_label: Option<&str>) -> Result<HashMap<Str
             .iter()
             .map(|c| PrComment {
                 r#type: "comment".to_string(),
-                author: c.author.as_ref().map(|a| a.login.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| "unknown".to_string()),
+                author: c
+                    .author
+                    .as_ref()
+                    .map(|a| a.login.clone())
+                    .filter(|l| !l.is_empty())
+                    .unwrap_or_else(|| "unknown".to_string()),
                 body: c.body.clone(),
                 created_at: c.created_at.clone(),
                 path: None,
@@ -221,7 +242,11 @@ fn run_gh(args: &[&str], cwd: &str, timeout: Duration) -> Result<String, String>
                 if let Some(pipe) = stderr_pipe.as_mut() {
                     let _ = pipe.read_to_string(&mut stderr);
                 }
-                return Err(format!("gh exited {}: {}", status.code().unwrap_or(-1), stderr.trim()));
+                return Err(format!(
+                    "gh exited {}: {}",
+                    status.code().unwrap_or(-1),
+                    stderr.trim()
+                ));
             }
             Ok(None) => {
                 if Instant::now() >= deadline {
@@ -243,9 +268,14 @@ fn fetch_all_prs(
 ) -> Result<HashMap<String, PrEntry>, String> {
     let limit = PR_FETCH_LIMIT.to_string();
     let mut args = vec![
-        "pr", "list", "--state", "open", "--json",
+        "pr",
+        "list",
+        "--state",
+        "open",
+        "--json",
         "number,headRefName,state,updatedAt,statusCheckRollup,url,comments",
-        "--limit", &limit,
+        "--limit",
+        &limit,
     ];
     if let Some(slug) = repo_slug {
         args.push("--repo");
@@ -311,7 +341,11 @@ pub fn sync_pr_status(git: &GitGateway, project_root: &str, linked_repos: &[Link
 
 /// Fetch failed CI logs for a run via `gh run view <id> --log-failed`.
 pub fn fetch_ci_logs(run_id: i64, cwd: &str) -> Result<String, String> {
-    run_gh(&["run", "view", &run_id.to_string(), "--log-failed"], cwd, GH_TIMEOUT)
+    run_gh(
+        &["run", "view", &run_id.to_string(), "--log-failed"],
+        cwd,
+        GH_TIMEOUT,
+    )
 }
 
 #[cfg(test)]
@@ -320,7 +354,10 @@ mod tests {
 
     #[test]
     fn parse_run_id_from_actions_url() {
-        assert_eq!(parse_run_id(Some("https://github.com/o/r/actions/runs/12345/job/9")), Some(12345));
+        assert_eq!(
+            parse_run_id(Some("https://github.com/o/r/actions/runs/12345/job/9")),
+            Some(12345)
+        );
         assert_eq!(parse_run_id(Some("https://vercel.com/x")), None);
         assert_eq!(parse_run_id(None), None);
     }

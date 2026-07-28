@@ -5,7 +5,10 @@ use std::sync::Mutex;
 
 fn control_token_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    PathBuf::from(home).join(".config").join("sebenza").join("control-token")
+    PathBuf::from(home)
+        .join(".config")
+        .join("sebenza")
+        .join("control-token")
 }
 
 static CACHED_TOKEN: Mutex<Option<String>> = Mutex::new(None);

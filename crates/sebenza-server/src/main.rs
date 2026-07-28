@@ -196,7 +196,10 @@ mod tests {
         let addr = resolve_bind_addr(None, None, 5111);
         assert_eq!(addr.ip().to_string(), "127.0.0.1");
         assert_eq!(addr.port(), 5111);
-        assert!(addr.ip().is_loopback(), "default bind must not be reachable off-host");
+        assert!(
+            addr.ip().is_loopback(),
+            "default bind must not be reachable off-host"
+        );
     }
 
     #[test]
@@ -208,9 +211,16 @@ mod tests {
 
     #[test]
     fn env_is_honoured_and_the_flag_wins_over_it() {
-        assert_eq!(resolve_bind_addr(None, Some("0.0.0.0"), 80).ip().to_string(), "0.0.0.0");
         assert_eq!(
-            resolve_bind_addr(Some("127.0.0.1"), Some("0.0.0.0"), 80).ip().to_string(),
+            resolve_bind_addr(None, Some("0.0.0.0"), 80)
+                .ip()
+                .to_string(),
+            "0.0.0.0"
+        );
+        assert_eq!(
+            resolve_bind_addr(Some("127.0.0.1"), Some("0.0.0.0"), 80)
+                .ip()
+                .to_string(),
             "127.0.0.1",
             "an explicit --host must override the environment"
         );

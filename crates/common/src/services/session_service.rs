@@ -1,6 +1,4 @@
-use crate::adapters::tmux::{
-    build_project_session_name, build_worktree_window_name, TmuxGateway,
-};
+use crate::adapters::tmux::{TmuxGateway, build_project_session_name, build_worktree_window_name};
 use crate::domain::config::{PaneCwd, PaneKind, PaneSplit, PaneTemplate};
 use std::path::Path;
 
@@ -54,10 +52,12 @@ fn build_command_pane_startup_command(
     template: &PaneTemplate,
     ctx: &SessionLayoutContext,
 ) -> Result<String, String> {
-    let command = template
-        .command
-        .as_ref()
-        .ok_or_else(|| format!("Pane \"{}\" is kind=command but has no command", template.id))?;
+    let command = template.command.as_ref().ok_or_else(|| {
+        format!(
+            "Pane \"{}\" is kind=command but has no command",
+            template.id
+        )
+    })?;
     let Some(working_dir) = &template.working_dir else {
         return Ok(command.clone());
     };
@@ -94,7 +94,10 @@ pub fn plan_session_layout(
     for (index, template) in templates.iter().enumerate() {
         let startup_command = resolve_pane_startup_command(template, ctx)?;
         let (split, size_pct) = if index > 0 {
-            (Some(template.split.unwrap_or(PaneSplit::Right)), template.size_pct)
+            (
+                Some(template.split.unwrap_or(PaneSplit::Right)),
+                template.size_pct,
+            )
         } else {
             (None, None)
         };
@@ -144,12 +147,27 @@ pub fn ensure_session_layout(tmux: &TmuxGateway, plan: &SessionLayoutPlan) -> Re
         &root_pane.cwd,
         Some(&plan.shell_command),
     )?;
-    tmux.set_window_option(&plan.session_name, &plan.window_name, "pane-base-index", "0")?;
-    tmux.set_window_option(&plan.session_name, &plan.window_name, "automatic-rename", "off")?;
+    tmux.set_window_option(
+        &plan.session_name,
+        &plan.window_name,
+        "pane-base-index",
+        "0",
+    )?;
+    tmux.set_window_option(
+        &plan.session_name,
+        &plan.window_name,
+        "automatic-rename",
+        "off",
+    )?;
     tmux.set_window_option(&plan.session_name, &plan.window_name, "allow-rename", "off")?;
 
     for pane in &plan.panes[1..] {
-        let target = format!("{}:{}.{}", plan.session_name, plan.window_name, pane.index - 1);
+        let target = format!(
+            "{}:{}.{}",
+            plan.session_name,
+            plan.window_name,
+            pane.index - 1
+        );
         tmux.split_window(
             &target,
             pane.split.unwrap_or(PaneSplit::Right),
@@ -290,18 +308,26 @@ mod tests {
         // Locks in why the main-repo path may pass an empty agent command:
         // `resolve_pane_startup_command` never reads it for a shell pane. If that
         // stops holding, this fails rather than silently planning `sh -c ''`.
-        let plan =
-            plan_session_layout("/repo", "main", &[template("shell", PaneKind::Shell)], &repo_ctx())
-                .unwrap();
+        let plan = plan_session_layout(
+            "/repo",
+            "main",
+            &[template("shell", PaneKind::Shell)],
+            &repo_ctx(),
+        )
+        .unwrap();
         assert_eq!(plan.panes[0].startup_command, None);
         assert_eq!(plan.shell_command, "managed-shell");
     }
 
     #[test]
     fn repo_shell_plan_window_name_is_the_main_branch() {
-        let plan =
-            plan_session_layout("/repo", "main", &[template("shell", PaneKind::Shell)], &repo_ctx())
-                .unwrap();
+        let plan = plan_session_layout(
+            "/repo",
+            "main",
+            &[template("shell", PaneKind::Shell)],
+            &repo_ctx(),
+        )
+        .unwrap();
         assert_eq!(plan.window_name, build_worktree_window_name("main"));
         assert_eq!(plan.window_name, "sebenza-main");
         // Same tmux session as every worktree in this project — only the window differs.

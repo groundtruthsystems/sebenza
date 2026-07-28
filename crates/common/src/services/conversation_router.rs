@@ -19,12 +19,12 @@ pub fn read_worktree_conversation(
     worktree: &WorktreeSnapshot,
 ) -> Option<AgentsUiConversationResponse> {
     match worktree.agent_name.as_deref() {
-        Some("claude") => Some(crate::services::claude_conversation_service::read_worktree_conversation(
-            worktree,
-        )),
-        Some("codex") => Some(crate::services::codex_conversation_service::read_worktree_conversation(
-            worktree,
-        )),
+        Some("claude") => {
+            Some(crate::services::claude_conversation_service::read_worktree_conversation(worktree))
+        }
+        Some("codex") => {
+            Some(crate::services::codex_conversation_service::read_worktree_conversation(worktree))
+        }
         // opencode cannot discover its own session; it uses the id the agent reported at
         // creation, carried on the snapshot as `reported_session_id`.
         Some("opencode") => Some(

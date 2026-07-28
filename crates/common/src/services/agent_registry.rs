@@ -44,8 +44,11 @@ pub enum BuiltinAgentId {
 
 impl BuiltinAgentId {
     /// Every built-in agent, in the order they are offered.
-    pub const ALL: &'static [BuiltinAgentId] =
-        &[BuiltinAgentId::Claude, BuiltinAgentId::Codex, BuiltinAgentId::Opencode];
+    pub const ALL: &'static [BuiltinAgentId] = &[
+        BuiltinAgentId::Claude,
+        BuiltinAgentId::Codex,
+        BuiltinAgentId::Opencode,
+    ];
 
     /// The stable wire/config id. Part of the ts-rest contract and of user config
     /// (`workspace.defaultAgent`), so these strings must not change.
@@ -209,7 +212,11 @@ pub fn list_agent_definitions(config: &ProjectConfig) -> Vec<AgentDefinition> {
     custom.sort_by(|(l_id, l), (r_id, r)| l.label.cmp(&r.label).then_with(|| l_id.cmp(r_id)));
 
     let mut defs = builtin_definitions();
-    defs.extend(custom.into_iter().map(|(id, cfg)| build_custom_definition(id, cfg)));
+    defs.extend(
+        custom
+            .into_iter()
+            .map(|(id, cfg)| build_custom_definition(id, cfg)),
+    );
     defs
 }
 
@@ -274,9 +281,10 @@ pub struct AgentDetailsWire {
 
 fn to_details(agent: AgentDefinition) -> AgentDetailsWire {
     let (start_command, resume_command) = match &agent.implementation {
-        AgentImplementation::Custom(config) => {
-            (Some(config.start_command.clone()), config.resume_command.clone())
-        }
+        AgentImplementation::Custom(config) => (
+            Some(config.start_command.clone()),
+            config.resume_command.clone(),
+        ),
         AgentImplementation::Builtin(_) => (None, None),
     };
     AgentDetailsWire {
@@ -299,7 +307,10 @@ fn to_details(agent: AgentDefinition) -> AgentDetailsWire {
 }
 
 pub fn list_agent_details(config: &ProjectConfig) -> Vec<AgentDetailsWire> {
-    list_agent_definitions(config).into_iter().map(to_details).collect()
+    list_agent_definitions(config)
+        .into_iter()
+        .map(to_details)
+        .collect()
 }
 
 pub fn get_agent_details(config: &ProjectConfig, agent_id: &str) -> Option<AgentDetailsWire> {
@@ -324,7 +335,10 @@ pub fn validate_custom_agent_input(
         warnings.push("Start command does not reference ${PROMPT} or ${SYSTEM_PROMPT}; initial prompts will not be passed automatically".to_string());
     }
     if resume_command.map(str::trim).unwrap_or("").is_empty() {
-        warnings.push("Resume command is not configured; reopening the worktree will restart the agent".to_string());
+        warnings.push(
+            "Resume command is not configured; reopening the worktree will restart the agent"
+                .to_string(),
+        );
     }
     ValidateCustomAgentResult {
         normalized_id: normalize_custom_agent_id(label),
@@ -348,7 +362,10 @@ pub mod tests_support {
                 main_branch: "main".to_string(),
                 worktree_root: "/wt".to_string(),
                 default_agent: "claude".to_string(),
-                auto_pull: AutoPullConfig { enabled: false, interval_seconds: 0 },
+                auto_pull: AutoPullConfig {
+                    enabled: false,
+                    interval_seconds: 0,
+                },
             },
             profiles: IndexMap::new(),
             agents: HashMap::new(),
@@ -361,9 +378,14 @@ pub mod tests_support {
                     auto_remove_on_merge: false,
                 },
             },
-            lifecycle_hooks: LifecycleHooksConfig { post_create: None, pre_remove: None },
+            lifecycle_hooks: LifecycleHooksConfig {
+                post_create: None,
+                pre_remove: None,
+            },
             auto_name: None,
-            oneshot: OneshotConfig { system_prompt: String::new() },
+            oneshot: OneshotConfig {
+                system_prompt: String::new(),
+            },
         }
     }
 
@@ -402,8 +424,14 @@ mod tests {
         let config = config_with(&[]);
         let defs = list_agent_definitions(&config);
 
-        let claude = defs.iter().find(|d| d.id == "claude").expect("claude is builtin");
-        assert!(claude.capabilities.fork, "claude forks via --resume ID --fork-session");
+        let claude = defs
+            .iter()
+            .find(|d| d.id == "claude")
+            .expect("claude is builtin");
+        assert!(
+            claude.capabilities.fork,
+            "claude forks via --resume ID --fork-session"
+        );
         assert!(
             claude.capabilities.pinnable_session_id,
             "claude accepts --session-id, so Sebenza can pin the id at launch"
@@ -413,7 +441,10 @@ mod tests {
             "claude hooks observe; they cannot deny a tool call"
         );
 
-        let codex = defs.iter().find(|d| d.id == "codex").expect("codex is builtin");
+        let codex = defs
+            .iter()
+            .find(|d| d.id == "codex")
+            .expect("codex is builtin");
         assert!(codex.capabilities.fork, "codex forks via `fork <id>`");
         assert!(
             !codex.capabilities.pinnable_session_id,
@@ -424,10 +455,22 @@ mod tests {
             "codex's PermissionRequest hook only signals; it cannot deny"
         );
 
-        let oc = defs.iter().find(|d| d.id == "opencode").expect("opencode is builtin");
-        assert!(oc.capabilities.terminal, "the terminal works from registration");
-        assert!(oc.capabilities.resume, "`-c` / `--session <id>` resume works from launch");
-        assert!(oc.capabilities.fork, "`--fork` plus session.parent_id lineage");
+        let oc = defs
+            .iter()
+            .find(|d| d.id == "opencode")
+            .expect("opencode is builtin");
+        assert!(
+            oc.capabilities.terminal,
+            "the terminal works from registration"
+        );
+        assert!(
+            oc.capabilities.resume,
+            "`-c` / `--session <id>` resume works from launch"
+        );
+        assert!(
+            oc.capabilities.fork,
+            "`--fork` plus session.parent_id lineage"
+        );
         assert!(
             oc.capabilities.pinnable_session_id,
             "no pin flag, but session.created and `run --format json` both surface the id \
@@ -443,7 +486,10 @@ mod tests {
             oc.capabilities.conversation_history,
             "the export-based adapter and the session.created round trip both landed"
         );
-        assert!(!oc.capabilities.interrupt, "interrupt needs the streaming provider");
+        assert!(
+            !oc.capabilities.interrupt,
+            "interrupt needs the streaming provider"
+        );
         assert!(
             !oc.capabilities.permission_interception,
             "permission.ask was not observed firing (phase-0-task-2); gated on the phase-3 spike"
@@ -459,12 +505,21 @@ mod tests {
             ("mine", custom("Mine", None)),
         ]);
         // goose is NOT builtin in this track, so its entry still applies.
-        assert_eq!(shadowed_custom_agent_ids(&config), vec!["opencode".to_string()]);
+        assert_eq!(
+            shadowed_custom_agent_ids(&config),
+            vec!["opencode".to_string()]
+        );
 
         // And the builtin wins in the listing, so the custom one really is inert.
         let defs = list_agent_definitions(&config);
-        let oc = defs.iter().find(|d| d.id == "opencode").expect("opencode listed");
-        assert_eq!(oc.kind, "builtin", "the builtin must win over the shadowed entry");
+        let oc = defs
+            .iter()
+            .find(|d| d.id == "opencode")
+            .expect("opencode listed");
+        assert_eq!(
+            oc.kind, "builtin",
+            "the builtin must win over the shadowed entry"
+        );
         assert!(defs.iter().any(|d| d.id == "goose" && d.kind == "custom"));
         assert!(defs.iter().any(|d| d.id == "mine" && d.kind == "custom"));
     }
@@ -475,7 +530,10 @@ mod tests {
     fn custom_agents_declare_every_new_capability_as_false() {
         let config = config_with(&[("mine", custom("Mine", Some("resume")))]);
         let defs = list_agent_definitions(&config);
-        let mine = defs.iter().find(|d| d.id == "mine").expect("custom agent listed");
+        let mine = defs
+            .iter()
+            .find(|d| d.id == "mine")
+            .expect("custom agent listed");
 
         assert!(!mine.capabilities.fork);
         assert!(!mine.capabilities.pinnable_session_id);
@@ -500,7 +558,13 @@ mod tests {
             );
         }
         assert_eq!(json.get("fork"), Some(&serde_json::json!(true)));
-        assert_eq!(json.get("pinnableSessionId"), Some(&serde_json::json!(true)));
-        assert_eq!(json.get("permissionInterception"), Some(&serde_json::json!(false)));
+        assert_eq!(
+            json.get("pinnableSessionId"),
+            Some(&serde_json::json!(true))
+        );
+        assert_eq!(
+            json.get("permissionInterception"),
+            Some(&serde_json::json!(false))
+        );
     }
 }

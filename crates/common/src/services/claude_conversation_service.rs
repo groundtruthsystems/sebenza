@@ -1,10 +1,13 @@
-use crate::adapters::claude_cli::{latest_session, ClaudeCliSession};
+use crate::adapters::claude_cli::{ClaudeCliSession, latest_session};
 use crate::domain::model::WorktreeSnapshot;
 use crate::services::agents_ui::{
-    build_worktree_summary, AgentsUiConversationResponse, AgentsUiMessage, ConversationState,
+    AgentsUiConversationResponse, AgentsUiMessage, ConversationState, build_worktree_summary,
 };
 
-fn build_state(worktree: &WorktreeSnapshot, session: Option<&ClaudeCliSession>) -> ConversationState {
+fn build_state(
+    worktree: &WorktreeSnapshot,
+    session: Option<&ClaudeCliSession>,
+) -> ConversationState {
     let conversation_id = session
         .map(|s| s.session_id.clone())
         .unwrap_or_else(|| format!("claude-pending:{}", worktree.path));

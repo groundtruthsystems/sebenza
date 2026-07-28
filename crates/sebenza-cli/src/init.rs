@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use common::services::init_authoring::{
-    analyze_config, detect_init_project_context, scaffold_config, InitAgent,
+    InitAgent, analyze_config, detect_init_project_context, scaffold_config,
 };
 
 fn which(bin: &str) -> bool {
@@ -55,7 +55,10 @@ fn resolve_optional_tool(tool: &str) -> Option<String> {
 /// Best-effort `--version`. Reported so a user can see WHICH version they have when a
 /// session-format or hook change breaks history, rather than guessing.
 fn tool_version(path: &str) -> Option<String> {
-    let out = std::process::Command::new(path).arg("--version").output().ok()?;
+    let out = std::process::Command::new(path)
+        .arg("--version")
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -140,7 +143,11 @@ pub fn run(cwd: &str) -> i32 {
     let claude = which("claude");
     let codex = which("codex");
     // Mirror `authoring_agent`: codex only when it's present and claude isn't.
-    let agent = if codex && !claude { InitAgent::Codex } else { InitAgent::Claude };
+    let agent = if codex && !claude {
+        InitAgent::Codex
+    } else {
+        InitAgent::Claude
+    };
     let has_agent = claude || codex;
 
     let ctx = detect_init_project_context(&root, agent);
@@ -153,12 +160,18 @@ pub fn run(cwd: &str) -> i32 {
     println!(".ai/sebenza.yaml starter template created");
 
     if has_agent {
-        let label = if matches!(agent, InitAgent::Codex) { "Codex" } else { "Claude" };
+        let label = if matches!(agent, InitAgent::Codex) {
+            "Codex"
+        } else {
+            "Claude"
+        };
         println!("Running {label} to adapt the starter .ai/sebenza.yaml...");
         let unique = std::process::id().to_string();
         match analyze_config(&ctx, &unique) {
             Ok(()) => println!("{label} adapted .ai/sebenza.yaml"),
-            Err(e) => println!("{label} could not adapt the config ({e}) — keeping the starter template"),
+            Err(e) => {
+                println!("{label} could not adapt the config ({e}) — keeping the starter template")
+            }
         }
     }
 

@@ -184,8 +184,18 @@ impl TmuxGateway {
         if code != 0 {
             assert_tmux_ok(
                 &[
-                    "new-session", "-d", "-s", session_name, "-c", cwd, ";", "set-option", "-t",
-                    session_name, "destroy-unattached", "off",
+                    "new-session",
+                    "-d",
+                    "-s",
+                    session_name,
+                    "-c",
+                    cwd,
+                    ";",
+                    "set-option",
+                    "-t",
+                    session_name,
+                    "destroy-unattached",
+                    "off",
                 ],
                 &format!("create tmux session {session_name}"),
             )?;
@@ -193,7 +203,13 @@ impl TmuxGateway {
             return Ok(());
         }
         assert_tmux_ok(
-            &["set-option", "-t", session_name, "destroy-unattached", "off"],
+            &[
+                "set-option",
+                "-t",
+                session_name,
+                "destroy-unattached",
+                "off",
+            ],
             &format!("set destroy-unattached off for {session_name}"),
         )?;
         self.scrub_leaked_global_env();
@@ -236,11 +252,23 @@ impl TmuxGateway {
         cwd: &str,
         command: Option<&str>,
     ) -> Result<(), String> {
-        let mut args = vec!["new-window", "-d", "-t", session_name, "-n", window_name, "-c", cwd];
+        let mut args = vec![
+            "new-window",
+            "-d",
+            "-t",
+            session_name,
+            "-n",
+            window_name,
+            "-c",
+            cwd,
+        ];
         if let Some(cmd) = command {
             args.push(cmd);
         }
-        assert_tmux_ok(&args, &format!("create tmux window {session_name}:{window_name}"))?;
+        assert_tmux_ok(
+            &args,
+            &format!("create tmux window {session_name}:{window_name}"),
+        )?;
         Ok(())
     }
 
@@ -252,7 +280,11 @@ impl TmuxGateway {
         cwd: &str,
         command: Option<&str>,
     ) -> Result<(), String> {
-        let flag = if split == PaneSplit::Right { "-h" } else { "-v" };
+        let flag = if split == PaneSplit::Right {
+            "-h"
+        } else {
+            "-v"
+        };
         let mut args = vec!["split-window", "-t", target, flag, "-c", cwd];
         let size = size_pct.map(|pct| format!("{pct}%"));
         if let Some(size) = &size {
@@ -295,7 +327,10 @@ impl TmuxGateway {
     }
 
     pub fn select_pane(&self, target: &str) -> Result<(), String> {
-        assert_tmux_ok(&["select-pane", "-t", target], &format!("select tmux pane {target}"))?;
+        assert_tmux_ok(
+            &["select-pane", "-t", target],
+            &format!("select tmux pane {target}"),
+        )?;
         Ok(())
     }
 
@@ -319,15 +354,36 @@ impl TmuxGateway {
         if !self.has_window(session_name, parking_window) {
             return assert_tmux_ok(
                 &[
-                    "new-window", "-d", "-P", "-F", "#{pane_id}", "-t", session_name, "-n",
-                    parking_window, "-c", cwd, command,
+                    "new-window",
+                    "-d",
+                    "-P",
+                    "-F",
+                    "#{pane_id}",
+                    "-t",
+                    session_name,
+                    "-n",
+                    parking_window,
+                    "-c",
+                    cwd,
+                    command,
                 ],
                 &format!("create parking window {session_name}:{parking_window}"),
             );
         }
         let target = format!("{session_name}:{parking_window}");
         assert_tmux_ok(
-            &["split-window", "-d", "-P", "-F", "#{pane_id}", "-t", &target, "-c", cwd, command],
+            &[
+                "split-window",
+                "-d",
+                "-P",
+                "-F",
+                "#{pane_id}",
+                "-t",
+                &target,
+                "-c",
+                cwd,
+                command,
+            ],
             &format!("create parked pane in {target}"),
         )
     }
@@ -344,7 +400,9 @@ impl TmuxGateway {
     /// Remove a pane, tolerating an already-gone pane.
     pub fn kill_pane(&self, target: &str) -> Result<(), String> {
         let (_o, stderr, code) = run_tmux(&["kill-pane", "-t", target]);
-        if code != 0 && !stderr.contains("can't find pane") && !is_ignorable_kill_window_error(&stderr)
+        if code != 0
+            && !stderr.contains("can't find pane")
+            && !is_ignorable_kill_window_error(&stderr)
         {
             return Err(format!("kill tmux pane {target} failed: {stderr}"));
         }
@@ -390,7 +448,10 @@ mod tests {
 
     #[test]
     fn sanitize_collapses_and_trims() {
-        assert_eq!(sanitize_tmux_name_segment("My Repo!!Name", 18), "my-repo-name");
+        assert_eq!(
+            sanitize_tmux_name_segment("My Repo!!Name", 18),
+            "my-repo-name"
+        );
         assert_eq!(sanitize_tmux_name_segment("--x--", 18), "x");
         assert_eq!(sanitize_tmux_name_segment("", 18), "x");
     }

@@ -1,10 +1,10 @@
 use crate::domain::config::{
     AutoNameConfig, AutoNameProvider, AutoPullConfig, CustomAgentConfig, GitHubIntegrationConfig,
-    IntegrationConfig, LauncherConfig, LifecycleHooksConfig, LinkedRepoConfig,
-    OneshotConfig, PaneKind, PaneSplit, PaneTemplate, ProfileConfig,
-    ProjectConfig, RuntimeKind, ServiceSpec, WorkspaceConfig,
+    IntegrationConfig, LauncherConfig, LifecycleHooksConfig, LinkedRepoConfig, OneshotConfig,
+    PaneKind, PaneSplit, PaneTemplate, ProfileConfig, ProjectConfig, RuntimeKind, ServiceSpec,
+    WorkspaceConfig,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::fs;
@@ -199,21 +199,27 @@ fn parse_project_config(val: serde_yaml::Value) -> ProjectConfig {
 
         // Parse profiles
         if let Some(profiles_val) = mapping.get("profiles") {
-            if let Ok(p) = serde_yaml::from_value::<IndexMap<String, ProfileConfig>>(profiles_val.clone()) {
+            if let Ok(p) =
+                serde_yaml::from_value::<IndexMap<String, ProfileConfig>>(profiles_val.clone())
+            {
                 config.profiles = p;
             }
         }
 
         // Parse custom agents
         if let Some(agents_val) = mapping.get("agents") {
-            if let Ok(a) = serde_yaml::from_value::<HashMap<String, CustomAgentConfig>>(agents_val.clone()) {
+            if let Ok(a) =
+                serde_yaml::from_value::<HashMap<String, CustomAgentConfig>>(agents_val.clone())
+            {
                 config.agents = a;
             }
         }
 
         // Parse launchers (external editors/tools for "Open in…")
         if let Some(launchers_val) = mapping.get("launchers") {
-            if let Ok(l) = serde_yaml::from_value::<HashMap<String, LauncherConfig>>(launchers_val.clone()) {
+            if let Ok(l) =
+                serde_yaml::from_value::<HashMap<String, LauncherConfig>>(launchers_val.clone())
+            {
                 config.launchers = l;
             }
         }
@@ -245,11 +251,15 @@ fn parse_project_config(val: serde_yaml::Value) -> ProjectConfig {
             if let Some(github) = integrations.get("github") {
                 if let Some(gh_map) = github.as_mapping() {
                     if let Some(repos_val) = gh_map.get("linkedRepos") {
-                        if let Ok(repos) = serde_yaml::from_value::<Vec<LinkedRepoConfig>>(repos_val.clone()) {
+                        if let Ok(repos) =
+                            serde_yaml::from_value::<Vec<LinkedRepoConfig>>(repos_val.clone())
+                        {
                             config.integrations.github.linked_repos = repos;
                         }
                     }
-                    if let Some(auto_remove) = gh_map.get("autoRemoveOnMerge").and_then(|v| v.as_bool()) {
+                    if let Some(auto_remove) =
+                        gh_map.get("autoRemoveOnMerge").and_then(|v| v.as_bool())
+                    {
                         config.integrations.github.auto_remove_on_merge = auto_remove;
                     }
                 }
@@ -326,15 +336,24 @@ pub fn load_config(dir: &str) -> ProjectConfig {
             if let Ok(local_val) = serde_yaml::from_str::<serde_yaml::Value>(&content) {
                 if let Some(local_map) = local_val.as_mapping() {
                     // Local workspace worktreeRoot overlay
-                    if let Some(workspace) = local_map.get("workspace").and_then(|v| v.as_mapping()) {
-                        if let Some(worktree_root) = workspace.get("worktreeRoot").and_then(|v| v.as_str()) {
+                    if let Some(workspace) = local_map.get("workspace").and_then(|v| v.as_mapping())
+                    {
+                        if let Some(worktree_root) =
+                            workspace.get("worktreeRoot").and_then(|v| v.as_str())
+                        {
                             config.workspace.worktree_root = worktree_root.to_string();
                         }
-                        if let Some(auto_pull) = workspace.get("autoPull").and_then(|v| v.as_mapping()) {
-                            if let Some(enabled) = auto_pull.get("enabled").and_then(|v| v.as_bool()) {
+                        if let Some(auto_pull) =
+                            workspace.get("autoPull").and_then(|v| v.as_mapping())
+                        {
+                            if let Some(enabled) =
+                                auto_pull.get("enabled").and_then(|v| v.as_bool())
+                            {
                                 config.workspace.auto_pull.enabled = enabled;
                             }
-                            if let Some(interval) = auto_pull.get("intervalSeconds").and_then(|v| v.as_u64()) {
+                            if let Some(interval) =
+                                auto_pull.get("intervalSeconds").and_then(|v| v.as_u64())
+                            {
                                 if interval >= 30 {
                                     config.workspace.auto_pull.interval_seconds = interval;
                                 }
@@ -344,7 +363,10 @@ pub fn load_config(dir: &str) -> ProjectConfig {
 
                     // Local profiles overlay (add or replace)
                     if let Some(profiles_val) = local_map.get("profiles") {
-                        if let Ok(local_profiles) = serde_yaml::from_value::<IndexMap<String, ProfileConfig>>(profiles_val.clone()) {
+                        if let Ok(local_profiles) = serde_yaml::from_value::<
+                            IndexMap<String, ProfileConfig>,
+                        >(profiles_val.clone())
+                        {
                             for (name, prof) in local_profiles {
                                 config.profiles.insert(name, prof);
                             }
@@ -353,7 +375,10 @@ pub fn load_config(dir: &str) -> ProjectConfig {
 
                     // Local custom agents overlay
                     if let Some(agents_val) = local_map.get("agents") {
-                        if let Ok(local_agents) = serde_yaml::from_value::<HashMap<String, CustomAgentConfig>>(agents_val.clone()) {
+                        if let Ok(local_agents) = serde_yaml::from_value::<
+                            HashMap<String, CustomAgentConfig>,
+                        >(agents_val.clone())
+                        {
                             for (id, agent) in local_agents {
                                 config.agents.insert(id, agent);
                             }
@@ -362,7 +387,10 @@ pub fn load_config(dir: &str) -> ProjectConfig {
 
                     // Local launchers overlay
                     if let Some(launchers_val) = local_map.get("launchers") {
-                        if let Ok(local_launchers) = serde_yaml::from_value::<HashMap<String, LauncherConfig>>(launchers_val.clone()) {
+                        if let Ok(local_launchers) = serde_yaml::from_value::<
+                            HashMap<String, LauncherConfig>,
+                        >(launchers_val.clone())
+                        {
                             for (id, launcher) in local_launchers {
                                 config.launchers.insert(id, launcher);
                             }
@@ -370,16 +398,24 @@ pub fn load_config(dir: &str) -> ProjectConfig {
                     }
 
                     // Local integrations overlay
-                    if let Some(integrations) = local_map.get("integrations").and_then(|v| v.as_mapping()) {
-                        if let Some(github) = integrations.get("github").and_then(|v| v.as_mapping()) {
-                            if let Some(auto_remove) = github.get("autoRemoveOnMerge").and_then(|v| v.as_bool()) {
+                    if let Some(integrations) =
+                        local_map.get("integrations").and_then(|v| v.as_mapping())
+                    {
+                        if let Some(github) =
+                            integrations.get("github").and_then(|v| v.as_mapping())
+                        {
+                            if let Some(auto_remove) =
+                                github.get("autoRemoveOnMerge").and_then(|v| v.as_bool())
+                            {
                                 config.integrations.github.auto_remove_on_merge = auto_remove;
                             }
                         }
                     }
 
                     // Local lifecycle hooks overlay
-                    if let Some(hooks) = local_map.get("lifecycleHooks").and_then(|v| v.as_mapping()) {
+                    if let Some(hooks) =
+                        local_map.get("lifecycleHooks").and_then(|v| v.as_mapping())
+                    {
                         let local_post = hooks.get("postCreate").and_then(|v| v.as_str());
                         let local_pre = hooks.get("preRemove").and_then(|v| v.as_str());
 
@@ -422,7 +458,9 @@ fn global_launchers() -> HashMap<String, LauncherConfig> {
         .and_then(|val| {
             val.as_mapping()
                 .and_then(|m| m.get("launchers"))
-                .and_then(|v| serde_yaml::from_value::<HashMap<String, LauncherConfig>>(v.clone()).ok())
+                .and_then(|v| {
+                    serde_yaml::from_value::<HashMap<String, LauncherConfig>>(v.clone()).ok()
+                })
         })
         .unwrap_or_default()
 }
@@ -456,7 +494,9 @@ pub fn persist_local_github_config(dir: &str, auto_remove: Option<bool>) -> Resu
     let root = project_root(dir);
     let (local_path, mut doc) = read_local_config_document(&root);
 
-    let doc_map = doc.as_mapping_mut().ok_or_else(|| anyhow!("Invalid YAML format"))?;
+    let doc_map = doc
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow!("Invalid YAML format"))?;
 
     let integrations = doc_map
         .entry(serde_yaml::Value::String("integrations".to_string()))
@@ -471,18 +511,27 @@ pub fn persist_local_github_config(dir: &str, auto_remove: Option<bool>) -> Resu
         .ok_or_else(|| anyhow!("Github is not a mapping"))?;
 
     if let Some(val) = auto_remove {
-        github.insert(serde_yaml::Value::String("autoRemoveOnMerge".to_string()), serde_yaml::Value::Bool(val));
+        github.insert(
+            serde_yaml::Value::String("autoRemoveOnMerge".to_string()),
+            serde_yaml::Value::Bool(val),
+        );
     }
 
     write_local_config_document(&local_path, &doc)?;
     Ok(())
 }
 
-pub fn persist_local_custom_agent(dir: &str, agent_id: &str, agent: &CustomAgentConfig) -> Result<()> {
+pub fn persist_local_custom_agent(
+    dir: &str,
+    agent_id: &str,
+    agent: &CustomAgentConfig,
+) -> Result<()> {
     let root = project_root(dir);
     let (local_path, mut doc) = read_local_config_document(&root);
 
-    let doc_map = doc.as_mapping_mut().ok_or_else(|| anyhow!("Invalid YAML format"))?;
+    let doc_map = doc
+        .as_mapping_mut()
+        .ok_or_else(|| anyhow!("Invalid YAML format"))?;
 
     let agents = doc_map
         .entry(serde_yaml::Value::String("agents".to_string()))
@@ -491,7 +540,10 @@ pub fn persist_local_custom_agent(dir: &str, agent_id: &str, agent: &CustomAgent
         .ok_or_else(|| anyhow!("Agents is not a mapping"))?;
 
     let serialized_agent = serde_yaml::to_value(agent)?;
-    agents.insert(serde_yaml::Value::String(agent_id.to_string()), serialized_agent);
+    agents.insert(
+        serde_yaml::Value::String(agent_id.to_string()),
+        serialized_agent,
+    );
 
     write_local_config_document(&local_path, &doc)?;
     Ok(())

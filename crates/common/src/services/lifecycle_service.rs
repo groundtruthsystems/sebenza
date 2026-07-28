@@ -1,54 +1,58 @@
-use crate::adapters::agent_runtime::{ensure_agent_runtime_artifacts, scan_untrusted_agent_plugins};
+use crate::adapters::agent_runtime::{
+    ensure_agent_runtime_artifacts, scan_untrusted_agent_plugins,
+};
 use crate::adapters::control_token::load_control_token;
-use crate::adapters::docker::{launch_container, LaunchContainerOpts};
+use crate::adapters::docker::{LaunchContainerOpts, launch_container};
 use crate::adapters::fs::{
     build_control_env_map, build_runtime_env_map, get_worktree_storage_paths, load_dotenv_local,
     read_worktree_archive_state, read_worktree_meta, write_control_env, write_runtime_env,
     write_worktree_archive_state, write_worktree_meta,
 };
 use crate::adapters::git::{
-    canonical_path, split_repo_root_entry, CreateWorktreeMode, GitGateway, GitWorktreeEntry,
+    CreateWorktreeMode, GitGateway, GitWorktreeEntry, canonical_path, split_repo_root_entry,
 };
-use crate::adapters::hooks::{run_lifecycle_hook, RunLifecycleHookInput};
+use crate::adapters::hooks::{RunLifecycleHookInput, run_lifecycle_hook};
+use crate::adapters::session_discovery::{
+    DiscoverableAgentKind, capture_new_session_id, list_session_ids,
+};
 use crate::adapters::tmux::{
-    build_project_session_name, build_worktree_parking_window_name, build_worktree_window_name,
-    TmuxGateway,
+    TmuxGateway, build_project_session_name, build_worktree_parking_window_name,
+    build_worktree_window_name,
 };
 use crate::config::expand_template;
 use crate::domain::config::{PaneKind, PaneTemplate, ProfileConfig, ProjectConfig, RuntimeKind};
+use crate::domain::model::OneshotMeta;
 use crate::domain::model::{
-    WorktreeMeta, WorktreeSource, MAIN_REPO_AGENT_SENTINEL, WORKTREE_META_SCHEMA_VERSION,
+    MAIN_REPO_AGENT_SENTINEL, WORKTREE_META_SCHEMA_VERSION, WorktreeMeta, WorktreeSource,
 };
+use crate::domain::model::{ROOT_TAB_ID, WorktreeTab, WorktreeTabKind};
 use crate::domain::policies::{
     allocate_service_ports, generate_fallback_branch_name, is_valid_branch_name, is_valid_env_key,
 };
-use crate::adapters::session_discovery::{
-    capture_new_session_id, list_session_ids, DiscoverableAgentKind,
+use crate::services::agent_registry::{
+    AgentDefinition, AgentImplementation, BuiltinAgentId, get_agent_definition,
 };
-use crate::services::agent_registry::{get_agent_definition, AgentDefinition, AgentImplementation, BuiltinAgentId};
-use crate::services::tab_logic::{
-    active_tab_id as read_active_tab_id, append_tab, build_agent_tab, build_fork_tab, find_tab,
-    list_tabs, next_agent_ordinal, next_fork_seq, remove_tab, root_tab, set_active_tab,
-    tab_agent_id, update_tab, with_tabs, AgentTabInput, ForkTabInput, TabPatch,
-};
-use crate::domain::model::{WorktreeTab, WorktreeTabKind, ROOT_TAB_ID};
-use crate::services::auto_name_service::generate_branch_name;
 use crate::services::agent_service::{
-    build_agent_pane_command, build_docker_agent_pane_command, build_docker_shell_command,
-    build_managed_shell_command, AgentInvocation, AgentLaunchMode,
+    AgentInvocation, AgentLaunchMode, build_agent_pane_command, build_docker_agent_pane_command,
+    build_docker_shell_command, build_managed_shell_command,
 };
 use crate::services::archive_service::set_archived_worktree_state;
+use crate::services::auto_name_service::generate_branch_name;
 use crate::services::config_view::get_default_profile_name;
 use crate::services::project_runtime::ProjectRuntime;
-use crate::services::reconciliation::{make_main_worktree_id, ReconciliationService};
+use crate::services::reconciliation::{ReconciliationService, make_main_worktree_id};
 use crate::services::session_service::{
-    ensure_session_layout, plan_session_layout, PaneCommandSet, SessionLayoutContext,
+    PaneCommandSet, SessionLayoutContext, ensure_session_layout, plan_session_layout,
+};
+use crate::services::tab_logic::{
+    AgentTabInput, ForkTabInput, TabPatch, active_tab_id as read_active_tab_id, append_tab,
+    build_agent_tab, build_fork_tab, find_tab, list_tabs, next_agent_ordinal, next_fork_seq,
+    remove_tab, root_tab, set_active_tab, tab_agent_id, update_tab, with_tabs,
 };
 use crate::services::worktree_service::{
-    adopt_managed_worktree, build_create_worktree_targets, create_managed_worktree,
     AdoptManagedWorktreeOptions, CreateManagedWorktreeOptions, InitializeManagedWorktreeResult,
+    adopt_managed_worktree, build_create_worktree_targets, create_managed_worktree,
 };
-use crate::domain::model::OneshotMeta;
 use chrono::{SecondsFormat, Utc};
 use std::collections::HashMap;
 use std::path::Path;
@@ -167,11 +171,7 @@ fn build_main_repo_meta(
 /// worktree-specific op has to say no explicitly. These live at the service layer
 /// rather than in the HTTP handlers because the CLI is a pure HTTP client and
 /// lands on the same handlers: guarding here covers both at once.
-fn reject_main_repo_op(
-    branch: &str,
-    main_branch: &str,
-    what: &str,
-) -> Result<(), LifecycleError> {
+fn reject_main_repo_op(branch: &str, main_branch: &str, what: &str) -> Result<(), LifecycleError> {
     if branch == main_branch {
         return Err(LifecycleError::new(
             format!("Cannot {what} the main repository ({main_branch})"),
@@ -345,7 +345,9 @@ impl LifecycleService {
         // write default managed metadata, then open it normally.
         let mut meta = match resolved.meta.clone() {
             Some(m) => m,
-            None => self.adopt_unmanaged_worktree(branch, &resolved.git_dir, &resolved.entry.path)?,
+            None => {
+                self.adopt_unmanaged_worktree(branch, &resolved.git_dir, &resolved.entry.path)?
+            }
         };
 
         if let Some(oneshot) = oneshot {
@@ -353,8 +355,11 @@ impl LifecycleService {
             op(write_worktree_meta(&resolved.git_dir, &meta))?;
         }
 
-        let initialized =
-            self.refresh_managed_artifacts_from_meta(&resolved.git_dir, &meta, &resolved.entry.path)?;
+        let initialized = self.refresh_managed_artifacts_from_meta(
+            &resolved.git_dir,
+            &meta,
+            &resolved.entry.path,
+        )?;
         let profile = self.resolve_profile(Some(&meta.profile))?;
         let agent = self.resolve_agent_definition(Some(&meta.agent))?;
         let launch_mode = if agent.capabilities.resume {
@@ -363,7 +368,10 @@ impl LifecycleService {
             AgentLaunchMode::Fresh
         };
 
-        op(ensure_agent_runtime_artifacts(&resolved.git_dir, &resolved.entry.path))?;
+        op(ensure_agent_runtime_artifacts(
+            &resolved.git_dir,
+            &resolved.entry.path,
+        ))?;
         warn_on_untrusted_agent_plugins(&resolved.git_dir, &resolved.entry.path);
         // NOTE: codex resume-conversation-id on open is still deferred.
         self.materialize_runtime_session(
@@ -406,7 +414,10 @@ impl LifecycleService {
     ) -> Result<WorktreeMeta, LifecycleError> {
         let profile = self.resolve_profile(None)?;
         if profile.profile.runtime == RuntimeKind::Docker && profile.profile.image.is_none() {
-            return Err(LifecycleError::new("Docker profile is missing an image", 422));
+            return Err(LifecycleError::new(
+                "Docker profile is missing an image",
+                422,
+            ));
         }
         let agent = self.resolve_agent_definition(None)?;
         let control_token = load_control_token().map_err(|e| LifecycleError::new(e, 422))?;
@@ -468,11 +479,8 @@ impl LifecycleService {
         let resolved = self.resolve_main_repo()?;
         let meta = self.build_main_repo_meta(resolved.meta.clone());
         op(write_worktree_meta(&resolved.git_dir, &meta))?;
-        let initialized = self.refresh_managed_artifacts_from_meta(
-            &resolved.git_dir,
-            &meta,
-            &self.project_root,
-        )?;
+        let initialized =
+            self.refresh_managed_artifacts_from_meta(&resolved.git_dir, &meta, &self.project_root)?;
 
         // One shell pane rooted at the repo. `PaneKind::Shell` makes
         // `resolve_pane_startup_command` return None, so the agent command below is
@@ -516,11 +524,10 @@ impl LifecycleService {
         use std::process::{Command, Stdio};
 
         let resolved = self.resolve_existing_worktree(branch)?;
-        let launcher = self
-            .config
-            .launchers
-            .get(launcher_id)
-            .ok_or_else(|| LifecycleError::new(format!("Unknown launcher: {launcher_id}"), 404))?;
+        let launcher =
+            self.config.launchers.get(launcher_id).ok_or_else(|| {
+                LifecycleError::new(format!("Unknown launcher: {launcher_id}"), 404)
+            })?;
 
         // Template vars are passed as env and referenced in the shell command, so
         // paths with spaces stay intact (no string interpolation into the shell).
@@ -566,17 +573,26 @@ impl LifecycleService {
 
         let main_branch = self.config.workspace.main_branch.clone();
         self.ensure_main_checkout_ready_to_merge(&main_branch)?;
-        op(self.git.merge_branch(&self.project_root, branch, &main_branch))?;
+        op(self
+            .git
+            .merge_branch(&self.project_root, branch, &main_branch))?;
 
         self.remove_resolved_worktree(&resolved).map_err(|err| {
             LifecycleError::new(
-                format!("Merged {branch} into {main_branch} but cleanup failed: {}", err.message),
+                format!(
+                    "Merged {branch} into {main_branch} but cleanup failed: {}",
+                    err.message
+                ),
                 500,
             )
         })
     }
 
-    pub fn set_worktree_archived(&self, branch: &str, archived: bool) -> Result<(), LifecycleError> {
+    pub fn set_worktree_archived(
+        &self,
+        branch: &str,
+        archived: bool,
+    ) -> Result<(), LifecycleError> {
         // Archiving would kill the window and persist a junk entry for the root.
         self.refuse_for_main_repo(branch, "archive")?;
         let resolved = self.resolve_existing_worktree(branch)?;
@@ -652,7 +668,11 @@ impl LifecycleService {
         branch: &str,
         agent_id: &str,
     ) -> Result<String, LifecycleError> {
-        let requested_base = input.base_branch.as_deref().map(str::trim).filter(|b| !b.is_empty());
+        let requested_base = input
+            .base_branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|b| !b.is_empty());
         if let Some(base) = requested_base {
             if !is_valid_branch_name(base) {
                 return Err(LifecycleError::new("Invalid base branch name", 400));
@@ -664,7 +684,10 @@ impl LifecycleService {
                 ));
             }
             if base == branch {
-                return Err(LifecycleError::new("Base branch must differ from branch name", 400));
+                return Err(LifecycleError::new(
+                    "Base branch must differ from branch name",
+                    400,
+                ));
             }
         }
 
@@ -687,7 +710,10 @@ impl LifecycleService {
             mode == CreateMode::New || availability.delete_branch_on_rollback;
 
         if profile.profile.runtime == RuntimeKind::Docker && profile.profile.image.is_none() {
-            return Err(LifecycleError::new("Docker profile is missing an image", 422));
+            return Err(LifecycleError::new(
+                "Docker profile is missing an image",
+                422,
+            ));
         }
 
         // git worktree add + meta + env (session is built separately below).
@@ -746,8 +772,12 @@ impl LifecycleService {
             )?;
             let git_dir = initialized.paths.git_dir.clone();
             let meta = initialized.meta.clone();
-            initialized = self.refresh_managed_artifacts_from_meta(&git_dir, &meta, &worktree_path)?;
-            op(ensure_agent_runtime_artifacts(&initialized.paths.git_dir, &worktree_path))?;
+            initialized =
+                self.refresh_managed_artifacts_from_meta(&git_dir, &meta, &worktree_path)?;
+            op(ensure_agent_runtime_artifacts(
+                &initialized.paths.git_dir,
+                &worktree_path,
+            ))?;
             warn_on_untrusted_agent_plugins(&initialized.paths.git_dir, &worktree_path);
             self.materialize_runtime_session(
                 branch,
@@ -866,9 +896,10 @@ impl LifecycleService {
 
         let (agent_command, shell_command) = if profile.profile.runtime == RuntimeKind::Docker {
             // Launch (or reuse) the sandbox container, then exec into it.
-            let image = profile.profile.image.clone().ok_or_else(|| {
-                LifecycleError::new("Docker profile is missing an image", 422)
-            })?;
+            let image =
+                profile.profile.image.clone().ok_or_else(|| {
+                    LifecycleError::new("Docker profile is missing an image", 422)
+                })?;
             let container = launch_container(&LaunchContainerOpts {
                 branch: branch.to_string(),
                 wt_dir: worktree_path.to_string(),
@@ -876,12 +907,22 @@ impl LifecycleService {
                 image,
                 env_passthrough: profile.profile.env_passthrough.clone(),
                 mounts: profile.profile.mounts.clone().unwrap_or_default(),
-                service_port_envs: self.config.services.iter().map(|s| s.port_env.clone()).collect(),
+                service_port_envs: self
+                    .config
+                    .services
+                    .iter()
+                    .map(|s| s.port_env.clone())
+                    .collect(),
                 runtime_env: initialized.runtime_env.clone(),
             })
             .map_err(|e| LifecycleError::new(e, 422))?;
             (
-                build_docker_agent_pane_command(&container, worktree_path, &runtime_env_path, &invocation),
+                build_docker_agent_pane_command(
+                    &container,
+                    worktree_path,
+                    &runtime_env_path,
+                    &invocation,
+                ),
                 build_docker_shell_command(&container, worktree_path, &runtime_env_path),
             )
         } else {
@@ -916,7 +957,9 @@ impl LifecycleService {
         delete_branch: bool,
     ) -> Result<(), LifecycleError> {
         let _ = self.kill_worktree_windows(branch);
-        op(self.git.remove_worktree(&self.project_root, worktree_path, true))?;
+        op(self
+            .git
+            .remove_worktree(&self.project_root, worktree_path, true))?;
         if delete_branch {
             let _ = self.git.delete_branch(&self.project_root, branch, true);
         }
@@ -960,8 +1003,11 @@ impl LifecycleService {
             ));
         }
         let profile = self.resolve_profile(Some(&meta.profile))?;
-        let initialized =
-            self.refresh_managed_artifacts_from_meta(&resolved.git_dir, &meta, &resolved.entry.path)?;
+        let initialized = self.refresh_managed_artifacts_from_meta(
+            &resolved.git_dir,
+            &meta,
+            &resolved.entry.path,
+        )?;
 
         self.materialize_runtime_session(
             branch,
@@ -1026,7 +1072,10 @@ impl LifecycleService {
         next_meta = update_tab(
             next_meta,
             &outgoing_active_id,
-            TabPatch { session_id: None, pane_id: Some(outgoing_pane_id) },
+            TabPatch {
+                session_id: None,
+                pane_id: Some(outgoing_pane_id),
+            },
         );
         op(write_worktree_meta(&slot.resolved.git_dir, &next_meta))?;
         // The new tab is active — bring it into the visible agent slot.
@@ -1208,7 +1257,10 @@ impl LifecycleService {
         let mut next_meta = update_tab(
             slot.meta.clone(),
             &outgoing_active_id,
-            TabPatch { session_id: None, pane_id: Some(outgoing_pane_id) },
+            TabPatch {
+                session_id: None,
+                pane_id: Some(outgoing_pane_id),
+            },
         );
         next_meta = set_active_tab(next_meta, tab_id);
         op(write_worktree_meta(&slot.resolved.git_dir, &next_meta))?;
@@ -1269,7 +1321,10 @@ impl LifecycleService {
         let session_name = build_project_session_name(&self.project_root);
         let window_name = build_worktree_window_name(branch);
         if !self.tmux.has_window(&session_name, &window_name) {
-            return Err(LifecycleError::new(format!("Worktree {branch} is not open"), 409));
+            return Err(LifecycleError::new(
+                format!("Worktree {branch} is not open"),
+                409,
+            ));
         }
 
         let profile = self.resolve_profile(Some(&meta.profile))?;
@@ -1278,8 +1333,11 @@ impl LifecycleService {
         }
         let agent = self.resolve_agent_definition(Some(&meta.agent))?;
 
-        let initialized =
-            self.refresh_managed_artifacts_from_meta(&resolved.git_dir, &meta, &resolved.entry.path)?;
+        let initialized = self.refresh_managed_artifacts_from_meta(
+            &resolved.git_dir,
+            &meta,
+            &resolved.entry.path,
+        )?;
         let worktree_path = resolved.entry.path.clone();
         Ok(TabSlot {
             meta: initialized.meta.clone(),
@@ -1329,7 +1387,10 @@ impl LifecycleService {
             let next = update_tab(
                 slot.meta.clone(),
                 &root.tab_id,
-                TabPatch { session_id: Some(Some(discovered)), pane_id: None },
+                TabPatch {
+                    session_id: Some(Some(discovered)),
+                    pane_id: None,
+                },
             );
             op(write_worktree_meta(&slot.resolved.git_dir, &next))?;
         }
@@ -1389,7 +1450,10 @@ impl LifecycleService {
             pane_id: visible_slot_pane_id.clone(),
             ..root
         }];
-        for tab in list_tabs(&meta).into_iter().filter(|t| is_restorable(t.kind)) {
+        for tab in list_tabs(&meta)
+            .into_iter()
+            .filter(|t| is_restorable(t.kind))
+        {
             let tab_agent_id = tab_agent_id(&tab, &meta).to_string();
             // The agent may have been deleted from config since the tab was made.
             let Some(tab_agent) = get_agent_definition(&self.config, &tab_agent_id) else {
@@ -1431,7 +1495,10 @@ impl LifecycleService {
                 )
                 .map_err(|e| LifecycleError::new(e, 422))?;
             op(self.tmux.run_command(&pane_id, &command))?;
-            restored.push(WorktreeTab { pane_id: Some(pane_id), ..tab });
+            restored.push(WorktreeTab {
+                pane_id: Some(pane_id),
+                ..tab
+            });
         }
         let mut next_meta = with_tabs(meta.clone(), restored.clone());
         let want_active = read_active_tab_id(&meta);
@@ -1455,7 +1522,8 @@ impl LifecycleService {
     /// Live, non-bare worktrees excluding the repo root itself.
     fn list_project_worktrees(&self) -> Vec<GitWorktreeEntry> {
         let root = canonical_path(&self.project_root);
-        let (_root_entry, linked) = split_repo_root_entry(self.git.list_live_worktrees(&root), &root);
+        let (_root_entry, linked) =
+            split_repo_root_entry(self.git.list_live_worktrees(&root), &root);
         linked
     }
 
@@ -1477,13 +1545,19 @@ impl LifecycleService {
             .resolve_worktree_git_dir(&entry.path)
             .map_err(|e| LifecycleError::new(e, 422))?;
         let meta = read_worktree_meta(&git_dir);
-        Ok(ResolvedWorktree { entry, git_dir, meta })
+        Ok(ResolvedWorktree {
+            entry,
+            git_dir,
+            meta,
+        })
     }
 
     /// Tear down a worktree's main window and its hidden tab-parking window.
     fn kill_worktree_windows(&self, branch: &str) -> Result<(), LifecycleError> {
         let session = build_project_session_name(&self.project_root);
-        op(self.tmux.kill_window(&session, &build_worktree_window_name(branch)))?;
+        op(self
+            .tmux
+            .kill_window(&session, &build_worktree_window_name(branch)))?;
         op(self
             .tmux
             .kill_window(&session, &build_worktree_parking_window_name(branch)))
@@ -1495,7 +1569,10 @@ impl LifecycleService {
         Ok(())
     }
 
-    fn ensure_no_uncommitted_changes(&self, entry: &GitWorktreeEntry) -> Result<(), LifecycleError> {
+    fn ensure_no_uncommitted_changes(
+        &self,
+        entry: &GitWorktreeEntry,
+    ) -> Result<(), LifecycleError> {
         if self.git.read_worktree_status(&entry.path).dirty {
             let name = entry.branch.clone().unwrap_or_else(|| entry.path.clone());
             return Err(LifecycleError::new(
@@ -1511,10 +1588,7 @@ impl LifecycleService {
     /// <original>` *in the repo root*, so a dirty tree fails it half-way and a
     /// user sitting in the main checkout would have their files rewritten
     /// underneath them.
-    fn ensure_main_checkout_ready_to_merge(
-        &self,
-        main_branch: &str,
-    ) -> Result<(), LifecycleError> {
+    fn ensure_main_checkout_ready_to_merge(&self, main_branch: &str) -> Result<(), LifecycleError> {
         if self.git.read_worktree_status(&self.project_root).dirty {
             return Err(LifecycleError::new(
                 format!(
@@ -1585,7 +1659,10 @@ impl LifecycleService {
         };
         let dotenv = load_dotenv_local(worktree_path);
         let mut extra = std::collections::HashMap::new();
-        extra.insert("SEBENZA_WORKTREE_PATH".to_string(), worktree_path.to_string());
+        extra.insert(
+            "SEBENZA_WORKTREE_PATH".to_string(),
+            worktree_path.to_string(),
+        );
         let env = build_runtime_env_map(meta, &extra, &dotenv);
         op(run_lifecycle_hook(RunLifecycleHookInput {
             name,
@@ -1621,7 +1698,10 @@ impl LifecycleService {
 
     fn control_url(&self, _runtime: RuntimeKind) -> String {
         // Docker loopback rewriting is deferred; host uses the base URL as-is.
-        format!("{}/api/runtime/events", self.control_base_url.trim_end_matches('/'))
+        format!(
+            "{}/api/runtime/events",
+            self.control_base_url.trim_end_matches('/')
+        )
     }
 
     /// Resolve the branch name for a create: explicit (trimmed), else auto-name
@@ -1640,12 +1720,18 @@ impl LifecycleService {
             // a random fallback.
             Some(match explicit {
                 Some(b) => b.to_string(),
-                None => self.generate_auto_name(prompt).unwrap_or_else(generate_fallback_branch_name),
+                None => self
+                    .generate_auto_name(prompt)
+                    .unwrap_or_else(generate_fallback_branch_name),
             })
         };
-        let branch = branch.ok_or_else(|| LifecycleError::new("Existing branch is required", 400))?;
+        let branch =
+            branch.ok_or_else(|| LifecycleError::new("Existing branch is required", 400))?;
         if !is_valid_branch_name(&branch) {
-            return Err(LifecycleError::new(format!("Invalid branch name: {branch}"), 400));
+            return Err(LifecycleError::new(
+                format!("Invalid branch name: {branch}"),
+                400,
+            ));
         }
         Ok(branch)
     }
@@ -1675,7 +1761,10 @@ impl LifecycleService {
 
         if mode == CreateMode::New {
             if local.contains(branch) {
-                return Err(LifecycleError::new(format!("Branch already exists: {branch}"), 409));
+                return Err(LifecycleError::new(
+                    format!("Branch already exists: {branch}"),
+                    409,
+                ));
             }
             return Ok(BranchAvailability {
                 start_point: None,
@@ -1699,7 +1788,10 @@ impl LifecycleService {
         let remote: std::collections::HashSet<String> =
             self.git.list_remote_branches(&root).into_iter().collect();
         if !remote.contains(branch) {
-            return Err(LifecycleError::new(format!("Branch not found: {branch}"), 404));
+            return Err(LifecycleError::new(
+                format!("Branch not found: {branch}"),
+                404,
+            ));
         }
         Ok(BranchAvailability {
             start_point: Some(format!("origin/{branch}")),
@@ -1717,7 +1809,10 @@ impl LifecycleService {
             .collect()
     }
 
-    fn resolve_profile(&self, profile_name: Option<&str>) -> Result<ResolvedProfile, LifecycleError> {
+    fn resolve_profile(
+        &self,
+        profile_name: Option<&str>,
+    ) -> Result<ResolvedProfile, LifecycleError> {
         let name = profile_name
             .map(str::to_string)
             .unwrap_or_else(|| get_default_profile_name(&self.config));
@@ -1749,10 +1844,12 @@ impl LifecycleService {
     ) -> Result<Vec<String>, LifecycleError> {
         let selected: Vec<String> = match &input.agents {
             Some(agents) if !agents.is_empty() => agents.clone(),
-            _ => vec![input
-                .agent
-                .clone()
-                .unwrap_or_else(|| self.config.workspace.default_agent.clone())],
+            _ => vec![
+                input
+                    .agent
+                    .clone()
+                    .unwrap_or_else(|| self.config.workspace.default_agent.clone()),
+            ],
         };
         let mut seen = std::collections::HashSet::new();
         let mut deduped: Vec<String> = Vec::new();
@@ -1763,7 +1860,10 @@ impl LifecycleService {
             }
         }
         if deduped.is_empty() {
-            return Err(LifecycleError::new("At least one agent must be selected", 400));
+            return Err(LifecycleError::new(
+                "At least one agent must be selected",
+                400,
+            ));
         }
         deduped
             .iter()
@@ -1819,9 +1919,10 @@ fn archive_states_equal(
 ) -> bool {
     a.schema_version == b.schema_version
         && a.entries.len() == b.entries.len()
-        && a.entries.iter().zip(&b.entries).all(|(l, r)| {
-            l.path == r.path && l.archived_at == r.archived_at
-        })
+        && a.entries
+            .iter()
+            .zip(&b.entries)
+            .all(|(l, r)| l.path == r.path && l.archived_at == r.archived_at)
 }
 
 /// Trim and validate a worktree label. Empty → `None`; over the length cap → 400.
@@ -1948,7 +2049,10 @@ mod tests {
             "2026-01-01T00:00:00Z",
         );
         assert_ne!(meta.worktree_id, "stale-id");
-        assert_eq!(meta.worktree_id, make_main_worktree_id(&canonical_path("/repo")));
+        assert_eq!(
+            meta.worktree_id,
+            make_main_worktree_id(&canonical_path("/repo"))
+        );
     }
 
     #[test]

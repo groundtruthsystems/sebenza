@@ -17,7 +17,10 @@ pub struct ProjectsRegistry {
 
 fn default_registry_file() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    PathBuf::from(home).join(".ai").join("sebenza").join("projects.json")
+    PathBuf::from(home)
+        .join(".ai")
+        .join("sebenza")
+        .join("projects.json")
 }
 
 impl ProjectsRegistry {
@@ -50,8 +53,11 @@ impl ProjectsRegistry {
 
     /// Upsert by `path` (an existing entry with the same path is replaced).
     pub fn add(&self, entry: ProjectEntry) {
-        let mut entries: Vec<ProjectEntry> =
-            self.list().into_iter().filter(|e| e.path != entry.path).collect();
+        let mut entries: Vec<ProjectEntry> = self
+            .list()
+            .into_iter()
+            .filter(|e| e.path != entry.path)
+            .collect();
         entries.push(entry);
         self.write(&entries);
     }
