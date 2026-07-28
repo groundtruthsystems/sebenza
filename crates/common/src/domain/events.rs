@@ -49,7 +49,10 @@ pub fn parse_runtime_event(raw: &Value) -> Option<RuntimeEvent> {
         "agent_stopped" => Some(RuntimeEvent::AgentStopped { worktree_id, branch }),
         "agent_status_changed" => {
             let lifecycle = raw.get("lifecycle").and_then(Value::as_str)?;
-            if matches!(lifecycle, "starting" | "running" | "idle" | "stopped") {
+            if matches!(
+                lifecycle,
+                "starting" | "running" | "idle" | "awaiting_permission" | "stopped"
+            ) {
                 Some(RuntimeEvent::AgentStatusChanged {
                     worktree_id,
                     branch,
@@ -104,6 +107,20 @@ mod tests {
             json!({"worktreeId":"wt1","branch":"f","type":"conversation_started","sessionId":""}),
         ] {
             assert!(parse_runtime_event(&bad).is_none(), "must reject {bad}");
+        }
+    }
+
+    #[test]
+    fn awaiting_permission_is_an_accepted_lifecycle() {
+        let raw = json!({
+            "worktreeId": "wt1", "branch": "f",
+            "type": "agent_status_changed", "lifecycle": "awaiting_permission",
+        });
+        match parse_runtime_event(&raw) {
+            Some(RuntimeEvent::AgentStatusChanged { lifecycle, .. }) => {
+                assert_eq!(lifecycle, "awaiting_permission");
+            }
+            other => panic!("expected AgentStatusChanged, got {other:?}"),
         }
     }
 

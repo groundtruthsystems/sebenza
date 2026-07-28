@@ -185,6 +185,16 @@ pub enum AgentLifecycle {
     Starting,
     Running,
     Idle,
+    /// Blocked mid-turn on a permission decision the agent is showing in its own UI.
+    ///
+    /// Distinct from `Idle` on purpose: both mean "this worktree wants you", but they call
+    /// for different actions — `Idle` wants your next prompt, this wants you to approve or
+    /// reject something already proposed. With many parallel worktrees, that difference is
+    /// the difference between a legible queue and a wall of identical "waiting" badges.
+    ///
+    /// Sebenza cannot answer the prompt for you: opencode's `permission.ask` hook does not
+    /// fire (verified on 1.18.9), so this state is observational only.
+    AwaitingPermission,
     Stopped,
     Error,
 }

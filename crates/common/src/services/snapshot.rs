@@ -37,6 +37,7 @@ fn lifecycle_status(lifecycle: AgentLifecycle) -> String {
         AgentLifecycle::Starting => "starting",
         AgentLifecycle::Running => "running",
         AgentLifecycle::Idle => "idle",
+        AgentLifecycle::AwaitingPermission => "awaiting_permission",
         AgentLifecycle::Stopped => "stopped",
         AgentLifecycle::Error => "error",
     }
