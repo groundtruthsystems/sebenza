@@ -25,6 +25,14 @@ pub fn read_worktree_conversation(
         Some("codex") => Some(crate::services::codex_conversation_service::read_worktree_conversation(
             worktree,
         )),
+        // opencode cannot discover its own session; it uses the id the agent reported at
+        // creation, carried on the snapshot as `reported_session_id`.
+        Some("opencode") => Some(
+            crate::services::opencode_conversation_service::read_worktree_conversation(
+                worktree,
+                worktree.reported_session_id.as_deref(),
+            ),
+        ),
         _ => None,
     }
 }
@@ -32,7 +40,7 @@ pub fn read_worktree_conversation(
 /// Ids of the agents that have a conversation adapter, for building accurate
 /// "not supported for this agent" messages instead of hardcoding a list in each caller.
 pub fn conversation_capable_agent_ids() -> &'static [&'static str] {
-    &["claude", "codex"]
+    &["claude", "codex", "opencode"]
 }
 
 /// The conversation id for `worktree`, resolved through its own agent's adapter.
@@ -72,6 +80,7 @@ mod tests {
             oneshot: None,
             tabs: Vec::new(),
             active_tab_id: None,
+            reported_session_id: None,
         }
     }
 
@@ -96,6 +105,19 @@ mod tests {
             .expect("claude worktree must resolve a conversation")
             .conversation;
         assert_eq!(conv.provider, "claudeCode");
+    }
+
+    #[test]
+    fn opencode_routes_to_its_own_adapter_and_pends_without_a_reported_id() {
+        let conv = read_worktree_conversation(&snapshot(Some("opencode")))
+            .expect("opencode has a conversation adapter")
+            .conversation;
+        assert_eq!(conv.provider, "opencode");
+        // No recorded session id yet -> a pending placeholder. Critically NOT another
+        // worktree's transcript, which is the failure mode claude_cli's all-projects
+        // fallback exhibits.
+        assert_eq!(conv.conversation_id, "opencode-pending:/wt");
+        assert!(conv.messages.is_empty());
     }
 
     #[test]

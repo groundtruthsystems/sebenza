@@ -70,7 +70,10 @@ impl NotificationStore {
             RuntimeEvent::RuntimeError { branch, message, .. } => {
                 ("runtime_error", format!("Runtime error on {branch}: {message}"), None)
             }
-            RuntimeEvent::AgentStatusChanged { .. } => return None,
+            // Neither warrants a user-visible notification: one is routine status churn,
+            // the other is internal bookkeeping.
+            RuntimeEvent::AgentStatusChanged { .. }
+            | RuntimeEvent::ConversationStarted { .. } => return None,
         };
         let id = (self.next_id.fetch_add(1, Ordering::Relaxed) + 1) as i64;
         let notification = crate::domain::model::NotificationView {

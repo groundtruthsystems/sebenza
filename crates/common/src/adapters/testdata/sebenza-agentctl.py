@@ -89,6 +89,10 @@ def build_payload(command, args, control_env):
         payload["type"] = "runtime_error"
         payload["message"] = args.message
         return payload
+    if command == "conversation-started":
+        # sessionId is attached by the caller, which reads it from the hook payload.
+        payload["type"] = "conversation_started"
+        return payload
     raise RuntimeError(f"unsupported command: {command}")
 
 
@@ -212,8 +216,20 @@ def main():
         hook_payload = read_hook_payload()
         return 0 if maybe_send_pr_opened(hook_payload, control_env) else 1
 
-    if parsed.command in ("opencode-session-created", "opencode-tool-before"):
-        # Either signal means the agent is doing something.
+    if parsed.command == "opencode-session-created":
+        # Report the session id: this is the ONLY route by which Sebenza learns it, since
+        # opencode's store is SQLite behind an internal schema and `session list` has no
+        # directory column. Then mark the agent running.
+        hook_payload = read_hook_payload()
+        session_id = (hook_payload or {}).get("sessionID")
+        if session_id:
+            payload = build_payload("conversation-started", parsed, control_env)
+            payload["sessionId"] = session_id
+            send_payload(payload, control_env)
+        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="running"), control_env), control_env)
+        return 0
+
+    if parsed.command == "opencode-tool-before":
         send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="running"), control_env), control_env)
         return 0
 

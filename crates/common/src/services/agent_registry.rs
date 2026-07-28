@@ -123,8 +123,11 @@ fn builtin_capabilities(id: BuiltinAgentId) -> AgentCapabilities {
         // that does not work yet.
         BuiltinAgentId::Opencode => AgentCapabilities {
             terminal: true,
+            // Chat still needs a StreamProvider; history does not.
             in_app_chat: false,
-            conversation_history: false,
+            // Enabled by phase-2 tasks 5-7: the export-based adapter plus the
+            // session.created -> agentctl -> runtime-state round trip.
+            conversation_history: true,
             interrupt: false,
             // `-c` / `--session <id>` resume works from launch.
             resume: true,
@@ -417,7 +420,10 @@ mod tests {
             !oc.capabilities.in_app_chat,
             "chat depends on the generated plugin + export adapter, not yet landed"
         );
-        assert!(!oc.capabilities.conversation_history, "history adapter not yet landed");
+        assert!(
+            oc.capabilities.conversation_history,
+            "the export-based adapter and the session.created round trip both landed"
+        );
         assert!(!oc.capabilities.interrupt, "interrupt needs the streaming provider");
         assert!(
             !oc.capabilities.permission_interception,

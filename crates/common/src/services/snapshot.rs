@@ -76,6 +76,7 @@ fn map_worktree_snapshot(
         oneshot: state.oneshot.clone(),
         tabs: state.tabs.clone(),
         active_tab_id: state.active_tab_id.clone(),
+        reported_session_id: state.reported_session_id.clone(),
     }
 }
 

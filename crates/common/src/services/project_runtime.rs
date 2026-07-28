@@ -169,6 +169,11 @@ impl ProjectRuntime {
                 state.agent.last_error = Some(message.clone());
             }
             RuntimeEvent::PrOpened { .. } => {}
+            // Record the id so the opencode conversation service can export it. This is
+            // the only route by which Sebenza learns an opencode session id.
+            RuntimeEvent::ConversationStarted { session_id, .. } => {
+                state.reported_session_id = Some(session_id.clone());
+            }
         }
         Ok(())
     }
@@ -227,5 +232,6 @@ fn make_default_state(input: UpsertInput) -> ManagedWorktreeRuntimeState {
         },
         services: Vec::new(),
         prs: Vec::new(),
+        reported_session_id: None,
     }
 }
