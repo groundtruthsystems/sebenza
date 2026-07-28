@@ -19,7 +19,8 @@
           "id": "phase-0-task-2",
           "name": "Verify permission.ask behaviour under --auto",
           "description": "FR-0.2. Determine whether the permission.ask plugin hook still fires when opencode is launched with --auto. Record whether bypass and Sebenza-side gating can coexist or are mutually exclusive. BLOCKING for phase-3 wiring.",
-          "status": "doing"
+          "status": "blocked",
+          "blocked_reason": "permission.ask could not be observed firing. --auto bypasses it entirely; the default config wildcard-allows bash so no ask occurs; and `permission: {bash: \"ask\"}` makes non-interactive `opencode run` hang at init. Verifying whether permission.ask fires and its status is honoured requires a TUI or `opencode serve` harness rather than another `run` variant. Blocks phase-3 only; phases 0-2 unaffected. Partial findings recorded in spec.md."
         },
         {
           "id": "phase-0-task-3",
@@ -235,7 +236,7 @@
       "id": "phase-3",
       "name": "Permission gating for opencode",
       "status": "backlog",
-      "blocked_reason": null,
+      "blocked_reason": "Depends on phase-0-task-2, which is blocked.",
       "tasks": [
         {
           "id": "phase-3-task-1",
