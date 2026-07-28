@@ -33,7 +33,8 @@
           "id": "phase-0-task-4",
           "name": "Investigate unconditional claude_conversation_service dispatch",
           "description": "FR-0.4. server.rs:1382 (interrupt) and ~1522 (streaming WebSocket) call claude_conversation_service::read_worktree_conversation with no agent match, unlike the paths that branch. Determine empirically whether codex interrupt/streaming is broken today despite declaring interrupt: true. Fix it or document the limitation and correct the capability. Must be resolved before any dispatch generalisation, or the defect quadruples.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "686e253"
         },
         {
           "id": "phase-0-task-5",
