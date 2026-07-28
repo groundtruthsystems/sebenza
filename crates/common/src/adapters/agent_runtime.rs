@@ -88,10 +88,22 @@ export const SebenzaPlugin = async ({ $ }) => {
         await run("opencode-stop", {});
       } else if (type === "session.error") {
         await run("runtime-error", { message: "opencode session error" });
+      } else if (type === "permission.asked") {
+        // The agent is blocked on a human decision in its TUI. Report idle, not running:
+        // tool.execute.before has already fired by this point, so without this the
+        // worktree would show "running" while actually waiting for you - which is the
+        // difference between a legible queue and a dashboard full of apparently-busy
+        // worktrees. Sebenza cannot ANSWER the prompt (permission.ask does not fire in
+        // 1.18.9); it can only report that one is pending.
+        await run("opencode-permission-asked", {});
+      } else if (type === "permission.replied") {
+        await run("opencode-permission-replied", {});
       }
     },
 
-    // Running/idle status and PR detection.
+    // NOTE: tool.execute.before fires BEFORE any permission decision, so it means
+    // "a tool was proposed", not "a tool is running". permission.asked (above) corrects
+    // the status when the agent is actually waiting on a human.
     "tool.execute.before": async () => {
       await run("opencode-tool-before", {});
     },
@@ -102,9 +114,12 @@ export const SebenzaPlugin = async ({ $ }) => {
       });
     },
 
-    // Declared so the hook exists from the start; it currently only reports that a
-    // permission was requested. Sebenza cannot yet DENY - whether the mutable status is
-    // honoured is unproven (see the phase-3 spike), so the verdict is left untouched.
+    // Declared, but VERIFIED NOT TO FIRE on opencode 1.18.9: a bash permission request in
+    // the TUI produced `permission.asked` / `permission.replied` on the generic `event`
+    // hook and never called this one. The @opencode-ai/plugin types (1.18.7) still declare
+    // it with a mutable `status`, so this is either a binary/types skew or a path this
+    // hook no longer serves. Left in place - harmless, and it will start working if
+    // upstream restores it - but Sebenza does NOT rely on it. See spec.md FR-0.2.
     "permission.ask": async () => {
       await run("opencode-permission-ask", {});
     },

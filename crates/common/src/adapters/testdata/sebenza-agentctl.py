@@ -62,6 +62,8 @@ def build_parser():
     subparsers.add_parser("opencode-tool-before")
     subparsers.add_parser("opencode-tool-after")
     subparsers.add_parser("opencode-permission-ask")
+    subparsers.add_parser("opencode-permission-asked")
+    subparsers.add_parser("opencode-permission-replied")
     subparsers.add_parser("opencode-stop")
 
     return parser
@@ -230,6 +232,15 @@ def main():
         return 0
 
     if parsed.command == "opencode-tool-before":
+        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="running"), control_env), control_env)
+        return 0
+
+    if parsed.command == "opencode-permission-asked":
+        # Blocked on a human decision in opencode's TUI. Idle, not running.
+        send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="idle"), control_env), control_env)
+        return 0
+
+    if parsed.command == "opencode-permission-replied":
         send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="running"), control_env), control_env)
         return 0
 

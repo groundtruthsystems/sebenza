@@ -95,9 +95,40 @@ Method: a probe plugin at `<worktree>/.opencode/plugins/probe.js` logging `permi
 agents, in a tmux pane) or `opencode serve` — and that `run` simply has no such channel, hence finding 4's
 hang. **Confirming this needs a TUI or server harness, not another `run` variant.**
 
-**Impact:** Phases 0, 1 and 2 are unaffected. **Phase 3 is at risk** until this is answered — if
-`permission.ask` cannot be driven from the way Sebenza launches opencode, the gating feature is not
-buildable as designed. Tracked as `phase-3-task-1`, a hard gate at the head of that phase.
+**RESOLVED 2026-07-28 by `phase-3-task-1` — the answer is NO.**
+
+Method: an interactive opencode TUI driven in a real tmux session (the exact mode Sebenza launches),
+in a worktree with `permission: { bash: "ask" }` and a probe plugin that logged every hook and
+attempted to set `output.status = "allow"`. A prompt requiring a shell command produced opencode's
+own *"Permission required — Allow once / Allow always / Reject"* dialog, and the probe recorded:
+
+```
+plugin-loaded
+tool.before bash          <- tool.execute.before fires BEFORE the permission decision
+event permission.asked    <- generic `event` hook, observational only
+event permission.replied  <- after answering in the TUI
+tool.after bash
+```
+
+**`permission.ask` never fired.** The `@opencode-ai/plugin` types (1.18.7) still declare it with a
+mutable `status: "ask" | "deny" | "allow"`, but the 1.18.9 binary did not call it for a bash
+permission request. Either a binary/types skew, or a path this hook no longer serves.
+
+**Consequences.**
+- Sebenza can **observe** the whole permission lifecycle (`permission.asked`, `permission.replied`)
+  but cannot **answer** it. The Phase 3 gating design — a synchronous decision channel with an
+  authenticated verdict — has nothing to write the verdict into.
+- `permission_interception` stays **false** for opencode. No agent of the four can gate a tool call,
+  which collapses the asymmetry the design was built around.
+- The Phase 3 hard gate has therefore tripped: **tasks 2–11 of that phase are not buildable as
+  designed** and need redesign or descoping.
+
+**What the observational events do buy** (now implemented, since it was cheap and correct):
+`permission.asked` → report the worktree **idle**, `permission.replied` → back to running. This also
+fixes a real bug shipped in Phase 2: `tool.execute.before` fires *before* the permission decision, so
+without this a worktree waiting on a human showed as "running". For a product whose purpose is
+supervising many parallel worktrees, "which one is waiting for me" is arguably the most valuable
+signal here — and it is achievable without gating.
 
 ### FR-0.3 — export fixture and message mapping *(phase-0-task-3, resolved 2026-07-28)*
 
