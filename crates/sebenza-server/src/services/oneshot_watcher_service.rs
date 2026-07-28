@@ -87,7 +87,11 @@ pub fn run_oneshot_watch(
 ) {
     let worktrees = runtime.lock().unwrap().list_worktrees();
     for wt in worktrees {
-        if wt.source != crate::domain::model::WorktreeSource::Oneshot {
+        // The repo root is never oneshot-armed; skipping it explicitly keeps a
+        // future change to `source` from making the watcher close the main session.
+        if wt.source != crate::domain::model::WorktreeSource::Oneshot
+            || wt.kind == crate::domain::model::WorktreeKind::Main
+        {
             continue;
         }
         process_worktree(states, runtime, lifecycle, &wt.branch, &wt.path, wt.agent.lifecycle, !wt.prs.is_empty(), now_ms);

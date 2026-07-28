@@ -104,6 +104,11 @@ export function buildWorktreeListRows(worktrees: WorktreeInfo[]): WorktreeListRo
     childrenByParent.set(parentBranch, siblings);
   }
 
+  // The repo's own checkout is the trunk of the tree, so it leads the list rather
+  // than sorting alphabetically among the worktrees branched off it. Its children
+  // then nest under it for free via `parentBranchOf`.
+  roots.sort((a, b) => Number(b.kind === "main") - Number(a.kind === "main"));
+
   const rows: WorktreeListRow[] = [];
   const visited = new Set<string>();
 

@@ -6,6 +6,16 @@ pub const WORKTREE_ARCHIVE_STATE_VERSION: i32 = 1;
 pub const OPEN_SESSIONS_STATE_VERSION: i32 = 1;
 pub const ROOT_TAB_ID: &str = "root";
 
+/// `WorktreeMeta::agent` value for the repository's own checkout, which runs no
+/// agent.
+///
+/// A sentinel rather than making the field `Option<String>`: that would change the
+/// on-disk shape of *every* existing `meta.json` to `"agent": null`, which an older
+/// binary cannot deserialize — it would then read the worktree as unmanaged and
+/// overwrite its meta. The sentinel never reaches the UI, because reconciliation
+/// forces `agent_name: None` for the main entry.
+pub const MAIN_REPO_AGENT_SENTINEL: &str = "none";
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum WorktreeConversationProvider {
@@ -53,8 +63,15 @@ impl WorktreeConversationMeta {
 #[serde(rename_all = "camelCase")]
 pub enum WorktreeTabKind {
     Root,
+    /// A continuation of the root conversation, so it is bound to the worktree's
+    /// own agent and needs session-id discovery to exist.
     Fork,
+    /// A plain managed shell — no agent.
     Shell,
+    /// A *fresh* session of any configured agent, built-in or custom. Unlike a
+    /// fork it starts a new conversation, so it carries no session lineage and
+    /// can run an agent other than the worktree's own.
+    Agent,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -68,6 +85,11 @@ pub struct WorktreeTab {
     // `paneId` is `.optional()` in the contract (omitted when absent), not nullable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<String>,
+    /// The agent whose session runs in this tab's pane. `None` on shell tabs and
+    /// on tabs written before per-tab agents existed; readers must fall back to
+    /// `WorktreeMeta::agent` via `tab_logic::tab_agent_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     pub created_at: String,
 }
 
@@ -255,10 +277,23 @@ pub struct WorktreeCreationSnapshot {
     pub phase: WorktreeCreationPhase,
 }
 
+/// Whether an entry is the repository's own checkout or a linked worktree.
+///
+/// The main checkout is a real, openable session but is not a worktree anyone may
+/// merge, archive or remove — this discriminator is what the guards key off.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum WorktreeKind {
+    Main,
+    #[default]
+    Linked,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ManagedWorktreeRuntimeState {
     pub worktree_id: String,
+    pub kind: WorktreeKind,
     pub branch: String,
     pub label: Option<String>,
     pub base_branch: Option<String>,
@@ -281,6 +316,7 @@ pub struct ManagedWorktreeRuntimeState {
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeSnapshot {
     pub branch: String,
+    pub kind: WorktreeKind,
     pub label: Option<String>,
     // `baseBranch` is `.optional()` in the contract (omitted when absent), not nullable.
     #[serde(skip_serializing_if = "Option::is_none")]

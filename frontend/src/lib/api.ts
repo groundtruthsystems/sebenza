@@ -58,6 +58,7 @@ function mapAgentStatus(status: string): string {
 function mapWorktree(snapshot: ProjectWorktreeSnapshot): WorktreeInfo {
   return {
     branch: snapshot.branch,
+    kind: snapshot.kind,
     label: snapshot.label,
     ...(snapshot.baseBranch ? { baseBranch: snapshot.baseBranch } : {}),
     archived: snapshot.archived,
@@ -92,6 +93,18 @@ export async function createWorktreeTab(branch: string): Promise<WorktreeTab> {
 
 export async function createWorktreeShellTab(branch: string): Promise<WorktreeTab> {
   const response = await api.createWorktreeShellTab({ params: { name: branch } });
+  return response.tab;
+}
+
+/** Start a fresh session of `agentId` as a new tab in `branch`'s worktree. */
+export async function createWorktreeAgentTab(
+  branch: string,
+  agentId: string,
+): Promise<WorktreeTab> {
+  const response = await api.createWorktreeAgentTab({
+    params: { name: branch },
+    body: { agent: agentId },
+  });
   return response.tab;
 }
 

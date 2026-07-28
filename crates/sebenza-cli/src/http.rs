@@ -65,6 +65,10 @@ pub struct PrEntry {
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeSnapshot {
     pub branch: String,
+    /// `"main"` for the repository's own checkout, `"linked"` for a worktree.
+    /// Defaults for older servers that don't send it.
+    #[serde(default = "default_worktree_kind")]
+    pub kind: String,
     pub label: Option<String>,
     #[serde(default)]
     pub base_branch: Option<String>,
@@ -82,6 +86,10 @@ pub struct WorktreeSnapshot {
     #[serde(default)]
     pub tabs: Vec<WorktreeTab>,
     pub active_tab_id: Option<String>,
+}
+
+fn default_worktree_kind() -> String {
+    "linked".to_string()
 }
 
 #[derive(Debug, Deserialize)]
@@ -466,6 +474,22 @@ impl Http {
     /// Returns the created tab (id + label).
     pub async fn create_tab(&self, base: &str, name: &str) -> Result<WorktreeTab> {
         let v = self.post(&format!("{base}/api/worktrees/{name}/tabs"), json!({})).await?;
+        Ok(serde_json::from_value::<CreatedTab>(v)?.tab)
+    }
+
+    /// Start a fresh session of `agent` as a new tab, rather than forking.
+    pub async fn create_agent_tab(
+        &self,
+        base: &str,
+        name: &str,
+        agent: &str,
+    ) -> Result<WorktreeTab> {
+        let v = self
+            .post(
+                &format!("{base}/api/worktrees/{name}/agent-tabs"),
+                json!({ "agent": agent }),
+            )
+            .await?;
         Ok(serde_json::from_value::<CreatedTab>(v)?.tab)
     }
 

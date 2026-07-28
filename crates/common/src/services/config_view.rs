@@ -11,6 +11,9 @@ pub struct AgentCapabilities {
     pub conversation_history: bool,
     pub interrupt: bool,
     pub resume: bool,
+    /// Kept in lockstep with `agent_registry::AgentCapabilities` — the parity
+    /// test in this module fails if the two ever disagree.
+    pub fork: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -29,6 +32,7 @@ fn builtin_agent_summaries() -> Vec<AgentSummary> {
         conversation_history: true,
         interrupt: true,
         resume: true,
+        fork: true,
     };
     vec![
         AgentSummary {
@@ -66,6 +70,7 @@ pub fn list_agent_summaries(config: &ProjectConfig) -> Vec<AgentSummary> {
                 conversation_history: false,
                 interrupt: false,
                 resume: cfg.resume_command.is_some(),
+                fork: false,
             },
         })
         .collect();
@@ -217,5 +222,84 @@ pub fn build_app_config(config: &ProjectConfig, project_dir: &str) -> AppConfig 
         auto_remove_on_merge: config.integrations.github.auto_remove_on_merge,
         project_dir: project_dir.to_string(),
         main_branch: config.workspace.main_branch.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::config::CustomAgentConfig;
+    use crate::config::default_config;
+    use crate::services::agent_registry::list_agent_definitions;
+
+    fn config_with_customs() -> ProjectConfig {
+        let mut config = default_config();
+        config.agents.insert(
+            "goose".to_string(),
+            CustomAgentConfig {
+                label: "Goose".to_string(),
+                start_command: "goose ${PROMPT}".to_string(),
+                resume_command: None,
+            },
+        );
+        config.agents.insert(
+            "opencode".to_string(),
+            CustomAgentConfig {
+                label: "OpenCode".to_string(),
+                start_command: "opencode ${PROMPT}".to_string(),
+                // Has a resume command, so `resume` must be true here but false
+                // for goose — a real difference the parity check has to preserve.
+                resume_command: Some("opencode --continue".to_string()),
+            },
+        );
+        config
+    }
+
+    /// `/api/config` (this module) and `/api/agents` (agent_registry) each build
+    /// their own capability struct. They must never disagree, or the UI enables an
+    /// affordance the server then rejects.
+    #[test]
+    fn agent_summaries_match_agent_registry_capabilities() {
+        let config = config_with_customs();
+        let summaries = list_agent_summaries(&config);
+        let definitions = list_agent_definitions(&config);
+
+        assert_eq!(summaries.len(), definitions.len());
+        for (summary, definition) in summaries.iter().zip(definitions.iter()) {
+            assert_eq!(summary.id, definition.id, "agent order must match");
+            assert_eq!(summary.label, definition.label);
+            assert_eq!(summary.kind, definition.kind);
+            let (s, d) = (&summary.capabilities, &definition.capabilities);
+            assert_eq!(s.terminal, d.terminal, "terminal for {}", summary.id);
+            assert_eq!(s.in_app_chat, d.in_app_chat, "inAppChat for {}", summary.id);
+            assert_eq!(
+                s.conversation_history, d.conversation_history,
+                "conversationHistory for {}",
+                summary.id
+            );
+            assert_eq!(s.interrupt, d.interrupt, "interrupt for {}", summary.id);
+            assert_eq!(s.resume, d.resume, "resume for {}", summary.id);
+            assert_eq!(s.fork, d.fork, "fork for {}", summary.id);
+        }
+    }
+
+    #[test]
+    fn only_builtins_are_fork_capable() {
+        // Forking needs session-id discovery, which custom agents don't expose.
+        for summary in list_agent_summaries(&config_with_customs()) {
+            assert_eq!(
+                summary.capabilities.fork,
+                summary.kind == "builtin",
+                "fork capability for {}",
+                summary.id
+            );
+        }
+    }
+
+    #[test]
+    fn fork_is_serialized_as_camel_case_on_the_wire() {
+        let summaries = list_agent_summaries(&default_config());
+        let json = serde_json::to_value(&summaries[0]).unwrap();
+        assert_eq!(json["capabilities"]["fork"], true);
     }
 }

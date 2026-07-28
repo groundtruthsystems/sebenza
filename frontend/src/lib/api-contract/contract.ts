@@ -11,6 +11,7 @@ import {
   AvailableBranchesQuerySchema,
   BranchListResponseSchema,
   CiLogsResponseSchema,
+  CreateAgentTabRequestSchema,
   CreateTabResponseSchema,
   CreateWorktreeRequestSchema,
   CreateWorktreeResponseSchema,
@@ -83,6 +84,7 @@ export const apiPaths = {
   sendWorktreePrompt: "/api/worktrees/:name/send",
   createWorktreeTab: "/api/worktrees/:name/tabs",
   createWorktreeShellTab: "/api/worktrees/:name/shell",
+  createWorktreeAgentTab: "/api/worktrees/:name/agent-tabs",
   selectWorktreeTab: "/api/worktrees/:name/tabs/:tabId/select",
   deleteWorktreeTab: "/api/worktrees/:name/tabs/:tabId",
   mergeWorktree: "/api/worktrees/:name/merge",
@@ -363,6 +365,16 @@ export const apiContract = c.router({
     path: apiPaths.createWorktreeShellTab,
     pathParams: WorktreeNameParamsSchema,
     body: c.noBody(),
+    responses: {
+      201: CreateTabResponseSchema,
+      ...commonErrorResponses,
+    },
+  },
+  createWorktreeAgentTab: {
+    method: "POST",
+    path: apiPaths.createWorktreeAgentTab,
+    pathParams: WorktreeNameParamsSchema,
+    body: CreateAgentTabRequestSchema,
     responses: {
       201: CreateTabResponseSchema,
       ...commonErrorResponses,

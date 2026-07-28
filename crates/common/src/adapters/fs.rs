@@ -29,8 +29,9 @@ pub fn read_worktree_meta(git_dir: &str) -> Option<WorktreeMeta> {
     Some(normalize_worktree_meta(meta))
 }
 
-/// Backfill a single root tab for worktrees created before tabs existed, and
-/// normalize an empty/whitespace label to `None`.
+/// Backfill a single root tab for worktrees created before tabs existed, stamp
+/// the owning agent onto agent-bearing tabs written before that field existed,
+/// and normalize an empty/whitespace label to `None`.
 fn normalize_worktree_meta(mut meta: WorktreeMeta) -> WorktreeMeta {
     if let Some(label) = meta.label.take() {
         let trimmed = label.trim();
@@ -52,6 +53,7 @@ fn normalize_worktree_meta(mut meta: WorktreeMeta) -> WorktreeMeta {
             seq: None,
             session_id,
             pane_id: None,
+            agent: Some(meta.agent.clone()),
             created_at: meta.created_at.clone(),
         };
         meta.tabs = Some(vec![root_tab]);
@@ -59,6 +61,24 @@ fn normalize_worktree_meta(mut meta: WorktreeMeta) -> WorktreeMeta {
         if meta.fork_counter.is_none() {
             meta.fork_counter = Some(0);
         }
+    }
+
+    // Root and fork tabs always run the worktree's own agent, so a missing
+    // `agent` on an existing tab is a pre-field file, not an absence. Stamping it
+    // here means the restore path never has to guess which agent a tab belongs
+    // to. Shell tabs run no agent and are deliberately left as `None`.
+    if let Some(tabs) = meta.tabs.take() {
+        let agent = meta.agent.clone();
+        meta.tabs = Some(
+            tabs.into_iter()
+                .map(|mut tab| {
+                    if tab.agent.is_none() && tab.kind != WorktreeTabKind::Shell {
+                        tab.agent = Some(agent.clone());
+                    }
+                    tab
+                })
+                .collect(),
+        );
     }
 
     meta
@@ -418,5 +438,117 @@ mod tests {
             rendered,
             "A_UNSAFE='has space'\nB_SAFE=plain-value.1\nC_QUOTE='it'\\''s'\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod meta_normalization_tests {
+    use super::*;
+
+    /// A `meta.json` as written before per-tab agents existed: no `agent` field on
+    /// any tab. Deserializing this must succeed, not fall back to "unmanaged".
+    const LEGACY_META_JSON: &str = r#"{
+        "schemaVersion": 1,
+        "worktreeId": "wt-1",
+        "branch": "feature",
+        "createdAt": "2026-01-01T00:00:00Z",
+        "profile": "default",
+        "agent": "codex",
+        "runtime": "host",
+        "startupEnvValues": {},
+        "allocatedPorts": {},
+        "tabs": [
+            { "tabId": "root", "kind": "root", "label": "Root", "seq": null,
+              "sessionId": "sess-root", "createdAt": "2026-01-01T00:00:00Z" },
+            { "tabId": "fork-1", "kind": "fork", "label": "Fork 1", "seq": 1,
+              "sessionId": "sess-fork", "createdAt": "2026-01-01T00:00:00Z" },
+            { "tabId": "shell-1", "kind": "shell", "label": "Shell", "seq": null,
+              "sessionId": null, "createdAt": "2026-01-01T00:00:00Z" }
+        ],
+        "activeTabId": "root",
+        "forkCounter": 1
+    }"#;
+
+    #[test]
+    fn legacy_meta_without_tab_agents_deserializes_and_is_backfilled() {
+        let raw: WorktreeMeta = serde_json::from_str(LEGACY_META_JSON).unwrap();
+        // Before normalization the field is simply absent.
+        assert!(raw.tabs.as_ref().unwrap().iter().all(|t| t.agent.is_none()));
+
+        let meta = normalize_worktree_meta(raw);
+        let tabs = meta.tabs.clone().unwrap();
+        let by_id = |id: &str| tabs.iter().find(|t| t.tab_id == id).unwrap().clone();
+        // Root and fork run the worktree's agent, so they are stamped with it...
+        assert_eq!(by_id("root").agent.as_deref(), Some("codex"));
+        assert_eq!(by_id("fork-1").agent.as_deref(), Some("codex"));
+        // ...but a shell runs no agent and must stay unstamped.
+        assert_eq!(by_id("shell-1").agent, None);
+    }
+
+    #[test]
+    fn backfilled_root_tab_carries_the_worktree_agent() {
+        let mut meta: WorktreeMeta = serde_json::from_str(LEGACY_META_JSON).unwrap();
+        meta.tabs = None; // pre-tabs worktree
+        meta.active_tab_id = None;
+        meta.fork_counter = None;
+
+        let normalized = normalize_worktree_meta(meta);
+        let tabs = normalized.tabs.unwrap();
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].kind, WorktreeTabKind::Root);
+        assert_eq!(tabs[0].agent.as_deref(), Some("codex"));
+        assert_eq!(normalized.active_tab_id.as_deref(), Some(ROOT_TAB_ID));
+    }
+
+    #[test]
+    fn an_explicit_tab_agent_survives_normalization() {
+        // A Codex tab on a Claude worktree must not be rewritten to "claude".
+        let mut meta: WorktreeMeta = serde_json::from_str(LEGACY_META_JSON).unwrap();
+        meta.agent = "claude".to_string();
+        let mut tabs = meta.tabs.take().unwrap();
+        tabs[1].agent = Some("codex".to_string());
+        meta.tabs = Some(tabs);
+
+        let normalized = normalize_worktree_meta(meta);
+        let tabs = normalized.tabs.unwrap();
+        assert_eq!(tabs[0].agent.as_deref(), Some("claude")); // backfilled
+        assert_eq!(tabs[1].agent.as_deref(), Some("codex")); // preserved
+    }
+
+    #[test]
+    fn agent_tab_kind_round_trips_as_camel_case() {
+        let tab = WorktreeTab {
+            tab_id: "agent-codex-1".to_string(),
+            kind: WorktreeTabKind::Agent,
+            label: "Codex".to_string(),
+            seq: Some(1),
+            session_id: None,
+            pane_id: None,
+            agent: Some("codex".to_string()),
+            created_at: "t".to_string(),
+        };
+        let json = serde_json::to_value(&tab).unwrap();
+        assert_eq!(json["kind"], "agent");
+        assert_eq!(json["agent"], "codex");
+        let back: WorktreeTab = serde_json::from_value(json).unwrap();
+        assert_eq!(back.kind, WorktreeTabKind::Agent);
+    }
+
+    #[test]
+    fn absent_optional_fields_are_omitted_from_the_wire() {
+        let tab = WorktreeTab {
+            tab_id: "shell-1".to_string(),
+            kind: WorktreeTabKind::Shell,
+            label: "Shell".to_string(),
+            seq: None,
+            session_id: None,
+            pane_id: None,
+            agent: None,
+            created_at: "t".to_string(),
+        };
+        let json = serde_json::to_value(&tab).unwrap();
+        // Matches paneId's existing `.optional()` (omitted) contract, not null.
+        assert!(json.get("agent").is_none());
+        assert!(json.get("paneId").is_none());
     }
 }

@@ -6,15 +6,19 @@ use crate::adapters::fs::{
     read_worktree_archive_state, read_worktree_meta, write_control_env, write_runtime_env,
     write_worktree_archive_state, write_worktree_meta,
 };
-use crate::adapters::git::{CreateWorktreeMode, GitGateway, GitWorktreeEntry};
+use crate::adapters::git::{
+    canonical_path, split_repo_root_entry, CreateWorktreeMode, GitGateway, GitWorktreeEntry,
+};
 use crate::adapters::hooks::{run_lifecycle_hook, RunLifecycleHookInput};
 use crate::adapters::tmux::{
     build_project_session_name, build_worktree_parking_window_name, build_worktree_window_name,
     TmuxGateway,
 };
 use crate::config::expand_template;
-use crate::domain::config::{ProfileConfig, ProjectConfig, RuntimeKind};
-use crate::domain::model::{WorktreeMeta, WorktreeSource};
+use crate::domain::config::{PaneKind, PaneTemplate, ProfileConfig, ProjectConfig, RuntimeKind};
+use crate::domain::model::{
+    WorktreeMeta, WorktreeSource, MAIN_REPO_AGENT_SENTINEL, WORKTREE_META_SCHEMA_VERSION,
+};
 use crate::domain::policies::{
     allocate_service_ports, generate_fallback_branch_name, is_valid_branch_name, is_valid_env_key,
 };
@@ -23,9 +27,9 @@ use crate::adapters::session_discovery::{
 };
 use crate::services::agent_registry::{get_agent_definition, AgentDefinition, AgentImplementation};
 use crate::services::tab_logic::{
-    active_tab_id as read_active_tab_id, append_tab, build_fork_tab, find_tab, list_tabs,
-    next_fork_seq, remove_tab, root_tab, set_active_tab, update_tab, with_tabs, ForkTabInput,
-    TabPatch,
+    active_tab_id as read_active_tab_id, append_tab, build_agent_tab, build_fork_tab, find_tab,
+    list_tabs, next_agent_ordinal, next_fork_seq, remove_tab, root_tab, set_active_tab,
+    tab_agent_id, update_tab, with_tabs, AgentTabInput, ForkTabInput, TabPatch,
 };
 use crate::domain::model::{WorktreeTab, WorktreeTabKind, ROOT_TAB_ID};
 use crate::services::auto_name_service::generate_branch_name;
@@ -36,7 +40,7 @@ use crate::services::agent_service::{
 use crate::services::archive_service::set_archived_worktree_state;
 use crate::services::config_view::get_default_profile_name;
 use crate::services::project_runtime::ProjectRuntime;
-use crate::services::reconciliation::ReconciliationService;
+use crate::services::reconciliation::{make_main_worktree_id, ReconciliationService};
 use crate::services::session_service::{
     ensure_session_layout, plan_session_layout, PaneCommandSet, SessionLayoutContext,
 };
@@ -110,25 +114,104 @@ fn op(result: Result<(), String>) -> Result<(), LifecycleError> {
     result.map_err(|message| LifecycleError::new(message, 422))
 }
 
+/// Managed metadata for the repository's own checkout.
+///
+/// Written to `<repo>/.git/.ai/sebenza/meta.json` — a location no linked worktree
+/// can collide with, and one inside `.git/` so it is never tracked and never
+/// dirties the working tree. Without meta there are no tabs, no `active_tab_id`
+/// and no `runtime.env`, i.e. no shell tabs at all.
+fn build_main_repo_meta(
+    project_root: &str,
+    main_branch: &str,
+    default_profile: &str,
+    existing: Option<WorktreeMeta>,
+    now: &str,
+) -> WorktreeMeta {
+    WorktreeMeta {
+        schema_version: WORKTREE_META_SCHEMA_VERSION,
+        worktree_id: make_main_worktree_id(&canonical_path(project_root)),
+        branch: main_branch.to_string(),
+        label: existing.as_ref().and_then(|m| m.label.clone()),
+        // The trunk has no parent worktree to nest under.
+        base_branch: None,
+        created_at: existing
+            .as_ref()
+            .map(|m| m.created_at.clone())
+            .unwrap_or_else(|| now.to_string()),
+        // Only consulted for the Docker check the main-repo path skips, but a valid
+        // name keeps `resolve_profile` from 400ing if anything reaches it.
+        profile: default_profile.to_string(),
+        agent: MAIN_REPO_AGENT_SENTINEL.to_string(),
+        runtime: "host".to_string(),
+        startup_env_values: HashMap::new(),
+        // Deliberately empty: allocating service ports for the repo root would
+        // double-book them against a real worktree.
+        allocated_ports: HashMap::new(),
+        source: Some(WorktreeSource::Ui),
+        oneshot: None,
+        conversation: None,
+        agent_terminal_stale: None,
+        // Reset to root-only on every open: parked shell panes from a previous
+        // session hold dead pane ids and nothing else would clean them up, so
+        // selecting one would 409 with "no live pane to show".
+        tabs: None,
+        active_tab_id: None,
+        fork_counter: None,
+    }
+}
+
+/// Refuse an operation that makes no sense against the repository's own checkout.
+///
+/// The main repo is openable as a terminal session, which means it now flows
+/// through `resolve_existing_worktree` like a worktree — so every destructive or
+/// worktree-specific op has to say no explicitly. These live at the service layer
+/// rather than in the HTTP handlers because the CLI is a pure HTTP client and
+/// lands on the same handlers: guarding here covers both at once.
+fn reject_main_repo_op(
+    branch: &str,
+    main_branch: &str,
+    what: &str,
+) -> Result<(), LifecycleError> {
+    if branch == main_branch {
+        return Err(LifecycleError::new(
+            format!("Cannot {what} the main repository ({main_branch})"),
+            409,
+        ));
+    }
+    Ok(())
+}
+
 struct ResolvedWorktree {
     entry: GitWorktreeEntry,
     git_dir: String,
     meta: Option<WorktreeMeta>,
 }
 
-/// Everything the tab ops need: a resolved, open, built-in-agent, host-runtime
+/// Everything the tab ops need: a resolved, open, host-runtime, managed
 /// worktree with its refreshed runtime artifacts and tmux coordinates.
-struct TabContext {
+/// Deliberately *not* gated on the built-in agents — a plain shell pane, or a
+/// fresh session of any agent, needs no session discovery. Only forking does.
+struct TabSlot {
     resolved: ResolvedWorktree,
     initialized: InitializeManagedWorktreeResult,
     meta: WorktreeMeta,
     worktree_path: String,
     agent: AgentDefinition,
-    agent_kind: DiscoverableAgentKind,
     profile: ResolvedProfile,
     session_name: String,
     window_name: String,
     parking_window: String,
+}
+
+impl TabSlot {
+    /// The on-screen agent pane: pane 0 of the worktree's visible window.
+    fn visible_slot(&self) -> String {
+        format!("{}:{}.0", self.session_name, self.window_name)
+    }
+
+    fn runtime_env_path(&self) -> &str {
+        &self.initialized.paths.runtime_env_path
+    }
 }
 
 /// The built-in agent kind (`claude`/`codex`) whose sessions we can discover.
@@ -179,7 +262,17 @@ impl LifecycleService {
         &self.git
     }
 
+    /// Whether `branch` names the repository's own checkout rather than a worktree.
+    pub fn is_main_branch(&self, branch: &str) -> bool {
+        branch == self.config.workspace.main_branch
+    }
+
+    fn refuse_for_main_repo(&self, branch: &str, what: &str) -> Result<(), LifecycleError> {
+        reject_main_repo_op(branch, &self.config.workspace.main_branch, what)
+    }
+
     pub fn remove_worktree(&self, branch: &str) -> Result<(), LifecycleError> {
+        self.refuse_for_main_repo(branch, "remove")?;
         let resolved = self.resolve_existing_worktree(branch)?;
         self.remove_resolved_worktree(&resolved)
     }
@@ -214,6 +307,15 @@ impl LifecycleService {
         prompt: Option<&str>,
         oneshot: Option<OneshotMeta>,
     ) -> Result<(), LifecycleError> {
+        if self.is_main_branch(branch) {
+            if prompt.is_some() || oneshot.is_some() {
+                return Err(LifecycleError::new(
+                    "The main repository opens as a terminal session only",
+                    409,
+                ));
+            }
+            return self.open_main_repo();
+        }
         let resolved = self.resolve_existing_worktree(branch)?;
         // Adopt (import) an unmanaged worktree instead of failing: synthesize and
         // write default managed metadata, then open it normally.
@@ -256,7 +358,6 @@ impl LifecycleService {
             &resolved.git_dir,
             &resolved.entry.path,
             &profile,
-            &agent,
             &initialized.paths.runtime_env_path,
         )?;
 
@@ -299,6 +400,87 @@ impl LifecycleService {
         })
         .map_err(|e| LifecycleError::new(e, 422))?;
         Ok(result.meta)
+    }
+
+    fn build_main_repo_meta(&self, existing: Option<WorktreeMeta>) -> WorktreeMeta {
+        build_main_repo_meta(
+            &self.project_root,
+            &self.config.workspace.main_branch,
+            &get_default_profile_name(&self.config),
+            existing,
+            &Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+        )
+    }
+
+    /// A `ResolvedWorktree` for the repo root, synthesized rather than looked up:
+    /// `list_project_worktrees` deliberately keeps excluding the root, so this is
+    /// the single door through which main-repo operations enter.
+    fn resolve_main_repo(&self) -> Result<ResolvedWorktree, LifecycleError> {
+        let git_dir = self
+            .git
+            .resolve_worktree_git_dir(&self.project_root)
+            .map_err(|e| LifecycleError::new(e, 422))?;
+        Ok(ResolvedWorktree {
+            entry: GitWorktreeEntry {
+                path: self.project_root.clone(),
+                branch: Some(self.config.workspace.main_branch.clone()),
+                head: None,
+                detached: false,
+                bare: false,
+            },
+            meta: read_worktree_meta(&git_dir),
+            git_dir,
+        })
+    }
+
+    /// Open the repository's own checkout as a terminal-only session.
+    ///
+    /// A separate path from `open_worktree` on purpose: that body is agent-centric
+    /// at every step and — critically — calls `ensure_agent_runtime_artifacts`,
+    /// which writes `.claude/settings.local.json` and `.codex/hooks.json` into the
+    /// *working tree*. For the main checkout that would mutate the user's real repo.
+    fn open_main_repo(&self) -> Result<(), LifecycleError> {
+        let resolved = self.resolve_main_repo()?;
+        let meta = self.build_main_repo_meta(resolved.meta.clone());
+        op(write_worktree_meta(&resolved.git_dir, &meta))?;
+        let initialized = self.refresh_managed_artifacts_from_meta(
+            &resolved.git_dir,
+            &meta,
+            &self.project_root,
+        )?;
+
+        // One shell pane rooted at the repo. `PaneKind::Shell` makes
+        // `resolve_pane_startup_command` return None, so the agent command below is
+        // never read — it exists only to satisfy the struct.
+        let templates = vec![PaneTemplate {
+            id: "shell".to_string(),
+            kind: PaneKind::Shell,
+            split: None,
+            size_pct: None,
+            focus: Some(true),
+            command: None,
+            cwd: None,
+            working_dir: None,
+        }];
+        let shell_command = build_managed_shell_command(&initialized.paths.runtime_env_path);
+        let plan = plan_session_layout(
+            &self.project_root,
+            &self.config.workspace.main_branch,
+            &templates,
+            &SessionLayoutContext {
+                repo_root: self.project_root.clone(),
+                // For the main checkout the worktree *is* the repo.
+                worktree_path: self.project_root.clone(),
+                pane_commands: PaneCommandSet {
+                    agent: String::new(),
+                    shell: shell_command,
+                },
+            },
+        )
+        .map_err(|e| LifecycleError::new(e, 422))?;
+        op(ensure_session_layout(&self.tmux, &plan))?;
+        self.reconcile_force();
+        Ok(())
     }
 
     /// Launch a configured external tool (editor) against a worktree's directory.
@@ -352,10 +534,13 @@ impl LifecycleService {
     }
 
     pub fn merge_worktree(&self, branch: &str) -> Result<(), LifecycleError> {
+        // Merging main into main is a no-op that then fails during cleanup.
+        self.refuse_for_main_repo(branch, "merge")?;
         let resolved = self.resolve_existing_worktree(branch)?;
         self.ensure_no_uncommitted_changes(&resolved.entry)?;
 
         let main_branch = self.config.workspace.main_branch.clone();
+        self.ensure_main_checkout_ready_to_merge(&main_branch)?;
         op(self.git.merge_branch(&self.project_root, branch, &main_branch))?;
 
         self.remove_resolved_worktree(&resolved).map_err(|err| {
@@ -367,6 +552,8 @@ impl LifecycleService {
     }
 
     pub fn set_worktree_archived(&self, branch: &str, archived: bool) -> Result<(), LifecycleError> {
+        // Archiving would kill the window and persist a junk entry for the root.
+        self.refuse_for_main_repo(branch, "archive")?;
         let resolved = self.resolve_existing_worktree(branch)?;
         if archived {
             self.close_branch_window(branch)?;
@@ -729,6 +916,8 @@ impl LifecycleService {
         branch: &str,
         resume_conversation_id: &str,
     ) -> Result<(), LifecycleError> {
+        // No agent pane exists on the main checkout to rebuild.
+        self.refuse_for_main_repo(branch, "refresh the agent terminal for")?;
         let resolved = self.resolve_existing_worktree(branch)?;
         let Some(meta) = resolved.meta.clone() else {
             return Err(LifecycleError::new(
@@ -766,7 +955,6 @@ impl LifecycleService {
             &resolved.git_dir,
             &resolved.entry.path,
             &profile,
-            &agent,
             &initialized.paths.runtime_env_path,
         )?;
         self.reconcile_force();
@@ -775,123 +963,178 @@ impl LifecycleService {
 
     // --- tabs ---
 
+    /// Create a parked pane running the managed shell, optionally type `command`
+    /// into it, append the tab `build_tab` produces, park the outgoing active
+    /// tab's pane id, persist, and swap the new pane into the visible slot.
+    ///
+    /// `build_tab` runs *after* the command is typed so callers can capture a
+    /// freshly-created agent session id inside it.
+    fn attach_tab_pane(
+        &self,
+        slot: &TabSlot,
+        base_meta: WorktreeMeta,
+        command: Option<&str>,
+        build_tab: impl FnOnce(&str) -> WorktreeTab,
+    ) -> Result<WorktreeTab, LifecycleError> {
+        let visible_slot = slot.visible_slot();
+        // Record the currently-visible (active) tab's pane id before the swap parks it.
+        let outgoing_active_id = read_active_tab_id(&base_meta);
+        let outgoing_pane_id = self.tmux.get_pane_id(&visible_slot).ok();
+
+        let pane_id = self
+            .tmux
+            .create_parked_pane(
+                &slot.session_name,
+                &slot.parking_window,
+                &slot.worktree_path,
+                &build_managed_shell_command(slot.runtime_env_path()),
+            )
+            .map_err(|e| LifecycleError::new(e, 422))?;
+        if let Some(command) = command {
+            op(self.tmux.run_command(&pane_id, command))?;
+        }
+
+        let tab = build_tab(&pane_id);
+        let mut next_meta = append_tab(base_meta, tab.clone()); // makes the new tab active
+        next_meta = update_tab(
+            next_meta,
+            &outgoing_active_id,
+            TabPatch { session_id: None, pane_id: Some(outgoing_pane_id) },
+        );
+        op(write_worktree_meta(&slot.resolved.git_dir, &next_meta))?;
+        // The new tab is active — bring it into the visible agent slot.
+        op(self.tmux.swap_panes(&pane_id, &visible_slot))?;
+        self.reconcile_force();
+        Ok(tab)
+    }
+
     /// Fork the root agent session into a new parked pane and bring it on-screen.
     pub fn create_worktree_tab(&self, branch: &str) -> Result<WorktreeTab, LifecycleError> {
-        let ctx = self.prepare_tab_context(branch)?;
-        let Some(root_session_id) = self.ensure_root_session_id(&ctx)? else {
+        // There is no agent conversation on the main checkout to fork.
+        self.refuse_for_main_repo(branch, "fork a tab in")?;
+        let (slot, agent_kind) = self.prepare_fork_slot(branch)?;
+        let Some(root_session_id) = self.ensure_root_session_id(&slot, agent_kind)? else {
             return Err(LifecycleError::new(
                 "The root session hasn't started yet — interact with it once before forking a tab",
                 409,
             ));
         };
         // ensure_root_session_id may have persisted root.sessionId; re-read for a fresh base.
-        let meta = self.read_meta_or_throw(&ctx.resolved.git_dir)?;
+        let meta = self.read_meta_or_throw(&slot.resolved.git_dir)?;
         let seq = next_fork_seq(&meta);
         // Claude can pin the forked child id (deterministic); Codex self-assigns.
-        let pin_session_id = (ctx.agent_kind == DiscoverableAgentKind::Claude)
-            .then(crate::util::id::random_uuid);
-        let runtime_env_path = ctx.initialized.paths.runtime_env_path.clone();
+        let pin_session_id =
+            (agent_kind == DiscoverableAgentKind::Claude).then(crate::util::id::random_uuid);
         let invocation = AgentInvocation {
-            agent: &ctx.agent,
-            yolo: ctx.profile.profile.yolo == Some(true),
+            agent: &slot.agent,
+            yolo: slot.profile.profile.yolo == Some(true),
             system_prompt: None,
             prompt: None,
             launch_mode: AgentLaunchMode::Fork,
-            worktree_path: &ctx.worktree_path,
+            worktree_path: &slot.worktree_path,
             repo_root: &self.project_root,
             branch,
-            profile_name: &ctx.profile.name,
+            profile_name: &slot.profile.name,
             resume_conversation_id: None,
             fork_from_session_id: Some(&root_session_id),
             pin_session_id: pin_session_id.as_deref(),
         };
-        let agent_command = build_agent_pane_command(&runtime_env_path, &invocation);
+        let agent_command = build_agent_pane_command(slot.runtime_env_path(), &invocation);
+        // Snapshot known session ids before launching so the new one can be spotted.
+        let before = list_session_ids(agent_kind, &slot.worktree_path);
+        let created_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
 
-        let visible_slot = format!("{}:{}.0", ctx.session_name, ctx.window_name);
-        // Record the currently-visible (active) tab's pane id before the swap parks it.
-        let outgoing_active_id = read_active_tab_id(&meta);
-        let outgoing_pane_id = self.tmux.get_pane_id(&visible_slot).ok();
+        self.attach_tab_pane(&slot, meta, Some(&agent_command), |pane_id| {
+            let session_id = pin_session_id
+                .clone()
+                .or_else(|| capture_new_session_id(agent_kind, &slot.worktree_path, &before));
+            build_fork_tab(ForkTabInput {
+                seq,
+                agent_id: slot.agent.id.clone(),
+                session_id,
+                pane_id: Some(pane_id.to_string()),
+                created_at,
+            })
+        })
+    }
 
-        let before = list_session_ids(ctx.agent_kind, &ctx.worktree_path);
-        let pane_id = self
-            .tmux
-            .create_parked_pane(
-                &ctx.session_name,
-                &ctx.parking_window,
-                &ctx.worktree_path,
-                &build_managed_shell_command(&runtime_env_path),
-            )
-            .map_err(|e| LifecycleError::new(e, 422))?;
-        op(self.tmux.run_command(&pane_id, &agent_command))?;
-        let session_id = pin_session_id
-            .clone()
-            .or_else(|| capture_new_session_id(ctx.agent_kind, &ctx.worktree_path, &before));
+    /// Start a *fresh* session of `agent_id` in a new parked pane and bring it
+    /// on-screen.
+    ///
+    /// Unlike forking this begins a new conversation, so it needs no session
+    /// lineage and therefore works for any configured agent — built-in or
+    /// custom — and for an agent other than the worktree's own.
+    pub fn create_worktree_agent_tab(
+        &self,
+        branch: &str,
+        agent_id: &str,
+    ) -> Result<WorktreeTab, LifecycleError> {
+        // The main repo is a terminal-only session by design: no agents there.
+        self.refuse_for_main_repo(branch, "start an agent session in")?;
+        let slot = self.prepare_tab_slot(branch, "Tabs are not supported for Docker worktrees")?;
+        // The *chosen* agent, which may differ from the worktree's own.
+        let agent = self.resolve_agent_definition(Some(agent_id))?;
+        // An Option, not a gate: it only decides whether we can capture a session
+        // id afterwards. A custom agent simply gets `session_id: None`.
+        let discoverable = discoverable_agent_kind(&agent);
 
-        let tab = build_fork_tab(ForkTabInput {
-            seq,
-            session_id,
-            pane_id: Some(pane_id.clone()),
-            created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-        });
-        let mut next_meta = append_tab(meta, tab.clone()); // makes the fork active
-        next_meta = update_tab(
-            next_meta,
-            &outgoing_active_id,
-            TabPatch { session_id: None, pane_id: Some(outgoing_pane_id) },
-        );
-        op(write_worktree_meta(&ctx.resolved.git_dir, &next_meta))?;
-        // A new fork becomes the active tab — bring it into the visible agent slot.
-        op(self.tmux.swap_panes(&pane_id, &visible_slot))?;
-        self.reconcile_force();
-        Ok(tab)
+        // A fresh launch gets the profile's system prompt, same as the root pane.
+        let system_prompt = slot
+            .profile
+            .profile
+            .system_prompt
+            .as_deref()
+            .map(|sp| expand_template(sp, &slot.initialized.runtime_env));
+        let pin_session_id = (discoverable == Some(DiscoverableAgentKind::Claude))
+            .then(crate::util::id::random_uuid);
+
+        let invocation = AgentInvocation {
+            agent: &agent,
+            yolo: slot.profile.profile.yolo == Some(true),
+            system_prompt: system_prompt.as_deref(),
+            prompt: None,
+            launch_mode: AgentLaunchMode::Fresh,
+            worktree_path: &slot.worktree_path,
+            repo_root: &self.project_root,
+            branch,
+            profile_name: &slot.profile.name,
+            resume_conversation_id: None,
+            fork_from_session_id: None,
+            pin_session_id: pin_session_id.as_deref(),
+        };
+        let agent_command = build_agent_pane_command(slot.runtime_env_path(), &invocation);
+
+        let before = discoverable
+            .map(|kind| list_session_ids(kind, &slot.worktree_path))
+            .unwrap_or_default();
+        let ordinal = next_agent_ordinal(&slot.meta, &agent.id);
+        let now = Utc::now();
+        let base_meta = slot.meta.clone();
+
+        self.attach_tab_pane(&slot, base_meta, Some(&agent_command), |pane_id| {
+            let session_id = pin_session_id.clone().or_else(|| {
+                discoverable
+                    .and_then(|kind| capture_new_session_id(kind, &slot.worktree_path, &before))
+            });
+            build_agent_tab(AgentTabInput {
+                agent_id: agent.id.clone(),
+                agent_label: agent.label.clone(),
+                ordinal,
+                session_id,
+                pane_id: Some(pane_id.to_string()),
+                created_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
+                id_suffix: now.timestamp_millis().to_string(),
+            })
+        })
     }
 
     /// Create an on-demand shell tab: a parked managed-shell pane swapped into
     /// the visible slot. Available for any open host-runtime worktree (not just
     /// the built-in agents), so custom-agent worktrees can get a browser shell.
     pub fn create_worktree_shell_tab(&self, branch: &str) -> Result<WorktreeTab, LifecycleError> {
-        let resolved = self.resolve_existing_worktree(branch)?;
-        let Some(meta) = resolved.meta.clone() else {
-            return Err(LifecycleError::new(
-                format!("Worktree {branch} has no managed metadata"),
-                409,
-            ));
-        };
-        let session_name = build_project_session_name(&self.project_root);
-        let window_name = build_worktree_window_name(branch);
-        if !self.tmux.has_window(&session_name, &window_name) {
-            return Err(LifecycleError::new(format!("Worktree {branch} is not open"), 409));
-        }
-        let profile = self.resolve_profile(Some(&meta.profile))?;
-        if profile.profile.runtime == RuntimeKind::Docker {
-            return Err(LifecycleError::new(
-                "Shell tabs are not supported for Docker worktrees",
-                409,
-            ));
-        }
-        let initialized =
-            self.refresh_managed_artifacts_from_meta(&resolved.git_dir, &meta, &resolved.entry.path)?;
-        let meta = initialized.meta.clone();
-        let runtime_env_path = initialized.paths.runtime_env_path.clone();
-        let worktree_path = resolved.entry.path.clone();
-        let parking_window = build_worktree_parking_window_name(branch);
-
-        let visible_slot = format!("{session_name}:{window_name}.0");
-        let outgoing_active_id = read_active_tab_id(&meta);
-        let outgoing_pane_id = self.tmux.get_pane_id(&visible_slot).ok();
-
-        // The parked pane IS the managed shell (no agent typed on top).
-        let pane_id = self
-            .tmux
-            .create_parked_pane(
-                &session_name,
-                &parking_window,
-                &worktree_path,
-                &build_managed_shell_command(&runtime_env_path),
-            )
-            .map_err(|e| LifecycleError::new(e, 422))?;
-
-        let shell_count = list_tabs(&meta)
+        let slot =
+            self.prepare_tab_slot(branch, "Shell tabs are not supported for Docker worktrees")?;
+        let shell_count = list_tabs(&slot.meta)
             .iter()
             .filter(|t| t.kind == WorktreeTabKind::Shell)
             .count();
@@ -900,33 +1143,29 @@ impl LifecycleService {
         } else {
             format!("Shell {}", shell_count + 1)
         };
-        let tab = WorktreeTab {
-            tab_id: format!("shell-{}", Utc::now().timestamp_millis()),
+        let now = Utc::now();
+        let base_meta = slot.meta.clone();
+
+        // The parked pane IS the managed shell — no agent typed on top.
+        self.attach_tab_pane(&slot, base_meta, None, |pane_id| WorktreeTab {
+            tab_id: format!("shell-{}", now.timestamp_millis()),
             kind: WorktreeTabKind::Shell,
             label,
             seq: None,
             session_id: None,
-            pane_id: Some(pane_id.clone()),
-            created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
-        };
-        let mut next_meta = append_tab(meta, tab.clone()); // makes the shell tab active
-        next_meta = update_tab(
-            next_meta,
-            &outgoing_active_id,
-            TabPatch { session_id: None, pane_id: Some(outgoing_pane_id) },
-        );
-        op(write_worktree_meta(&resolved.git_dir, &next_meta))?;
-        op(self.tmux.swap_panes(&pane_id, &visible_slot))?;
-        self.reconcile_force();
-        Ok(tab)
+            pane_id: Some(pane_id.to_string()),
+            agent: None, // a shell runs no agent
+            created_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
+        })
     }
 
-    /// Bring a parked tab's pane into the visible agent slot.
+    /// Bring a parked tab's pane into the visible agent slot. Works for any tab
+    /// kind on any agent — swapping panes needs no session discovery.
     pub fn select_worktree_tab(&self, branch: &str, tab_id: &str) -> Result<(), LifecycleError> {
-        let ctx = self.prepare_tab_context(branch)?;
-        let target = find_tab(&ctx.meta, tab_id)
+        let slot = self.prepare_tab_slot(branch, "Tabs are not supported for Docker worktrees")?;
+        let target = find_tab(&slot.meta, tab_id)
             .ok_or_else(|| LifecycleError::new(format!("Tab not found: {tab_id}"), 404))?;
-        let outgoing_active_id = read_active_tab_id(&ctx.meta);
+        let outgoing_active_id = read_active_tab_id(&slot.meta);
         if outgoing_active_id == tab_id {
             return Ok(());
         }
@@ -936,46 +1175,44 @@ impl LifecycleService {
                 409,
             ));
         };
-        let visible_slot = format!("{}:{}.0", ctx.session_name, ctx.window_name);
+        let visible_slot = slot.visible_slot();
         let outgoing_pane_id = self.tmux.get_pane_id(&visible_slot).ok();
         op(self.tmux.swap_panes(&target_pane, &visible_slot))?;
         let mut next_meta = update_tab(
-            ctx.meta,
+            slot.meta.clone(),
             &outgoing_active_id,
             TabPatch { session_id: None, pane_id: Some(outgoing_pane_id) },
         );
         next_meta = set_active_tab(next_meta, tab_id);
-        op(write_worktree_meta(&ctx.resolved.git_dir, &next_meta))?;
+        op(write_worktree_meta(&slot.resolved.git_dir, &next_meta))?;
         self.reconcile_force();
         Ok(())
     }
 
-    /// Kill a fork tab's pane and drop it from the tab list.
+    /// Kill a non-root tab's pane and drop it from the tab list. Works for any
+    /// tab kind on any agent — killing a pane needs no session discovery.
     pub fn delete_worktree_tab(&self, branch: &str, tab_id: &str) -> Result<(), LifecycleError> {
-        let ctx = self.prepare_tab_context(branch)?;
-        let target = find_tab(&ctx.meta, tab_id)
+        let slot = self.prepare_tab_slot(branch, "Tabs are not supported for Docker worktrees")?;
+        let target = find_tab(&slot.meta, tab_id)
             .ok_or_else(|| LifecycleError::new(format!("Tab not found: {tab_id}"), 404))?;
         if target.kind == WorktreeTabKind::Root {
             return Err(LifecycleError::new("The root tab cannot be deleted", 400));
         }
-        let root = root_tab(&ctx.meta);
+        let root = root_tab(&slot.meta);
         // If the deleted tab is on-screen, bring the root back into the visible slot
         // first. swap-pane moves pane *content* between slots while pane ids stay
         // attached to their content, so root.paneId remains valid after the swap.
-        if read_active_tab_id(&ctx.meta) == tab_id
+        if read_active_tab_id(&slot.meta) == tab_id
             && let Some(root_pane) = root.as_ref().and_then(|r| r.pane_id.clone())
         {
-            op(self.tmux.swap_panes(
-                &root_pane,
-                &format!("{}:{}.0", ctx.session_name, ctx.window_name),
-            ))?;
+            op(self.tmux.swap_panes(&root_pane, &slot.visible_slot()))?;
         }
         if let Some(pane) = target.pane_id {
             op(self.tmux.kill_pane(&pane))?;
         }
         op(write_worktree_meta(
-            &ctx.resolved.git_dir,
-            &remove_tab(ctx.meta, tab_id),
+            &slot.resolved.git_dir,
+            &remove_tab(slot.meta.clone(), tab_id),
         ))?;
         self.reconcile_force();
         Ok(())
@@ -986,14 +1223,21 @@ impl LifecycleService {
             .ok_or_else(|| LifecycleError::new("Worktree metadata is missing", 409))
     }
 
-    fn prepare_tab_context(&self, branch: &str) -> Result<TabContext, LifecycleError> {
+    /// Resolve an open, managed, host-runtime worktree plus its tmux coordinates
+    /// and refreshed runtime artifacts. `docker_error` lets each caller keep its
+    /// own wording for the Docker rejection.
+    fn prepare_tab_slot(
+        &self,
+        branch: &str,
+        docker_error: &str,
+    ) -> Result<TabSlot, LifecycleError> {
         let resolved = self.resolve_existing_worktree(branch)?;
-        if resolved.meta.is_none() {
+        let Some(meta) = resolved.meta.clone() else {
             return Err(LifecycleError::new(
                 format!("Worktree {branch} has no managed metadata"),
                 409,
             ));
-        }
+        };
 
         let session_name = build_project_session_name(&self.project_root);
         let window_name = build_worktree_window_name(branch);
@@ -1001,29 +1245,21 @@ impl LifecycleService {
             return Err(LifecycleError::new(format!("Worktree {branch} is not open"), 409));
         }
 
-        let meta = resolved.meta.clone().unwrap();
         let profile = self.resolve_profile(Some(&meta.profile))?;
         if profile.profile.runtime == RuntimeKind::Docker {
-            return Err(LifecycleError::new("Tabs are not supported for Docker worktrees", 409));
+            return Err(LifecycleError::new(docker_error, 409));
         }
         let agent = self.resolve_agent_definition(Some(&meta.agent))?;
-        let agent_kind = discoverable_agent_kind(&agent).ok_or_else(|| {
-            LifecycleError::new(
-                "Tabs are only available for the built-in Claude and Codex agents",
-                409,
-            )
-        })?;
 
         let initialized =
             self.refresh_managed_artifacts_from_meta(&resolved.git_dir, &meta, &resolved.entry.path)?;
         let worktree_path = resolved.entry.path.clone();
-        Ok(TabContext {
+        Ok(TabSlot {
             meta: initialized.meta.clone(),
             resolved,
             initialized,
             worktree_path,
             agent,
-            agent_kind,
             profile,
             session_name,
             window_name,
@@ -1031,40 +1267,71 @@ impl LifecycleService {
         })
     }
 
+    /// A tab slot whose worktree agent is a built-in we can discover sessions
+    /// for. Only *forking* needs this — it continues the root conversation, so
+    /// it depends on session-id discovery that custom agents don't expose.
+    fn prepare_fork_slot(
+        &self,
+        branch: &str,
+    ) -> Result<(TabSlot, DiscoverableAgentKind), LifecycleError> {
+        let slot = self.prepare_tab_slot(branch, "Tabs are not supported for Docker worktrees")?;
+        let agent_kind = discoverable_agent_kind(&slot.agent).ok_or_else(|| {
+            LifecycleError::new(
+                "Forking a tab is only available for the built-in Claude and Codex agents",
+                409,
+            )
+        })?;
+        Ok((slot, agent_kind))
+    }
+
     /// Resolve the root tab's session id, discovering and persisting it on first
     /// use (safe because at first fork the root is the newest session for the cwd).
-    fn ensure_root_session_id(&self, ctx: &TabContext) -> Result<Option<String>, LifecycleError> {
-        let root = root_tab(&ctx.meta);
+    fn ensure_root_session_id(
+        &self,
+        slot: &TabSlot,
+        agent_kind: DiscoverableAgentKind,
+    ) -> Result<Option<String>, LifecycleError> {
+        let root = root_tab(&slot.meta);
         if let Some(session_id) = root.as_ref().and_then(|r| r.session_id.clone()) {
             return Ok(Some(session_id));
         }
-        let discovered = list_session_ids(ctx.agent_kind, &ctx.worktree_path)
+        let discovered = list_session_ids(agent_kind, &slot.worktree_path)
             .into_iter()
             .next();
         if let (Some(discovered), Some(root)) = (discovered.clone(), root) {
             let next = update_tab(
-                ctx.meta.clone(),
+                slot.meta.clone(),
                 &root.tab_id,
                 TabPatch { session_id: Some(Some(discovered)), pane_id: None },
             );
-            op(write_worktree_meta(&ctx.resolved.git_dir, &next))?;
+            op(write_worktree_meta(&slot.resolved.git_dir, &next))?;
         }
         Ok(discovered)
     }
 
-    /// Rebuild parked panes for persisted fork tabs after a worktree's window is
-    /// recreated, recapture the (ephemeral) pane ids, and restore the previously
-    /// active tab on-screen. No-op unless the worktree has fork tabs.
+    /// Rebuild parked panes for persisted fork and agent tabs after a worktree's
+    /// window is recreated, recapture the (ephemeral) pane ids, and restore the
+    /// previously active tab on-screen. No-op unless such tabs exist.
+    ///
+    /// Each tab is relaunched with *its own* agent, resolved via
+    /// `tab_agent_id` (which falls back to `meta.agent` for tabs written before
+    /// per-tab agents existed) — a Codex tab on a Claude worktree must come back
+    /// as Codex, never as Claude.
+    ///
+    /// Shell tabs are deliberately dropped: they hold no session, so there is
+    /// nothing to restore, and a fresh one is a click away.
     fn restore_worktree_tabs(
         &self,
         branch: &str,
         git_dir: &str,
         worktree_path: &str,
         profile: &ResolvedProfile,
-        agent: &AgentDefinition,
         runtime_env_path: &str,
     ) -> Result<(), LifecycleError> {
-        if profile.profile.runtime == RuntimeKind::Docker || agent.kind != "builtin" {
+        // Docker worktrees have no parked-pane path at all. Note we deliberately
+        // do NOT bail on custom agents any more: their agent tabs need rebuilding
+        // too, and a fresh relaunch needs no session discovery.
+        if profile.profile.runtime == RuntimeKind::Docker {
             return Ok(());
         }
         let Some(meta) = read_worktree_meta(git_dir) else {
@@ -1073,8 +1340,10 @@ impl LifecycleService {
         let Some(root) = root_tab(&meta) else {
             return Ok(());
         };
+        let is_restorable =
+            |kind: WorktreeTabKind| matches!(kind, WorktreeTabKind::Fork | WorktreeTabKind::Agent);
         // Nothing to rebuild for the common (root-only) case.
-        if !list_tabs(&meta).iter().any(|t| t.kind == WorktreeTabKind::Fork) {
+        if !list_tabs(&meta).iter().any(|t| is_restorable(t.kind)) {
             return Ok(());
         }
 
@@ -1086,28 +1355,41 @@ impl LifecycleService {
         let _ = self.tmux.kill_window(&session_name, &parking_window);
         let visible_slot = format!("{session_name}:{window_name}.0");
         // Capture the visible slot's pane id once: it is the root's on-screen pane
-        // and, if a fork is restored on top, the swap target.
+        // and, if another tab is restored on top, the swap target.
         let visible_slot_pane_id = self.tmux.get_pane_id(&visible_slot).ok();
 
         let mut restored: Vec<WorktreeTab> = vec![WorktreeTab {
             pane_id: visible_slot_pane_id.clone(),
             ..root
         }];
-        for fork in list_tabs(&meta).into_iter().filter(|t| t.kind == WorktreeTabKind::Fork) {
-            let Some(session_id) = fork.session_id.clone() else {
-                continue; // cannot resume an unknown session — drop it
+        for tab in list_tabs(&meta).into_iter().filter(|t| is_restorable(t.kind)) {
+            let tab_agent_id = tab_agent_id(&tab, &meta).to_string();
+            // The agent may have been deleted from config since the tab was made.
+            let Some(tab_agent) = get_agent_definition(&self.config, &tab_agent_id) else {
+                continue;
+            };
+            let (launch_mode, resume_id) = match (tab.kind, tab.session_id.as_deref()) {
+                // A fork *is* a conversation continuation: with no id to resume
+                // there is nothing to restore, so drop it.
+                (WorktreeTabKind::Fork, None) => continue,
+                (_, Some(id)) if tab_agent.capabilities.resume => {
+                    (AgentLaunchMode::Resume, Some(id))
+                }
+                // An agent tab is a workspace slot, not a conversation: relaunch
+                // it fresh rather than making it vanish.
+                _ => (AgentLaunchMode::Fresh, None),
             };
             let invocation = AgentInvocation {
-                agent,
+                agent: &tab_agent,
                 yolo: profile.profile.yolo == Some(true),
                 system_prompt: None,
                 prompt: None,
-                launch_mode: AgentLaunchMode::Resume,
+                launch_mode,
                 worktree_path,
                 repo_root: &self.project_root,
                 branch,
                 profile_name: &profile.name,
-                resume_conversation_id: Some(&session_id),
+                resume_conversation_id: resume_id,
                 fork_from_session_id: None,
                 pin_session_id: None,
             };
@@ -1122,14 +1404,13 @@ impl LifecycleService {
                 )
                 .map_err(|e| LifecycleError::new(e, 422))?;
             op(self.tmux.run_command(&pane_id, &command))?;
-            restored.push(WorktreeTab { pane_id: Some(pane_id), ..fork });
+            restored.push(WorktreeTab { pane_id: Some(pane_id), ..tab });
         }
-
         let mut next_meta = with_tabs(meta.clone(), restored.clone());
         let want_active = read_active_tab_id(&meta);
-        let active_tab = restored.iter().find(|t| {
-            t.tab_id == want_active && t.kind == WorktreeTabKind::Fork && t.pane_id.is_some()
-        });
+        let active_tab = restored
+            .iter()
+            .find(|t| t.tab_id == want_active && is_restorable(t.kind) && t.pane_id.is_some());
         if let Some(active) = active_tab
             && let (Some(active_pane), Some(slot_pane)) =
                 (active.pane_id.clone(), visible_slot_pane_id.clone())
@@ -1146,15 +1427,18 @@ impl LifecycleService {
 
     /// Live, non-bare worktrees excluding the repo root itself.
     fn list_project_worktrees(&self) -> Vec<GitWorktreeEntry> {
-        let root = canonical(&self.project_root);
-        self.git
-            .list_live_worktrees(&root)
-            .into_iter()
-            .filter(|entry| !entry.bare && canonical(&entry.path) != root)
-            .collect()
+        let root = canonical_path(&self.project_root);
+        let (_root_entry, linked) = split_repo_root_entry(self.git.list_live_worktrees(&root), &root);
+        linked
     }
 
     fn resolve_existing_worktree(&self, branch: &str) -> Result<ResolvedWorktree, LifecycleError> {
+        // The repo root is excluded from `list_project_worktrees`, so it has to be
+        // resolved explicitly. Ops that must not touch it guard with
+        // `refuse_for_main_repo` before reaching here.
+        if self.is_main_branch(branch) {
+            return self.resolve_main_repo();
+        }
         let entry = self
             .list_project_worktrees()
             .into_iter()
@@ -1189,6 +1473,38 @@ impl LifecycleService {
             let name = entry.branch.clone().unwrap_or_else(|| entry.path.clone());
             return Err(LifecycleError::new(
                 format!("Worktree has uncommitted changes: {name}"),
+                409,
+            ));
+        }
+        Ok(())
+    }
+
+    /// Refuse to merge unless the main checkout can safely be checked out and
+    /// restored. `merge_branch` runs `checkout <main>` → `merge` → `checkout
+    /// <original>` *in the repo root*, so a dirty tree fails it half-way and a
+    /// user sitting in the main checkout would have their files rewritten
+    /// underneath them.
+    fn ensure_main_checkout_ready_to_merge(
+        &self,
+        main_branch: &str,
+    ) -> Result<(), LifecycleError> {
+        if self.git.read_worktree_status(&self.project_root).dirty {
+            return Err(LifecycleError::new(
+                format!(
+                    "The main checkout has uncommitted changes — commit or stash them in {main_branch} before merging"
+                ),
+                409,
+            ));
+        }
+        let current = self
+            .git
+            .current_branch(&self.project_root)
+            .map_err(|e| LifecycleError::new(e, 422))?;
+        if current != main_branch {
+            return Err(LifecycleError::new(
+                format!(
+                    "The main checkout is on {current}, not {main_branch} — switch back before merging"
+                ),
                 409,
             ));
         }
@@ -1326,7 +1642,7 @@ impl LifecycleService {
         branch: &str,
         mode: CreateMode,
     ) -> Result<BranchAvailability, LifecycleError> {
-        let root = canonical(&self.project_root);
+        let root = canonical_path(&self.project_root);
         let local: std::collections::HashSet<String> =
             self.git.list_local_branches(&root).into_iter().collect();
 
@@ -1367,7 +1683,7 @@ impl LifecycleService {
     /// Branches held by any (even stale) worktree registration — blocks reuse.
     fn checked_out_branches(&self) -> std::collections::HashSet<String> {
         self.git
-            .list_worktrees(&canonical(&self.project_root))
+            .list_worktrees(&canonical_path(&self.project_root))
             .into_iter()
             .filter(|e| !e.bare)
             .filter_map(|e| e.branch)
@@ -1481,12 +1797,6 @@ fn archive_states_equal(
         })
 }
 
-fn canonical(path: &str) -> String {
-    std::fs::canonicalize(path)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| path.to_string())
-}
-
 /// Trim and validate a worktree label. Empty → `None`; over the length cap → 400.
 fn normalize_worktree_label(label: Option<&str>) -> Result<Option<String>, LifecycleError> {
     let trimmed = label.map(str::trim).unwrap_or("");
@@ -1505,6 +1815,145 @@ fn normalize_worktree_label(label: Option<&str>) -> Result<Option<String>, Lifec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn existing_main_meta() -> WorktreeMeta {
+        WorktreeMeta {
+            schema_version: 1,
+            worktree_id: "stale-id".to_string(),
+            branch: "main".to_string(),
+            label: Some("Trunk".to_string()),
+            base_branch: Some("main".to_string()),
+            created_at: "2020-01-01T00:00:00Z".to_string(),
+            profile: "old".to_string(),
+            agent: "claude".to_string(),
+            runtime: "docker".to_string(),
+            startup_env_values: HashMap::from([("A".to_string(), "1".to_string())]),
+            allocated_ports: HashMap::from([("WEB_PORT".to_string(), 4000u16)]),
+            source: None,
+            oneshot: None,
+            conversation: None,
+            agent_terminal_stale: Some(true),
+            tabs: Some(vec![WorktreeTab {
+                tab_id: "shell-1".to_string(),
+                kind: WorktreeTabKind::Shell,
+                label: "Shell".to_string(),
+                seq: None,
+                session_id: None,
+                pane_id: Some("%9".to_string()),
+                agent: None,
+                created_at: "2020-01-01T00:00:00Z".to_string(),
+            }]),
+            active_tab_id: Some("shell-1".to_string()),
+            fork_counter: Some(3),
+        }
+    }
+
+    #[test]
+    fn main_repo_meta_has_the_sentinel_agent_no_ports_and_no_base_branch() {
+        let meta = build_main_repo_meta("/repo", "main", "default", None, "2026-01-01T00:00:00Z");
+        assert_eq!(meta.agent, MAIN_REPO_AGENT_SENTINEL);
+        assert_eq!(meta.branch, "main");
+        assert_eq!(meta.base_branch, None);
+        assert_eq!(meta.profile, "default");
+        assert_eq!(meta.runtime, "host");
+        // Allocating ports here would double-book them with a real worktree.
+        assert!(meta.allocated_ports.is_empty());
+        assert!(meta.startup_env_values.is_empty());
+        assert!(meta.oneshot.is_none());
+    }
+
+    #[test]
+    fn main_repo_meta_resets_stale_tabs_on_every_open() {
+        // Parked shell panes from a previous session hold dead pane ids, and
+        // nothing else prunes them — selecting one would 409.
+        let meta = build_main_repo_meta(
+            "/repo",
+            "main",
+            "default",
+            Some(existing_main_meta()),
+            "2026-01-01T00:00:00Z",
+        );
+        assert!(meta.tabs.is_none());
+        assert_eq!(meta.active_tab_id, None);
+    }
+
+    #[test]
+    fn main_repo_meta_overrides_stale_agent_runtime_and_ports() {
+        // A previously-written meta may name an agent or docker runtime; the main
+        // checkout is terminal-only on host, so those must not survive.
+        let meta = build_main_repo_meta(
+            "/repo",
+            "main",
+            "default",
+            Some(existing_main_meta()),
+            "2026-01-01T00:00:00Z",
+        );
+        assert_eq!(meta.agent, MAIN_REPO_AGENT_SENTINEL);
+        assert_eq!(meta.runtime, "host");
+        assert!(meta.allocated_ports.is_empty());
+        assert_eq!(meta.base_branch, None);
+        assert_eq!(meta.agent_terminal_stale, None);
+    }
+
+    #[test]
+    fn main_repo_meta_keeps_the_label_and_creation_time() {
+        // The parts of an existing meta that legitimately belong to the trunk.
+        let meta = build_main_repo_meta(
+            "/repo",
+            "main",
+            "default",
+            Some(existing_main_meta()),
+            "2026-01-01T00:00:00Z",
+        );
+        assert_eq!(meta.label.as_deref(), Some("Trunk"));
+        assert_eq!(meta.created_at, "2020-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn main_repo_meta_id_is_path_derived_not_carried_over() {
+        // Must match the id reconciliation derives, or control-env routing and the
+        // runtime map disagree.
+        let meta = build_main_repo_meta(
+            "/repo",
+            "main",
+            "default",
+            Some(existing_main_meta()),
+            "2026-01-01T00:00:00Z",
+        );
+        assert_ne!(meta.worktree_id, "stale-id");
+        assert_eq!(meta.worktree_id, make_main_worktree_id(&canonical_path("/repo")));
+    }
+
+    #[test]
+    fn main_repo_meta_honours_a_non_default_main_branch() {
+        let meta = build_main_repo_meta("/repo", "trunk", "default", None, "2026-01-01T00:00:00Z");
+        assert_eq!(meta.branch, "trunk");
+    }
+
+    #[test]
+    fn reject_main_repo_op_refuses_only_the_main_branch() {
+        // The main checkout flows through resolve_existing_worktree like a
+        // worktree now, so every destructive op needs this explicit refusal.
+        for what in ["remove", "merge", "archive", "fork a tab in"] {
+            let err = reject_main_repo_op("main", "main", what).unwrap_err();
+            assert_eq!(err.status, 409);
+            assert!(err.message.contains(what), "message was: {}", err.message);
+            assert!(err.message.contains("main"), "message was: {}", err.message);
+        }
+    }
+
+    #[test]
+    fn reject_main_repo_op_allows_a_linked_branch() {
+        assert!(reject_main_repo_op("feature/x", "main", "remove").is_ok());
+    }
+
+    #[test]
+    fn reject_main_repo_op_honours_a_non_default_main_branch() {
+        // Projects configuring `mainBranch: trunk` must be guarded on `trunk`,
+        // and `main` becomes an ordinary worktree branch there.
+        assert!(reject_main_repo_op("trunk", "trunk", "merge").is_err());
+        assert!(reject_main_repo_op("main", "trunk", "merge").is_ok());
+    }
 
     #[test]
     fn label_normalization() {

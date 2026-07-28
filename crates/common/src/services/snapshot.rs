@@ -51,6 +51,7 @@ fn map_worktree_snapshot(
 ) -> WorktreeSnapshot {
     WorktreeSnapshot {
         branch: state.branch.clone(),
+        kind: state.kind,
         label: state.label.clone(),
         base_branch: state.base_branch.clone().filter(|b| !b.is_empty()),
         path: state.path.clone(),
@@ -132,5 +133,82 @@ mod tests {
     fn future_start_clamps_to_zero() {
         let now = Utc.timestamp_opt(1_700_000_000, 0).unwrap();
         assert_eq!(format_elapsed_since(Some("2100-01-01T00:00:00Z"), now), "0m");
+    }
+
+    fn state(branch: &str, kind: crate::domain::model::WorktreeKind) -> ManagedWorktreeRuntimeState {
+        use crate::domain::model::{
+            AgentLifecycle, AgentRuntimeState, GitWorktreeRuntimeState, SessionRuntimeState,
+            WorktreeSource,
+        };
+        ManagedWorktreeRuntimeState {
+            worktree_id: format!("id-{branch}"),
+            kind,
+            branch: branch.to_string(),
+            label: None,
+            base_branch: None,
+            path: format!("/repo/{branch}"),
+            profile: None,
+            agent_name: None,
+            source: WorktreeSource::Ui,
+            oneshot: None,
+            agent_terminal_stale: false,
+            tabs: Vec::new(),
+            active_tab_id: None,
+            git: GitWorktreeRuntimeState {
+                exists: true,
+                branch: branch.to_string(),
+                dirty: false,
+                ahead_count: 0,
+                current_commit: None,
+            },
+            session: SessionRuntimeState {
+                exists: true,
+                session_name: None,
+                window_name: format!("sebenza-{branch}"),
+                pane_count: 1,
+            },
+            agent: AgentRuntimeState {
+                lifecycle: AgentLifecycle::Closed,
+                runtime: "host".to_string(),
+                last_started_at: None,
+                last_event_at: None,
+                last_error: None,
+            },
+            services: Vec::new(),
+            prs: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn worktree_kind_survives_into_the_snapshot() {
+        use crate::domain::model::WorktreeKind;
+        let config = crate::config::default_config();
+        let now = at("2026-01-01T00:00:00Z");
+        let empty = std::collections::HashSet::new();
+
+        let main = map_worktree_snapshot(&state("main", WorktreeKind::Main), &config, now, &empty);
+        assert_eq!(main.kind, WorktreeKind::Main);
+        // No agent runs on the trunk, so no agent label is rendered for it.
+        assert_eq!(main.agent_label, None);
+        assert_eq!(main.base_branch, None);
+        assert!(main.services.is_empty());
+
+        let linked =
+            map_worktree_snapshot(&state("feat-a", WorktreeKind::Linked), &config, now, &empty);
+        assert_eq!(linked.kind, WorktreeKind::Linked);
+    }
+
+    #[test]
+    fn worktree_kind_is_camel_case_on_the_wire() {
+        use crate::domain::model::WorktreeKind;
+        let config = crate::config::default_config();
+        let snapshot = map_worktree_snapshot(
+            &state("main", WorktreeKind::Main),
+            &config,
+            at("2026-01-01T00:00:00Z"),
+            &std::collections::HashSet::new(),
+        );
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["kind"], "main");
     }
 }
