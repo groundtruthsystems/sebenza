@@ -5,7 +5,7 @@
     {
       "id": "phase-0",
       "name": "Verification & prerequisites",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -54,21 +54,23 @@
           "id": "phase-0-task-7",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md: ensure test coverage for phase changes, run cargo test and CI=true npm test, propose manual verification, await confirmation, attach git-notes verification report, record checkpoint_sha.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "afa558a"
         }
-      ]
+      ],
+      "checkpoint_sha": "afa558a"
     },
     {
       "id": "phase-1",
       "name": "Agent abstraction & capability model",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-1-task-1",
           "name": "Write tests for BuiltinAgentId enum and per-agent invocation split",
           "description": "FR-1.1. Failing tests covering the enum-based registry and the extraction of built_in_invocation's if/else into per-agent functions, preserving existing claude and codex argv exactly (fresh, resume, fork, yolo, system prompt, prompt suffix).",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-2",
