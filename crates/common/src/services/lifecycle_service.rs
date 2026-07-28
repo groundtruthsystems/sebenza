@@ -217,9 +217,12 @@ impl TabSlot {
 /// The built-in agent kind (`claude`/`codex`) whose sessions we can discover.
 fn discoverable_agent_kind(agent: &AgentDefinition) -> Option<DiscoverableAgentKind> {
     match &agent.implementation {
-        AgentImplementation::Builtin(id) if id == "claude" => Some(DiscoverableAgentKind::Claude),
-        AgentImplementation::Builtin(id) if id == "codex" => Some(DiscoverableAgentKind::Codex),
-        _ => None,
+        AgentImplementation::Builtin(id) => match id {
+            BuiltinAgentId::Claude => Some(DiscoverableAgentKind::Claude),
+            BuiltinAgentId::Codex => Some(DiscoverableAgentKind::Codex),
+            BuiltinAgentId::Opencode => None,
+        },
+        AgentImplementation::Custom(_) => None,
     }
 }
 

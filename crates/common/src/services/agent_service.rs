@@ -135,6 +135,38 @@ fn codex_invocation(inv: &AgentInvocation, prompt_suffix: &str) -> String {
     format!("codex{hooks}{yolo}{prompt_suffix}")
 }
 
+/// opencode's launch argv (verified against opencode 1.18.7).
+///
+/// Differences from claude/codex worth knowing:
+/// - the initial prompt goes in `--prompt`, not a `--` positional (that form is
+///   `opencode run`, which is the one-shot mode, not the interactive TUI Sebenza launches);
+/// - bypass is `--auto`, a plain flag;
+/// - **there is no system-prompt flag.** opencode carries system instructions via its
+///   agent/config files, so a per-launch `system_prompt` cannot be passed and is dropped.
+///   Recorded as a limitation rather than silently approximated.
+fn opencode_invocation(inv: &AgentInvocation) -> String {
+    let yolo = if inv.yolo { " --auto" } else { "" };
+    let prompt = inv
+        .prompt
+        .map(|p| format!(" --prompt {}", quote_shell(p)))
+        .unwrap_or_default();
+
+    if inv.launch_mode == AgentLaunchMode::Fork
+        && let Some(fork) = inv.fork_from_session_id
+    {
+        // --fork requires --session or --continue; it branches rather than resuming.
+        return format!("opencode{yolo} --session {} --fork{prompt}", quote_shell(fork));
+    }
+    if inv.launch_mode == AgentLaunchMode::Resume {
+        let target = inv
+            .resume_conversation_id
+            .map(|id| format!(" --session {}", quote_shell(id)))
+            .unwrap_or_else(|| " --continue".to_string());
+        return format!("opencode{yolo}{target}{prompt}");
+    }
+    format!("opencode{yolo}{prompt}")
+}
+
 /// Dispatch to the selected built-in agent. Exhaustive on `BuiltinAgentId`, so adding an
 /// agent is a compile error here rather than a silent fallthrough to Claude.
 fn built_in_invocation(agent: BuiltinAgentId, inv: &AgentInvocation) -> String {
@@ -146,6 +178,9 @@ fn built_in_invocation(agent: BuiltinAgentId, inv: &AgentInvocation) -> String {
     match agent {
         BuiltinAgentId::Claude => claude_invocation(inv, &prompt_suffix),
         BuiltinAgentId::Codex => codex_invocation(inv, &prompt_suffix),
+        // opencode takes its prompt via --prompt, so it builds its own rather than
+        // using the shared `-- <prompt>` suffix.
+        BuiltinAgentId::Opencode => opencode_invocation(inv),
     }
 }
 
@@ -252,6 +287,12 @@ mod tests {
         (BuiltinAgentId::Codex, "resume+last", "codex --enable hooks resume --last"),
         (BuiltinAgentId::Codex, "resume+id", "codex --enable hooks resume 'sid'"),
         (BuiltinAgentId::Codex, "fork", "codex --enable hooks fork 'fid'"),
+        (BuiltinAgentId::Opencode, "fresh", "opencode"),
+        (BuiltinAgentId::Opencode, "fresh+yolo", "opencode --auto"),
+        (BuiltinAgentId::Opencode, "fresh+sys+prompt", "opencode --prompt 'do y'"),
+        (BuiltinAgentId::Opencode, "resume+last", "opencode --continue"),
+        (BuiltinAgentId::Opencode, "resume+id", "opencode --session 'sid'"),
+        (BuiltinAgentId::Opencode, "fork", "opencode --session 'fid' --fork"),
     ];
 
     fn apply_case<'a>(i: &mut AgentInvocation<'a>, case: &str) {
@@ -304,7 +345,7 @@ mod tests {
     #[test]
     fn all_lists_exactly_the_builtin_agents() {
         let ids: Vec<&str> = BuiltinAgentId::ALL.iter().map(|a| a.as_str()).collect();
-        assert_eq!(ids, vec!["claude", "codex"]);
+        assert_eq!(ids, vec!["claude", "codex", "opencode"]);
     }
 
     fn inv<'a>(agent: &'a AgentDefinition) -> AgentInvocation<'a> {

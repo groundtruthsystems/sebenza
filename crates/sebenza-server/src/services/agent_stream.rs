@@ -26,6 +26,10 @@ impl StreamProvider {
         match id {
             BuiltinAgentId::Claude => Some(StreamProvider::Claude),
             BuiltinAgentId::Codex => Some(StreamProvider::Codex),
+            // opencode has no streaming provider yet: in-app chat depends on the
+            // generated plugin and the export-based history adapter, later in this phase.
+            // Its capabilities declare in_app_chat: false, so nothing offers chat for it.
+            BuiltinAgentId::Opencode => None,
         }
     }
 }
@@ -504,6 +508,9 @@ mod stream_provider_tests {
             match id {
                 BuiltinAgentId::Claude => assert!(matches!(provider, Some(StreamProvider::Claude))),
                 BuiltinAgentId::Codex => assert!(matches!(provider, Some(StreamProvider::Codex))),
+                // Explicitly no provider yet — chat is disabled for opencode via its
+                // capabilities until the plugin and export adapter land.
+                BuiltinAgentId::Opencode => assert!(provider.is_none()),
             }
         }
     }

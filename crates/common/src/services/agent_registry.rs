@@ -39,11 +39,13 @@ pub struct AgentCapabilities {
 pub enum BuiltinAgentId {
     Claude,
     Codex,
+    Opencode,
 }
 
 impl BuiltinAgentId {
     /// Every built-in agent, in the order they are offered.
-    pub const ALL: &'static [BuiltinAgentId] = &[BuiltinAgentId::Claude, BuiltinAgentId::Codex];
+    pub const ALL: &'static [BuiltinAgentId] =
+        &[BuiltinAgentId::Claude, BuiltinAgentId::Codex, BuiltinAgentId::Opencode];
 
     /// The stable wire/config id. Part of the ts-rest contract and of user config
     /// (`workspace.defaultAgent`), so these strings must not change.
@@ -51,6 +53,7 @@ impl BuiltinAgentId {
         match self {
             BuiltinAgentId::Claude => "claude",
             BuiltinAgentId::Codex => "codex",
+            BuiltinAgentId::Opencode => "opencode",
         }
     }
 
@@ -59,6 +62,7 @@ impl BuiltinAgentId {
         match self {
             BuiltinAgentId::Claude => "Claude",
             BuiltinAgentId::Codex => "Codex",
+            BuiltinAgentId::Opencode => "OpenCode",
         }
     }
 
@@ -86,23 +90,63 @@ pub struct AgentDefinition {
     pub implementation: AgentImplementation,
 }
 
-fn builtin(id: BuiltinAgentId) -> AgentDefinition {
-    AgentDefinition {
-        id: id.as_str().to_string(),
-        label: id.label().to_string(),
-        kind: "builtin",
-        capabilities: AgentCapabilities {
+/// Per-agent capabilities, from verified behaviour. See the design's comparison table
+/// and `spec.md` → *Verified findings*.
+fn builtin_capabilities(id: BuiltinAgentId) -> AgentCapabilities {
+    match id {
+        BuiltinAgentId::Claude => AgentCapabilities {
             terminal: true,
             in_app_chat: true,
             conversation_history: true,
             interrupt: true,
             resume: true,
             fork: true,
-            // Only Claude lets the caller choose the session id up front.
-            pinnable_session_id: matches!(id, BuiltinAgentId::Claude),
-            // No current built-in can deny a tool call from a hook.
+            // `--session-id` lets Sebenza choose the id up front.
+            pinnable_session_id: true,
             permission_interception: false,
         },
+        BuiltinAgentId::Codex => AgentCapabilities {
+            terminal: true,
+            in_app_chat: true,
+            conversation_history: true,
+            interrupt: true,
+            resume: true,
+            fork: true,
+            // Codex assigns its own id; it must be discovered by polling.
+            pinnable_session_id: false,
+            permission_interception: false,
+        },
+        // opencode arrives incrementally: the terminal works as soon as the agent is
+        // registered, while chat, history and lifecycle status depend on the generated
+        // plugin and the export-based adapter landing later in this phase. Each flag is
+        // flipped by the task that makes it true, so the UI never advertises something
+        // that does not work yet.
+        BuiltinAgentId::Opencode => AgentCapabilities {
+            terminal: true,
+            in_app_chat: false,
+            conversation_history: false,
+            interrupt: false,
+            // `-c` / `--session <id>` resume works from launch.
+            resume: true,
+            // `--fork` plus session.parent_id lineage.
+            fork: true,
+            // No pin flag, but `session.created` (plugin event) and `run --format json`
+            // both surface the id at creation, so no polling is needed either.
+            pinnable_session_id: true,
+            // `permission.ask` has a mutable status in the plugin types, but
+            // phase-0-task-2 could not observe it firing. Stays false until the
+            // phase-3 spike proves it drivable.
+            permission_interception: false,
+        },
+    }
+}
+
+fn builtin(id: BuiltinAgentId) -> AgentDefinition {
+    AgentDefinition {
+        id: id.as_str().to_string(),
+        label: id.label().to_string(),
+        kind: "builtin",
+        capabilities: builtin_capabilities(id),
         implementation: AgentImplementation::Builtin(id),
     }
 }
@@ -356,6 +400,28 @@ mod tests {
         assert!(
             !codex.capabilities.permission_interception,
             "codex's PermissionRequest hook only signals; it cannot deny"
+        );
+
+        let oc = defs.iter().find(|d| d.id == "opencode").expect("opencode is builtin");
+        assert!(oc.capabilities.terminal, "the terminal works from registration");
+        assert!(oc.capabilities.resume, "`-c` / `--session <id>` resume works from launch");
+        assert!(oc.capabilities.fork, "`--fork` plus session.parent_id lineage");
+        assert!(
+            oc.capabilities.pinnable_session_id,
+            "no pin flag, but session.created and `run --format json` both surface the id \
+             at creation, so no polling is needed"
+        );
+        // These three are enabled by later tasks in this phase. They must stay false until
+        // the code behind them exists, or the UI advertises features that do not work.
+        assert!(
+            !oc.capabilities.in_app_chat,
+            "chat depends on the generated plugin + export adapter, not yet landed"
+        );
+        assert!(!oc.capabilities.conversation_history, "history adapter not yet landed");
+        assert!(!oc.capabilities.interrupt, "interrupt needs the streaming provider");
+        assert!(
+            !oc.capabilities.permission_interception,
+            "permission.ask was not observed firing (phase-0-task-2); gated on the phase-3 spike"
         );
     }
 
