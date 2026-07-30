@@ -62,33 +62,36 @@
           "id": "phase-2-task-3",
           "name": "Write tests for contract and mapWorktree carrying feedbackState",
           "description": "Colocated frontend tests. Assert the Zod worktree snapshot schema accepts the three variants and rejects an unknown value (FR2.2), and that mapWorktree surfaces feedbackState on WorktreeInfo (FR2.3). The mapWorktree test is the important one: it picks named fields rather than spreading, so without it the field is silently dropped and every downstream test would still pass against stubs. Confirm failing first.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "44d2f6e"
         },
         {
           "id": "phase-2-task-4",
           "name": "Implement the contract, mapWorktree, and WorktreeInfo changes",
           "description": "Add feedbackState to the ts-rest/Zod schema in frontend/src/lib/api-contract as a typed enum, not a bare string (FR2.2). Extend mapWorktree in frontend/src/lib/api.ts and the WorktreeInfo type in frontend/src/lib/types.ts (FR2.3). No new route, so no new api.ts wrapper is needed.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "44d2f6e"
         },
         {
           "id": "phase-2-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md. Automated: cargo test && cd frontend && CI=true npm test. Manual: confirm GET /api/worktrees returns feedbackState and that the browser store holds it.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "Automated verification passed (cargo test 158+3+17; frontend npm run check clean, CI=true npm test 189 passing). Manual verification deferred by user until the frontend lands in phase 4, consistent with phase 1. Checkpoint SHA to be recorded against 44d2f6e."
         }
       ]
     },
     {
       "id": "phase-3",
       "name": "Ticker item derivation",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Write tests for deriveTickerItems",
           "description": "Colocated deriveTickerItems.test.ts. Cover the eligibility predicate exactly as specified (FR3.2): included for status starting/running/awaiting_permission and for any feedbackState != none even when not executing; excluded for archived, kind == main, a worktree in a creation phase, and plain idle/stopped/error. Cover feedback-first ordering with snapshot order preserved within each group and stability across refreshes (FR3.3), label-else-branch naming (FR3.4), the selected-item flag (FR3.5), and that no excluded field leaks into an item (FR3.6). Confirm failing first.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-2",
