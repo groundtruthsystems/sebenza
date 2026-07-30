@@ -180,3 +180,75 @@ describe("setUpProject", () => {
     await expect(api.setUpProject("/repo/z", () => {})).rejects.toThrow("not a git repo");
   });
 });
+
+/**
+ * `mapWorktree` picks named fields off the snapshot rather than spreading it, so a
+ * field added to the Zod contract and the Rust backend alone reaches the store as
+ * `undefined` — with every component test still passing against its own stubs. These
+ * cover the contract and the mapping together, because that seam is where the field
+ * would silently disappear.
+ */
+describe("feedbackState reaches the store", () => {
+  const snapshot = {
+    branch: "feature",
+    kind: "linked" as const,
+    label: null,
+    path: "/repo/feature",
+    dir: "/repo/feature",
+    archived: false,
+    profile: null,
+    agentName: null,
+    agentLabel: null,
+    agentTerminalStale: false,
+    mux: true,
+    dirty: false,
+    unpushed: false,
+    paneCount: 1,
+    status: "awaiting_permission",
+    feedbackState: "permission_request" as const,
+    elapsed: "2m",
+    services: [],
+    prs: [],
+    creation: null,
+    source: "ui" as const,
+    oneshot: null,
+  };
+
+  it("accepts the three feedback states and rejects anything else", async () => {
+    const { ProjectWorktreeSnapshotSchema } = await import("./api-contract");
+
+    for (const feedbackState of ["none", "permission_request", "user_question"]) {
+      const parsed = ProjectWorktreeSnapshotSchema.parse({ ...snapshot, feedbackState });
+      expect(parsed.feedbackState).toBe(feedbackState);
+    }
+
+    // A typo or a state this client does not know must fail loudly here rather than
+    // reaching the ticker as an unhandled value.
+    expect(() =>
+      ProjectWorktreeSnapshotSchema.parse({ ...snapshot, feedbackState: "needs_attention" }),
+    ).toThrow();
+  });
+
+  it("defaults to none when an older server omits the field", async () => {
+    const { ProjectWorktreeSnapshotSchema } = await import("./api-contract");
+    const { feedbackState: _omitted, ...withoutField } = snapshot;
+
+    expect(ProjectWorktreeSnapshotSchema.parse(withoutField).feedbackState).toBe("none");
+  });
+
+  it("carries feedbackState through mapWorktree onto WorktreeInfo", async () => {
+    const mod = await loadApiAt("/myproject/");
+    vi.spyOn(mod.api, "fetchWorktrees").mockResolvedValue({
+      project: { name: "sebenza", mainBranch: "main" },
+      worktrees: [snapshot],
+      notifications: [],
+    } as never);
+
+    const [worktree] = await mod.fetchWorktrees();
+
+    expect(worktree.feedbackState).toBe("permission_request");
+    // The pre-existing status mapping must keep working alongside it.
+    expect(worktree.status).toBe("awaiting_permission");
+    expect(worktree.agent).toBe("awaiting-permission");
+  });
+});

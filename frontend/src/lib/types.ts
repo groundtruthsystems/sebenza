@@ -6,6 +6,7 @@ import type {
   ServiceStatus,
   TrackFileResponse,
   WorktreeCreationPhase,
+  WorktreeFeedbackState,
   WorktreeKind,
   WorktreeSource,
   WorktreeTab,
@@ -50,6 +51,7 @@ export type {
   ProjectSummary,
   ProjectWorktreeSnapshot,
   PullMainResult,
+  WorktreeFeedbackState,
   ServiceConfig,
   UpsertCustomAgentRequest,
   ServiceStatus,
@@ -156,6 +158,9 @@ export interface WorktreeInfo {
   dirty: boolean;
   unpushed: boolean;
   status: string;
+  /** Whether this worktree is waiting on an explicit human response. Drives the
+   *  active-worktree ticker; `status` alone cannot express it. */
+  feedbackState: WorktreeFeedbackState;
   elapsed: string;
   profile: string | null;
   agentName: AgentId | null;

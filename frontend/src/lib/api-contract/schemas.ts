@@ -268,6 +268,17 @@ export const CreateAgentTabRequestSchema = z.object({
 /** Whether a row is the repository's own checkout or a linked worktree. */
 export const WorktreeKindSchema = z.enum(["main", "linked"]);
 
+/** Whether a worktree is waiting on an explicit human response.
+ *
+ *  `user_question` is reserved: no agent adapter can observe a free-text question
+ *  today, so the server never sends it. Clients must still handle it rather than
+ *  assume only the first two ever arrive. */
+export const WorktreeFeedbackStateSchema = z.enum([
+  "none",
+  "permission_request",
+  "user_question",
+]);
+
 export const ProjectWorktreeSnapshotSchema = z.object({
   branch: z.string(),
   /** Defaults to "linked" so an older server (which sends no kind) still parses. */
@@ -286,6 +297,12 @@ export const ProjectWorktreeSnapshotSchema = z.object({
   unpushed: z.boolean(),
   paneCount: z.number(),
   status: z.string(),
+  /** Whether a human is being waited on. Separate from `status` because an agent
+   *  asking a free-text question is still `running`, so the lifecycle cannot express
+   *  it. A typed enum rather than `z.string()` (as `status` is) so an unknown state
+   *  fails here instead of reaching the UI unhandled. Default keeps older servers,
+   *  which send no such field, valid. */
+  feedbackState: WorktreeFeedbackStateSchema.default("none"),
   elapsed: z.string(),
   services: z.array(ServiceStatusSchema),
   prs: z.array(PrEntrySchema),
@@ -724,6 +741,7 @@ export type OpenWorktreeRequest = z.infer<typeof OpenWorktreeRequestSchema>;
 export type LaunchWorktreeRequest = z.infer<typeof LaunchWorktreeRequestSchema>;
 export type WorktreeSource = z.infer<typeof WorktreeSourceSchema>;
 export type WorktreeKind = z.infer<typeof WorktreeKindSchema>;
+export type WorktreeFeedbackState = z.infer<typeof WorktreeFeedbackStateSchema>;
 export type CreateWorktreeResponse = z.infer<typeof CreateWorktreeResponseSchema>;
 export type SetWorktreeArchivedRequest = z.infer<typeof SetWorktreeArchivedRequestSchema>;
 export type SetWorktreeArchivedResponse = z.infer<typeof SetWorktreeArchivedResponseSchema>;
