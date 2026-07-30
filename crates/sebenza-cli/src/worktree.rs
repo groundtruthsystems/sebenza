@@ -816,10 +816,33 @@ fn confirm_prune(count: usize) -> bool {
     matches!(line.trim().to_lowercase().as_str(), "y" | "yes")
 }
 
+/// Plain-text marker for a worktree waiting on a human, or `None`.
+///
+/// Wording matches the dashboard ticker so the two surfaces describe the same state
+/// identically. An unrecognised state yields `None` rather than a guess: a newer server
+/// may add one this binary predates, and announcing an unnamed demand would be worse
+/// than staying quiet about it.
+fn feedback_marker(feedback_state: &str) -> Option<&'static str> {
+    match feedback_state {
+        "permission_request" => Some("needs approval"),
+        "user_question" => Some("needs an answer"),
+        _ => None,
+    }
+}
+
 fn print_list(worktrees: &[crate::http::WorktreeSnapshot], options: &ListArgs) {
+    for line in list_lines(worktrees, options) {
+        println!("{line}");
+    }
+}
+
+/// The lines `list` prints, so the output can be asserted rather than captured from
+/// stdout.
+fn list_lines(worktrees: &[crate::http::WorktreeSnapshot], options: &ListArgs) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
     if worktrees.is_empty() {
-        println!("No worktrees found.");
-        return;
+        out.push("No worktrees found.".to_string());
+        return out;
     }
 
     struct Row {
@@ -827,6 +850,9 @@ fn print_list(worktrees: &[crate::http::WorktreeSnapshot], options: &ListArgs) {
         label: Option<String>,
         is_open: bool,
         archived: bool,
+        /// The agent lifecycle, which this listing previously dropped entirely.
+        agent_status: String,
+        feedback: Option<&'static str>,
         info: String,
         search_text: String,
     }
@@ -857,6 +883,8 @@ fn print_list(worktrees: &[crate::http::WorktreeSnapshot], options: &ListArgs) {
                 label: w.label.clone(),
                 is_open: w.mux,
                 archived: w.archived,
+                agent_status: w.status.clone(),
+                feedback: feedback_marker(&w.feedback_state),
                 info,
                 search_text,
             }
@@ -883,23 +911,23 @@ fn print_list(worktrees: &[crate::http::WorktreeSnapshot], options: &ListArgs) {
             0
         };
         if hidden_archived > 0 {
-            println!(
+            out.push(format!(
                 "No active worktrees found. {hidden_archived} archived worktree{} hidden. Use --all or --archived.",
                 if hidden_archived == 1 { "" } else { "s" }
-            );
-            return;
+            ));
+            return out;
         }
         if options.mode == ListMode::Archived {
-            println!("No archived worktrees found.");
-            return;
+            out.push("No archived worktrees found.".to_string());
+            return out;
         }
         let q = options.search.trim();
         if q.is_empty() {
-            println!("No worktrees found.");
+            out.push("No worktrees found.".to_string());
         } else {
-            println!("No worktrees found for \"{q}\".");
+            out.push(format!("No worktrees found for \"{q}\"."));
         }
-        return;
+        return out;
     }
 
     let display_name = |r: &Row| match &r.label {
@@ -918,18 +946,165 @@ fn print_list(worktrees: &[crate::http::WorktreeSnapshot], options: &ListArgs) {
             if r.is_open { "open" } else { "closed" },
             if r.archived { " archived" } else { "" }
         );
+        // Agent status and the feedback marker share a column so the existing three-column
+        // shape is preserved; the marker leads because it is the thing worth acting on.
+        let agent = match (r.feedback, r.agent_status.as_str()) {
+            (Some(marker), "") => marker.to_string(),
+            (Some(marker), status) => format!("{marker} ({status})"),
+            (None, status) => status.to_string(),
+        };
         let name = display_name(r);
-        let line = format!("{:<w$} {:<15} {}", name, status, r.info, w = max_name + 2);
-        println!("{}", line.trim_end());
+        let line = format!(
+            "{:<w$} {:<15} {:<26} {}",
+            name,
+            status,
+            agent,
+            r.info,
+            w = max_name + 2
+        );
+        out.push(line.trim_end().to_string());
     }
 
     if options.mode == ListMode::Active {
         let hidden_archived = rows.iter().filter(|r| r.archived).count();
         if hidden_archived > 0 {
-            println!(
+            out.push(format!(
                 "Hidden {hidden_archived} archived worktree{}. Use --all or --archived.",
                 if hidden_archived == 1 { "" } else { "s" }
-            );
+            ));
         }
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snapshot(branch: &str, status: &str, feedback: &str) -> crate::http::WorktreeSnapshot {
+        crate::http::WorktreeSnapshot {
+            branch: branch.to_string(),
+            kind: "linked".to_string(),
+            label: None,
+            base_branch: None,
+            archived: false,
+            profile: None,
+            agent_name: None,
+            mux: true,
+            status: status.to_string(),
+            feedback_state: feedback.to_string(),
+            prs: Vec::new(),
+            oneshot: None,
+            tabs: Vec::new(),
+            active_tab_id: None,
+        }
+    }
+
+    fn active() -> ListArgs {
+        ListArgs {
+            mode: ListMode::Active,
+            search: String::new(),
+        }
+    }
+
+    #[test]
+    fn list_shows_the_agent_status_for_each_worktree() {
+        // Before this, `list` printed only open/closed/archived, so a CLI-only user could
+        // not see what any agent was actually doing.
+        let lines = list_lines(
+            &[
+                snapshot("feat-a", "running", "none"),
+                snapshot("feat-b", "idle", "none"),
+            ],
+            &active(),
+        );
+
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("feat-a") && l.contains("running")),
+            "expected a running status in {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("feat-b") && l.contains("idle")),
+            "expected an idle status in {lines:?}"
+        );
+    }
+
+    #[test]
+    fn list_marks_a_worktree_that_needs_a_response() {
+        let lines = list_lines(
+            &[snapshot(
+                "feat-blocked",
+                "awaiting_permission",
+                "permission_request",
+            )],
+            &active(),
+        );
+
+        let line = lines
+            .iter()
+            .find(|l| l.contains("feat-blocked"))
+            .expect("the worktree should be listed");
+        // Plain text, no colour: this has to survive a pipe, a log, and a terminal that
+        // renders no escape codes at all.
+        assert!(
+            line.contains("needs approval"),
+            "expected a marker in {line:?}"
+        );
+        assert!(
+            !line.contains("\u{1b}["),
+            "the marker must not rely on colour: {line:?}"
+        );
+    }
+
+    #[test]
+    fn list_distinguishes_a_question_from_a_permission_request() {
+        let lines = list_lines(
+            &[snapshot("feat-asked", "running", "user_question")],
+            &active(),
+        );
+
+        assert!(
+            lines.iter().any(|l| l.contains("needs an answer")),
+            "expected a question marker in {lines:?}"
+        );
+    }
+
+    #[test]
+    fn list_marks_nothing_when_no_worktree_is_waiting() {
+        let lines = list_lines(&[snapshot("feat-a", "running", "none")], &active());
+
+        assert!(
+            !lines.iter().any(|l| l.contains("needs")),
+            "no worktree is waiting, so nothing should be marked: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_feedback_state_is_not_announced_as_needing_anything() {
+        // A newer server could add a state this binary predates. Listing it as some
+        // unrecognised demand would be worse than staying quiet about it.
+        let lines = list_lines(
+            &[snapshot("feat-a", "running", "telepathy_request")],
+            &active(),
+        );
+
+        assert!(
+            !lines.iter().any(|l| l.contains("needs")),
+            "an unknown state must not be announced: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("feat-a")),
+            "the worktree must still be listed: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn the_empty_message_is_unchanged() {
+        assert_eq!(list_lines(&[], &active()), vec!["No worktrees found."]);
     }
 }

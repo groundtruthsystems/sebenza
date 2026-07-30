@@ -79,6 +79,12 @@ pub struct WorktreeSnapshot {
     pub mux: bool,
     #[serde(default)]
     pub status: String,
+    /// `"none"`, `"permission_request"` or `"user_question"`: whether the worktree is
+    /// waiting on a human. A plain `String` (like `status` above) with a default, so an
+    /// older server that omits it, or a newer one that adds a state this binary predates,
+    /// still lists rather than failing to parse.
+    #[serde(default)]
+    pub feedback_state: String,
     #[serde(default)]
     pub prs: Vec<PrEntry>,
     #[serde(default)]
