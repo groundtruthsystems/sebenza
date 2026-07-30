@@ -1,4 +1,4 @@
-import type { WorktreeFeedbackState, WorktreeInfo } from "./types";
+import type { ActiveProjectWorktrees, WorktreeFeedbackState, WorktreeInfo } from "./types";
 
 /** Statuses that count as "this worktree is executing right now".
  *
@@ -80,4 +80,50 @@ export function deriveTickerItems(
     ...eligible.filter(needsFeedback).map(toItem),
     ...eligible.filter((worktree) => !needsFeedback(worktree)).map(toItem),
   ];
+}
+
+/** A ticker item that knows which project it came from.
+ *
+ *  Separate from [`TickerItem`] rather than replacing it, so the single-project
+ *  derivation keeps its narrower shape and the eligibility rules stay defined once. */
+export interface CrossProjectTickerItem extends TickerItem {
+  /** Stable identity across projects. `branch` alone is not unique — two projects can
+   *  each have a `main-work`, and anything keyed on branch would collapse them. */
+  key: string;
+  projectPrefix: string;
+  projectName: string;
+  /** Belongs to a project other than the one being viewed. Drives both the project
+   *  label and the fact that selecting it is a navigation rather than a callback. */
+  foreign: boolean;
+}
+
+/**
+ * Ticker items for every loaded project, feedback-needed first.
+ *
+ * Delegates per project to `deriveTickerItems`, so eligibility and within-project
+ * ordering are not reimplemented here and cannot drift from the single-project path.
+ * Across projects the rule is: anything waiting on the user comes first, and project
+ * order (the endpoint's registry order) is preserved inside each group — a worktree
+ * blocked on a human matters more than which project it lives in.
+ *
+ * `selectedBranch` applies only within the active project. A foreign project with a
+ * same-named branch must not render as selected.
+ */
+export function deriveCrossProjectTickerItems(
+  projects: ActiveProjectWorktrees[],
+  activePrefix: string,
+  selectedBranch: string | null,
+): CrossProjectTickerItem[] {
+  const all: CrossProjectTickerItem[] = projects.flatMap((project) => {
+    const foreign = project.prefix !== activePrefix;
+    return deriveTickerItems(project.worktrees, foreign ? null : selectedBranch).map((item) => ({
+      ...item,
+      key: `${project.prefix}/${item.branch}`,
+      projectPrefix: project.prefix,
+      projectName: project.name,
+      foreign,
+    }));
+  });
+
+  return [...all.filter((item) => item.needsFeedback), ...all.filter((item) => !item.needsFeedback)];
 }

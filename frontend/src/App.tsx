@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import WorktreeList from "./lib/WorktreeList";
 import ActiveWorktreeTicker from "./lib/ActiveWorktreeTicker";
-import { deriveTickerItems } from "./lib/ticker";
+import { deriveCrossProjectTickerItems, type CrossProjectTickerItem } from "./lib/ticker";
 import TopBar from "./lib/TopBar";
 import Terminal, { type TerminalHandle } from "./lib/Terminal";
 import ConfirmDialog from "./lib/ConfirmDialog";
@@ -22,6 +22,7 @@ import { agentCan } from "./lib/agent-capabilities";
 import DiffDialog from "./lib/DiffDialog";
 import TracksBoard from "./lib/TracksBoard";
 import type {
+  ActiveProjectWorktrees,
   AvailableBranch,
   AppNotification,
   CreateWorktreeRequest,
@@ -50,6 +51,7 @@ import {
   createWorktreeAgentTab,
   createWorktreeShellTab,
   deleteWorktreeTab,
+  fetchActiveWorktrees,
   fetchWorktrees,
   refreshWorktreeAgentTerminal,
   selectWorktreeTab,
@@ -108,6 +110,9 @@ export default function App() {
   );
   const [terminalSessionRevisions, setTerminalSessionRevisions] = useState<Record<string, number>>({});
   const [notifiedBranches, setNotifiedBranches] = useState<Set<string>>(new Set());
+  /** Cross-project ticker feed. `null` means the hub route has not answered (or cannot),
+   *  which falls the ticker back to this project rather than blanking it. */
+  const [activeProjects, setActiveProjects] = useState<ActiveProjectWorktrees[] | null>(null);
 
   const [isMobile, setIsMobile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -200,9 +205,17 @@ export default function App() {
   );
   // Derived from the full snapshot, not the filtered list: the ticker is a status radiator
   // and must not hide a worktree that needs a response merely because a search is active.
+  //
+  // `activeProjects` is null until the hub feed answers, and stays null if it cannot —
+  // in which case the ticker falls back to this project alone rather than going blank.
   const tickerItems = useMemo(
-    () => deriveTickerItems(worktrees, selectedBranch),
-    [worktrees, selectedBranch],
+    () =>
+      deriveCrossProjectTickerItems(
+        activeProjects ?? [{ prefix: activePrefix, name: activePrefix, worktrees }],
+        activePrefix,
+        selectedBranch,
+      ),
+    [activeProjects, worktrees, selectedBranch],
   );
   const creatingWorktrees = useMemo(() => worktrees.filter((w) => w.creating), [worktrees]);
   const backendCreatingCount = creatingWorktrees.length;
@@ -329,9 +342,16 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const next = await fetchWorktrees();
+      // One cycle, two reads — the cross-project ticker feed rides the existing poll
+      // rather than adding a second interval. A hub failure (older server, route absent)
+      // degrades the ticker to this project instead of emptying it.
+      const [next, projects] = await Promise.all([
+        fetchWorktrees(),
+        fetchActiveWorktrees().catch(() => null),
+      ]);
       useStore.getState().setWorktrees(next);
       useStore.getState().setHasLoadedWorktrees(true);
+      setActiveProjects(projects);
     } catch (err) {
       console.error("Failed to refresh:", err);
     }
@@ -562,6 +582,17 @@ export default function App() {
     selectBranch(branch);
     setNotifiedBranches((prev) => new Set([...prev].filter((candidate) => candidate !== branch)));
     if (isMobile) setSidebarOpen(false);
+  }
+
+  function handleSelectTickerItem(item: CrossProjectTickerItem): void {
+    if (item.foreign) {
+      // `apiBase` is derived from the URL at module load, so switching projects has to be
+      // a real navigation. A client-side route change would leave every API call pointed
+      // at the project we just left.
+      window.location.assign(`/${item.projectPrefix}/`);
+      return;
+    }
+    handleSelectWorktree(item.branch);
   }
 
   async function handleRemove() {
@@ -1075,7 +1106,7 @@ export default function App() {
         className={`flex h-dvh flex-col bg-surface text-primary ${isResizingSidebar ? "select-none" : ""}`}
         style={isResizingSidebar ? { cursor: "col-resize" } : undefined}
       >
-        <ActiveWorktreeTicker items={tickerItems} onselect={handleSelectWorktree} />
+        <ActiveWorktreeTicker items={tickerItems} onselect={handleSelectTickerItem} />
 
         <div className="flex min-h-0 flex-1">
         {/* Sidebar: fixed overlay on mobile, static on desktop */}

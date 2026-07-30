@@ -1,9 +1,12 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import ActiveWorktreeTicker from "./ActiveWorktreeTicker";
-import type { TickerItem } from "./ticker";
+import type { CrossProjectTickerItem } from "./ticker";
 
-function item(branch: string, overrides: Partial<TickerItem> = {}): TickerItem {
+function item(
+  branch: string,
+  overrides: Partial<CrossProjectTickerItem> = {},
+): CrossProjectTickerItem {
   return {
     branch,
     name: branch,
@@ -11,6 +14,10 @@ function item(branch: string, overrides: Partial<TickerItem> = {}): TickerItem {
     feedbackState: "none",
     needsFeedback: false,
     selected: false,
+    key: `alpha/${branch}`,
+    projectPrefix: "alpha",
+    projectName: "Alpha",
+    foreign: false,
     ...overrides,
   };
 }
@@ -105,9 +112,10 @@ describe("ActiveWorktreeTicker", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Search rewrite/ }));
 
-    // The branch, not the display name: selection is keyed on branch everywhere else.
+    // The whole item, not just a branch: the handler needs the project to decide between
+    // an in-app selection and a navigation.
     expect(onselect).toHaveBeenCalledTimes(1);
-    expect(onselect).toHaveBeenCalledWith("feature/search");
+    expect(onselect).toHaveBeenCalledWith(expect.objectContaining({ branch: "feature/search" }));
   });
 
   it("renders a branch name as text rather than markup", () => {
@@ -135,5 +143,46 @@ describe("ActiveWorktreeTicker", () => {
     expect(scroller).not.toBeNull();
     expect(scroller?.className).toMatch(/overflow-x-auto/);
     expect(container.innerHTML).not.toMatch(/animate-/);
+  });
+  it("labels an item from another project but not one from the active project", () => {
+    // Without the project name a foreign branch is indistinguishable from a local one,
+    // and clicking it does something quite different.
+    render(
+      <ActiveWorktreeTicker
+        items={[
+          item("local-wt"),
+          item("other-wt", {
+            key: "beta/other-wt",
+            projectPrefix: "beta",
+            projectName: "Beta",
+            foreign: true,
+          }),
+        ]}
+        onselect={() => {}}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /other-wt/ }).textContent).toMatch(/Beta/);
+    // The active project's own name would be noise on every item.
+    expect(screen.getByRole("button", { name: /local-wt/ }).textContent).not.toMatch(/Alpha/);
+  });
+
+  it("keeps two same-named branches from different projects as separate buttons", () => {
+    render(
+      <ActiveWorktreeTicker
+        items={[
+          item("shared"),
+          item("shared", {
+            key: "beta/shared",
+            projectPrefix: "beta",
+            projectName: "Beta",
+            foreign: true,
+          }),
+        ]}
+        onselect={() => {}}
+      />,
+    );
+
+    expect(screen.getAllByRole("button", { name: /shared/ })).toHaveLength(2);
   });
 });

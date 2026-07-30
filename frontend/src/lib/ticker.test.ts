@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { deriveTickerItems } from "./ticker";
-import type { WorktreeInfo } from "./types";
+import { deriveCrossProjectTickerItems, deriveTickerItems } from "./ticker";
+import type { ActiveProjectWorktrees, WorktreeInfo } from "./types";
 
 function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
   return {
@@ -209,5 +209,155 @@ describe("deriveTickerItems item shape", () => {
     expect(Object.keys(item).sort()).toEqual(
       ["branch", "feedbackState", "name", "needsFeedback", "selected", "status"].sort(),
     );
+  });
+});
+
+describe("deriveCrossProjectTickerItems", () => {
+  const project = (
+    prefix: string,
+    name: string,
+    worktrees: WorktreeInfo[],
+  ): ActiveProjectWorktrees => ({ prefix, name, worktrees });
+
+  it("carries each item's project identity", () => {
+    const items = deriveCrossProjectTickerItems(
+      [project("alpha", "Alpha", [createWorktree("feat-a")])],
+      "alpha",
+      null,
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0].projectPrefix).toBe("alpha");
+    expect(items[0].projectName).toBe("Alpha");
+  });
+
+  it("keeps the same branch in two projects as two distinct items", () => {
+    // Branch alone stops being a unique key across projects, so anything keying on it
+    // would collapse these into one row and lose a running worktree.
+    const items = deriveCrossProjectTickerItems(
+      [
+        project("alpha", "Alpha", [createWorktree("main-work")]),
+        project("beta", "Beta", [createWorktree("main-work")]),
+      ],
+      "alpha",
+      null,
+    );
+
+    expect(items).toHaveLength(2);
+    expect(items.map((i) => i.key)).toEqual(["alpha/main-work", "beta/main-work"]);
+    expect(new Set(items.map((i) => i.key)).size).toBe(2);
+  });
+
+  it("marks items from other projects as foreign and the active project's as not", () => {
+    const items = deriveCrossProjectTickerItems(
+      [
+        project("alpha", "Alpha", [createWorktree("feat-a")]),
+        project("beta", "Beta", [createWorktree("feat-b")]),
+      ],
+      "alpha",
+      null,
+    );
+
+    expect(items.map((i) => [i.projectPrefix, i.foreign])).toEqual([
+      ["alpha", false],
+      ["beta", true],
+    ]);
+  });
+
+  it("orders feedback-needed items first across every project", () => {
+    // A worktree waiting on the user matters more than which project it lives in.
+    const items = deriveCrossProjectTickerItems(
+      [
+        project("alpha", "Alpha", [
+          createWorktree("alpha-running"),
+          createWorktree("alpha-blocked", { feedbackState: "permission_request" }),
+        ]),
+        project("beta", "Beta", [
+          createWorktree("beta-running"),
+          createWorktree("beta-blocked", { feedbackState: "permission_request" }),
+        ]),
+      ],
+      "alpha",
+      null,
+    );
+
+    expect(items.map((i) => i.branch)).toEqual([
+      "alpha-blocked",
+      "beta-blocked",
+      "alpha-running",
+      "beta-running",
+    ]);
+  });
+
+  it("preserves project order within each group", () => {
+    const items = deriveCrossProjectTickerItems(
+      [
+        project("zulu", "Zulu", [createWorktree("z1")]),
+        project("alpha", "Alpha", [createWorktree("a1")]),
+      ],
+      "zulu",
+      null,
+    );
+
+    // Registry order, not alphabetical — matching what the endpoint returns.
+    expect(items.map((i) => i.projectPrefix)).toEqual(["zulu", "alpha"]);
+  });
+
+  it("only marks a selection inside the active project", () => {
+    // The same branch name in another project must not appear selected just because the
+    // active project has a worktree by that name.
+    const items = deriveCrossProjectTickerItems(
+      [
+        project("alpha", "Alpha", [createWorktree("shared")]),
+        project("beta", "Beta", [createWorktree("shared")]),
+      ],
+      "alpha",
+      "shared",
+    );
+
+    expect(items.map((i) => [i.projectPrefix, i.selected])).toEqual([
+      ["alpha", true],
+      ["beta", false],
+    ]);
+  });
+
+  it("applies the same eligibility rules as the single-project derivation", () => {
+    const items = deriveCrossProjectTickerItems(
+      [
+        project("alpha", "Alpha", [
+          createWorktree("idle-wt", { status: "idle" }),
+          createWorktree("archived-wt", { archived: true }),
+          createWorktree("main", { kind: "main" }),
+          createWorktree("running-wt"),
+        ]),
+      ],
+      "alpha",
+      null,
+    );
+
+    expect(items.map((i) => i.branch)).toEqual(["running-wt"]);
+  });
+
+  it("skips projects with nothing running", () => {
+    // The endpoint reports a loaded-but-quiet project as an empty list; it must not
+    // produce an empty group or a placeholder item.
+    const items = deriveCrossProjectTickerItems(
+      [
+        project("quiet", "Quiet", [createWorktree("idle-wt", { status: "idle" })]),
+        project("empty", "Empty", []),
+        project("busy", "Busy", [createWorktree("running-wt")]),
+      ],
+      "busy",
+      null,
+    );
+
+    expect(items.map((i) => i.projectPrefix)).toEqual(["busy"]);
+  });
+
+  it("returns nothing when no project has qualifying work", () => {
+    expect(deriveCrossProjectTickerItems([], "alpha", null)).toEqual([]);
+    expect(
+      deriveCrossProjectTickerItems([project("alpha", "Alpha", [])], "alpha", null),
+    ).toEqual([]);
   });
 });

@@ -118,6 +118,7 @@ vi.mock("./lib/api", () => ({
   connectWorktreeConversationStream: vi.fn(),
   fetchWorktreeConversationHistory: vi.fn(),
   fetchWorktrees: vi.fn(),
+  fetchActiveWorktrees: vi.fn(),
   interruptWorktreeConversation: vi.fn(),
   refreshWorktreeAgentTerminal: vi.fn(),
   sendWorktreeConversationMessage: vi.fn(),
@@ -143,6 +144,7 @@ import {
   attachWorktreeConversation,
   createWorktreeAgentTab,
   connectWorktreeConversationStream,
+  fetchActiveWorktrees,
   fetchWorktrees,
   refreshWorktreeAgentTerminal,
   setWorktreeLabel,
@@ -432,6 +434,8 @@ describe("App create selection", () => {
 
     vi.mocked(api.fetchConfig).mockResolvedValue(createConfig());
     vi.mocked(fetchWorktrees).mockResolvedValue([]);
+    // Default: hub feed unavailable, so the ticker falls back to the active project.
+    vi.mocked(fetchActiveWorktrees).mockRejectedValue(new Error("hub unavailable"));
     vi.mocked(api.fetchAvailableBranches).mockResolvedValue({ branches: [] });
     vi.mocked(api.fetchBaseBranches).mockResolvedValue({ branches: [] });
     vi.mocked(api.fetchWorktreeDiff).mockResolvedValue({
@@ -1173,5 +1177,74 @@ describe("App create selection", () => {
     // pass simply because nothing has rendered yet.
     await screen.findByRole("button", { name: /^feature\/alpha\b/i });
     expect(screen.queryByRole("navigation", { name: /active worktrees/i })).not.toBeInTheDocument();
+  });
+  it("shows worktrees from other projects and navigates when one is picked", async () => {
+    // Selecting across projects cannot be a callback: apiBase is derived from the URL at
+    // module load, so a client-side route change would leave every API call pointed at
+    // the project we just left.
+    const assign = vi.fn();
+    const original = window.location;
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...original, assign, pathname: "/alpha/" },
+    });
+
+    try {
+      vi.mocked(fetchWorktrees).mockResolvedValue([
+        createWorktree("local-wt", { status: "running", mux: "\u2713" }),
+      ]);
+      vi.mocked(fetchActiveWorktrees).mockResolvedValue([
+        {
+          prefix: "",
+          name: "Alpha",
+          worktrees: [createWorktree("local-wt", { status: "running", mux: "\u2713" })],
+        },
+        {
+          prefix: "beta",
+          name: "Beta",
+          worktrees: [
+            createWorktree("beta-blocked", {
+              status: "awaiting_permission",
+              feedbackState: "permission_request",
+              mux: "\u2713",
+            }),
+          ],
+        },
+      ]);
+
+      render(<App />);
+
+      const ticker = await screen.findByRole("navigation", { name: /active worktrees/i });
+      // Feedback-first ordering wins over project grouping: Beta's blocked worktree leads.
+      await waitFor(() => {
+        expect(within(ticker).getAllByRole("button").map((b) => b.textContent)).toEqual([
+          expect.stringContaining("beta-blocked"),
+          expect.stringContaining("local-wt"),
+        ]);
+      });
+      // The foreign item carries its project name so it is not mistaken for a local one.
+      expect(within(ticker).getByRole("button", { name: /beta-blocked/ }).textContent).toMatch(/Beta/);
+
+      fireEvent.click(within(ticker).getByRole("button", { name: /beta-blocked/ }));
+
+      expect(assign).toHaveBeenCalledWith("/beta/");
+    } finally {
+      Object.defineProperty(window, "location", { configurable: true, value: original });
+    }
+  });
+
+  it("falls back to this project's worktrees when the cross-project feed is unavailable", async () => {
+    // An older server has no hub route. The ticker must degrade to the active project
+    // rather than going blank, which would read as "nothing is running".
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("local-wt", { status: "running", mux: "\u2713" }),
+    ]);
+    vi.mocked(fetchActiveWorktrees).mockRejectedValue(new Error("no such route"));
+
+    render(<App />);
+
+    const ticker = await screen.findByRole("navigation", { name: /active worktrees/i });
+    expect(within(ticker).getAllByRole("button")).toHaveLength(1);
+    expect(within(ticker).getByRole("button", { name: /local-wt/ })).toBeInTheDocument();
   });
 });
