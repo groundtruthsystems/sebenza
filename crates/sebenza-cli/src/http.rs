@@ -94,6 +94,22 @@ pub struct WorktreeSnapshot {
     pub active_tab_id: Option<String>,
 }
 
+/// One project's worktrees in the cross-project view (`GET /api/active-worktrees`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveWorktreeProject {
+    pub prefix: String,
+    pub name: String,
+    #[serde(default)]
+    pub worktrees: Vec<WorktreeSnapshot>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ActiveWorktreesResponse {
+    #[serde(default)]
+    pub projects: Vec<ActiveWorktreeProject>,
+}
+
 fn default_worktree_kind() -> String {
     "linked".to_string()
 }
@@ -302,6 +318,15 @@ impl Http {
     pub async fn fetch_projects(&self) -> Result<Vec<ProjectSummary>> {
         let v = self.get(&format!("{}/api/projects", self.hub)).await?;
         Ok(serde_json::from_value::<ProjectsResponse>(v)?.projects)
+    }
+
+    /// Every loaded project and its worktrees. Hub-level, so it spans projects rather
+    /// than being scoped to the one the current directory resolves to.
+    pub async fn fetch_active_worktrees(&self) -> Result<Vec<ActiveWorktreeProject>> {
+        let v = self
+            .get(&format!("{}/api/active-worktrees", self.hub))
+            .await?;
+        Ok(serde_json::from_value::<ActiveWorktreesResponse>(v)?.projects)
     }
 
     pub async fn add_project(&self, path: &str) -> Result<AddProjectResponse> {

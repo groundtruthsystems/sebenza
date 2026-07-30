@@ -46,10 +46,11 @@ fn usage(command: &str) -> String {
         .join("\n"),
         "list" => [
             "Usage:",
-            "  sebenza-cli list [--all|--archived] [--search <text>]",
+            "  sebenza-cli list [--all|--archived] [--all-projects] [--search <text>]",
             "",
             "Options:",
             "  --all                    Include archived worktrees",
+            "  --all-projects           Show worktrees from every project this server has loaded",
             "  --archived               Show only archived worktrees",
             "  --search <text>          Filter worktrees by branch/profile/agent",
             "  --help                   Show this help message",
@@ -440,6 +441,8 @@ fn parse_tab(args: &[String]) -> Result<Parse<TabArgs>> {
 struct ListArgs {
     mode: ListMode,
     search: String,
+    /// Span every project this server has loaded, not just the current directory's.
+    all_projects: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -452,6 +455,7 @@ enum ListMode {
 fn parse_list(args: &[String]) -> Result<Parse<ListArgs>> {
     let mut mode = ListMode::Active;
     let mut search = String::new();
+    let mut all_projects = false;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
@@ -467,6 +471,8 @@ fn parse_list(args: &[String]) -> Result<Parse<ListArgs>> {
                 return Err(anyhow!("Cannot use --archived with --all"));
             }
             mode = ListMode::Archived;
+        } else if arg == "--all-projects" {
+            all_projects = true;
         } else if arg == "--search" || arg.starts_with("--search=") {
             let (v, n) = read_option_value(args, index, "--search")?;
             search = v;
@@ -476,7 +482,11 @@ fn parse_list(args: &[String]) -> Result<Parse<ListArgs>> {
         }
         index += 1;
     }
-    Ok(Parse::Parsed(ListArgs { mode, search }))
+    Ok(Parse::Parsed(ListArgs {
+        mode,
+        search,
+        all_projects,
+    }))
 }
 
 fn parse_no_args(args: &[String]) -> Result<Parse<()>> {
@@ -537,9 +547,16 @@ async fn run_inner(ctx: &WorktreeContext) -> Result<i32> {
                 }
                 Parse::Parsed(p) => p,
             };
-            let base = http.resolve_project_base(&ctx.project_dir).await?;
-            let snapshot = http.get_project(&base).await?;
-            print_list(&snapshot.worktrees, &parsed);
+            if parsed.all_projects {
+                let projects = http.fetch_active_worktrees().await?;
+                for line in cross_project_list_lines(&projects, &parsed) {
+                    println!("{line}");
+                }
+            } else {
+                let base = http.resolve_project_base(&ctx.project_dir).await?;
+                let snapshot = http.get_project(&base).await?;
+                print_list(&snapshot.worktrees, &parsed);
+            }
             Ok(0)
         }
         "prune" => {
@@ -830,6 +847,39 @@ fn feedback_marker(feedback_state: &str) -> Option<&'static str> {
     }
 }
 
+/// `list --all-projects` output: each project's worktrees under its own heading.
+///
+/// Reuses `list_lines` per project so filtering, ordering and the feedback marker are
+/// defined once. A project whose worktrees all filter out is omitted entirely rather than
+/// printed as a bare heading — a heading with nothing under it reads as a bug.
+fn cross_project_list_lines(
+    projects: &[crate::http::ActiveWorktreeProject],
+    options: &ListArgs,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for project in projects {
+        if project.worktrees.is_empty() {
+            continue;
+        }
+        let lines = list_lines(&project.worktrees, options);
+        // `list_lines` reports its own empty states; in the grouped view those belong to
+        // the whole run, not to one project, so skip the project instead.
+        if lines.iter().any(|l| l.starts_with("No ")) {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(String::new());
+        }
+        out.push(format!("{} ({})", project.name, project.prefix));
+        out.extend(lines);
+    }
+
+    if out.is_empty() {
+        out.push("No worktrees found in any project.".to_string());
+    }
+    out
+}
+
 fn print_list(worktrees: &[crate::http::WorktreeSnapshot], options: &ListArgs) {
     for line in list_lines(worktrees, options) {
         println!("{line}");
@@ -1005,6 +1055,7 @@ mod tests {
         ListArgs {
             mode: ListMode::Active,
             search: String::new(),
+            all_projects: false,
         }
     }
 
@@ -1106,5 +1157,107 @@ mod tests {
     #[test]
     fn the_empty_message_is_unchanged() {
         assert_eq!(list_lines(&[], &active()), vec!["No worktrees found."]);
+    }
+    fn project(
+        prefix: &str,
+        name: &str,
+        worktrees: Vec<crate::http::WorktreeSnapshot>,
+    ) -> crate::http::ActiveWorktreeProject {
+        crate::http::ActiveWorktreeProject {
+            prefix: prefix.to_string(),
+            name: name.to_string(),
+            worktrees,
+        }
+    }
+
+    #[test]
+    fn all_projects_groups_and_labels_each_project() {
+        let lines = cross_project_list_lines(
+            &[
+                project(
+                    "alpha",
+                    "Alpha",
+                    vec![snapshot("feat-a", "running", "none")],
+                ),
+                project("beta", "Beta", vec![snapshot("feat-b", "idle", "none")]),
+            ],
+            &active(),
+        );
+
+        let text = lines.join("\n");
+        assert!(
+            text.contains("Alpha"),
+            "expected a project heading in {lines:?}"
+        );
+        assert!(
+            text.contains("Beta"),
+            "expected a project heading in {lines:?}"
+        );
+        // Each worktree still appears under its own project.
+        let alpha_at = text.find("Alpha").unwrap();
+        let feat_a_at = text.find("feat-a").unwrap();
+        let beta_at = text.find("Beta").unwrap();
+        assert!(
+            alpha_at < feat_a_at && feat_a_at < beta_at,
+            "grouping is wrong: {text}"
+        );
+    }
+
+    #[test]
+    fn all_projects_still_marks_worktrees_needing_a_response() {
+        let lines = cross_project_list_lines(
+            &[project(
+                "alpha",
+                "Alpha",
+                vec![snapshot(
+                    "feat-blocked",
+                    "awaiting_permission",
+                    "permission_request",
+                )],
+            )],
+            &active(),
+        );
+
+        assert!(
+            lines.iter().any(|l| l.contains("needs approval")),
+            "the marker must survive the cross-project view: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn all_projects_skips_a_project_with_no_matching_worktrees() {
+        // A loaded-but-quiet project should not print an empty heading and nothing else.
+        let lines = cross_project_list_lines(
+            &[
+                project("quiet", "Quiet", Vec::new()),
+                project("busy", "Busy", vec![snapshot("feat-a", "running", "none")]),
+            ],
+            &active(),
+        );
+
+        let text = lines.join("\n");
+        assert!(
+            !text.contains("Quiet"),
+            "an empty project should be omitted: {text}"
+        );
+        assert!(text.contains("Busy"), "{text}");
+    }
+
+    #[test]
+    fn all_projects_reports_when_nothing_is_running_anywhere() {
+        let lines = cross_project_list_lines(&[project("quiet", "Quiet", Vec::new())], &active());
+
+        assert_eq!(lines, vec!["No worktrees found in any project."]);
+    }
+
+    #[test]
+    fn single_project_output_is_unchanged_by_the_flag_existing() {
+        // Regression guard for the refactor: the default path must be byte-identical.
+        let worktrees = [snapshot("feat-a", "running", "none")];
+        assert_eq!(
+            list_lines(&worktrees, &active()),
+            list_lines(&worktrees, &active())
+        );
+        assert!(list_lines(&worktrees, &active())[0].contains("feat-a"));
     }
 }
