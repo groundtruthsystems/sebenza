@@ -69,6 +69,7 @@ fn map_worktree_snapshot(
         unpushed: state.git.ahead_count > 0,
         pane_count: state.session.pane_count,
         status: lifecycle_status(state.agent.lifecycle),
+        feedback_state: state.agent.feedback_state,
         elapsed: format_elapsed_since(state.agent.last_started_at.as_deref(), now),
         services: state.services.clone(),
         prs: state.prs.clone(),
@@ -218,6 +219,83 @@ mod tests {
         let linked =
             map_worktree_snapshot(&state("feat-a", WorktreeKind::Linked), &config, now, &empty);
         assert_eq!(linked.kind, WorktreeKind::Linked);
+    }
+
+    /// A worktree state carrying a specific feedback state, for the tests below.
+    fn state_awaiting(
+        branch: &str,
+        feedback: crate::domain::model::AgentFeedbackState,
+    ) -> ManagedWorktreeRuntimeState {
+        use crate::domain::model::{AgentLifecycle, WorktreeKind};
+        let mut s = state(branch, WorktreeKind::Linked);
+        s.agent.lifecycle = AgentLifecycle::AwaitingPermission;
+        s.agent.feedback_state = feedback;
+        s
+    }
+
+    #[test]
+    fn feedback_state_reaches_the_snapshot_alongside_status() {
+        use crate::domain::model::AgentFeedbackState;
+        let config = crate::config::default_config();
+        let now = at("2026-01-01T00:00:00Z");
+        let empty = std::collections::HashSet::new();
+
+        let snapshot = map_worktree_snapshot(
+            &state_awaiting("feat-a", AgentFeedbackState::PermissionRequest),
+            &config,
+            now,
+            &empty,
+        );
+
+        // Both are needed: `status` says what the agent is doing, `feedbackState` says
+        // whether a human is being waited on. The ticker reads the second.
+        assert_eq!(snapshot.status, "awaiting_permission");
+        assert_eq!(
+            snapshot.feedback_state,
+            AgentFeedbackState::PermissionRequest
+        );
+    }
+
+    #[test]
+    fn feedback_state_is_snake_case_on_the_wire() {
+        use crate::domain::model::AgentFeedbackState;
+        let config = crate::config::default_config();
+        let now = at("2026-01-01T00:00:00Z");
+        let empty = std::collections::HashSet::new();
+
+        // The frontend contract keys off these exact literals, so pin them here rather
+        // than trusting the derive to keep producing them.
+        for (state, expected) in [
+            (AgentFeedbackState::None, "none"),
+            (AgentFeedbackState::PermissionRequest, "permission_request"),
+            (AgentFeedbackState::UserQuestion, "user_question"),
+        ] {
+            let snapshot =
+                map_worktree_snapshot(&state_awaiting("feat-a", state), &config, now, &empty);
+            let json = serde_json::to_value(&snapshot).unwrap();
+            assert_eq!(json["feedbackState"], expected);
+        }
+    }
+
+    #[test]
+    fn a_snapshot_without_feedback_state_reads_as_none() {
+        use crate::domain::model::AgentFeedbackState;
+        let config = crate::config::default_config();
+        let snapshot = map_worktree_snapshot(
+            &state("feat-a", crate::domain::model::WorktreeKind::Linked),
+            &config,
+            at("2026-01-01T00:00:00Z"),
+            &std::collections::HashSet::new(),
+        );
+
+        // An older server sends no `feedbackState` at all. A newer reader must treat that
+        // as "nothing is waiting on you" rather than refusing the payload.
+        let mut json = serde_json::to_value(&snapshot).unwrap();
+        json.as_object_mut().unwrap().remove("feedbackState");
+        let reparsed: WorktreeSnapshot =
+            serde_json::from_value(json).expect("a payload without feedbackState must still load");
+
+        assert_eq!(reparsed.feedback_state, AgentFeedbackState::None);
     }
 
     #[test]

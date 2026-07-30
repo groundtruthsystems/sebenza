@@ -407,6 +407,13 @@ pub struct WorktreeSnapshot {
     pub unpushed: bool,
     pub pane_count: i32,
     pub status: String,
+    /// Whether a human is being waited on, which `status` cannot express on its own:
+    /// an agent asking a free-text question is still `running`.
+    ///
+    /// `#[serde(default)]` so a payload from a server predating the field loads as
+    /// `None` instead of being rejected.
+    #[serde(default)]
+    pub feedback_state: AgentFeedbackState,
     pub elapsed: String,
     pub services: Vec<ServiceRuntimeState>,
     pub prs: Vec<PrEntry>,
