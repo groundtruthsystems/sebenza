@@ -57,20 +57,20 @@
         {
           "id": "phase-7",
           "name": "Cross-project ticker",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification."
         },
         {
           "id": "phase-8",
           "name": "CLI parity for cross-project listing",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         }
       ],
       "progress": {
         "total_tasks": 31,
-        "completed_tasks": 17,
-        "percentage": 54.8
+        "completed_tasks": 21,
+        "percentage": 67.7
       }
     }
   ]
