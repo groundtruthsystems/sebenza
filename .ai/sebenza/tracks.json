@@ -51,8 +51,8 @@
         {
           "id": "phase-6",
           "name": "Cross-project active-worktree endpoint",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification."
         },
         {
           "id": "phase-7",
@@ -69,8 +69,8 @@
       ],
       "progress": {
         "total_tasks": 31,
-        "completed_tasks": 15,
-        "percentage": 48.4
+        "completed_tasks": 17,
+        "percentage": 54.8
       }
     }
   ]

@@ -416,7 +416,7 @@ leans on.
 being viewed.
 
 **Why it is reachable.** One server process already owns runtime state for every project it serves
-(`ProjectManager` holds an `IndexMap<prefix, Arc<ProjectApp>>`, with `list_all`), and the router
+(`ProjectManager` holds an `IndexMap<prefix, Arc<ProjectApp>>`, with `list`), and the router
 already has a hub tier with no project prefix (`/api/projects`, `/api/registry`, `/api/instances`).
 No new state or storage is needed — only a hub-level read.
 
@@ -426,7 +426,7 @@ Sebenza planning tracks, not live agent state. It cannot answer this.
 ### Decisions
 
 1. **New hub endpoint** `GET /api/active-worktrees`, returning `{ projects: [{ prefix, name,
-   worktrees: [...] }] }` built from `ProjectManager::list_all`. Unauthenticated, like every other
+   worktrees: [...] }] }` built from `ProjectManager::list`. Unauthenticated, like every other
    hub route.
 2. **Eligibility stays in one place.** The endpoint returns worktree snapshots; the frontend runs the
    existing `deriveTickerItems` per project and concatenates, so the predicate is not reimplemented

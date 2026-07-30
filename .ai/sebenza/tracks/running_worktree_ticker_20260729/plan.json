@@ -185,26 +185,29 @@
     {
       "id": "phase-6",
       "name": "Cross-project active-worktree endpoint",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-6-task-1",
           "name": "Write tests for the cross-project aggregate",
           "description": "Inline Rust tests for a pure aggregate builder over the loaded projects: each project contributes its prefix, name, and worktree snapshots; a project with no worktrees still appears (so the caller can tell 'nothing running' from 'not loaded'); registry order is preserved. Confirm failing first.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "ebd7990"
         },
         {
           "id": "phase-6-task-2",
           "name": "Implement the hub endpoint and contract",
-          "description": "Aggregate builder over ProjectManager::list_all, wired to a new hub route GET /api/active-worktrees (no project prefix, alongside /api/projects and /api/registry). Add the route to the ts-rest contract in frontend/src/lib/api-contract with a matching api.ts wrapper \u2014 a per-task quality gate. Reuse the existing WorktreeSnapshot shape so the frontend can run the same derivation.",
-          "status": "backlog"
+          "description": "Aggregate builder over ProjectManager::list, wired to a new hub route GET /api/active-worktrees (no project prefix, alongside /api/projects and /api/registry). Add the route to the ts-rest contract in frontend/src/lib/api-contract with a matching api.ts wrapper \u2014 a per-task quality gate. Reuse the existing WorktreeSnapshot shape so the frontend can run the same derivation.",
+          "status": "done",
+          "commit_sha": "ebd7990"
         },
         {
           "id": "phase-6-task-3",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md. Automated: cargo test && cd frontend && npm run check. Manual: curl the hub endpoint with two projects loaded and confirm both appear.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "Automated verification passed (cargo test 158+9+22, fmt clean; frontend check clean, 215 tests). Manual verification pending with the user alongside phases 1-5. Checkpoint SHA to be recorded against ebd7990."
         }
       ]
     },
