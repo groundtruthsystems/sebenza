@@ -225,6 +225,20 @@ pub enum AgentFeedbackState {
     UserQuestion,
 }
 
+impl AgentFeedbackState {
+    /// The stable wire/log spelling, matching what serde emits.
+    ///
+    /// Shared by the snapshot mapping and the transition log so the two can never
+    /// disagree about what a state is called.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentFeedbackState::None => "none",
+            AgentFeedbackState::PermissionRequest => "permission_request",
+            AgentFeedbackState::UserQuestion => "user_question",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GitWorktreeRuntimeState {

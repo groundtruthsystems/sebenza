@@ -42,6 +42,21 @@ impl RuntimeEvent {
         }
     }
 
+    /// The event's discriminant, for logs.
+    ///
+    /// Returns `&'static str` on purpose: the caller logs this, and an agent-supplied
+    /// value here would put arbitrary agent-controlled text into Sebenza's own logs.
+    /// A fixed set of literals makes that impossible rather than merely discouraged.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            RuntimeEvent::AgentStopped { .. } => "agent_stopped",
+            RuntimeEvent::AgentStatusChanged { .. } => "agent_status_changed",
+            RuntimeEvent::PrOpened { .. } => "pr_opened",
+            RuntimeEvent::RuntimeError { .. } => "runtime_error",
+            RuntimeEvent::ConversationStarted { .. } => "conversation_started",
+        }
+    }
+
     pub fn branch(&self) -> &str {
         match self {
             RuntimeEvent::AgentStopped { branch, .. }
@@ -156,6 +171,62 @@ mod tests {
                 assert_eq!(lifecycle, "awaiting_permission");
             }
             other => panic!("expected AgentStatusChanged, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn event_kind_is_a_fixed_discriminant_and_never_echoes_payload() {
+        // `kind()` feeds a log line. If it returned any part of the payload, an agent
+        // could write chosen text into Sebenza's logs by naming a branch or erroring
+        // with a crafted message.
+        let events = [
+            (
+                RuntimeEvent::AgentStopped {
+                    worktree_id: "wt1".to_string(),
+                    branch: "feature/patient-12345".to_string(),
+                },
+                "agent_stopped",
+            ),
+            (
+                RuntimeEvent::AgentStatusChanged {
+                    worktree_id: "wt1".to_string(),
+                    branch: "feature/patient-12345".to_string(),
+                    lifecycle: "awaiting_permission".to_string(),
+                },
+                "agent_status_changed",
+            ),
+            (
+                RuntimeEvent::PrOpened {
+                    worktree_id: "wt1".to_string(),
+                    branch: "feature/patient-12345".to_string(),
+                    url: Some("https://example.test/secret".to_string()),
+                },
+                "pr_opened",
+            ),
+            (
+                RuntimeEvent::RuntimeError {
+                    worktree_id: "wt1".to_string(),
+                    branch: "feature/patient-12345".to_string(),
+                    message: "tool output with a secret".to_string(),
+                },
+                "runtime_error",
+            ),
+            (
+                RuntimeEvent::ConversationStarted {
+                    worktree_id: "wt1".to_string(),
+                    branch: "feature/patient-12345".to_string(),
+                    session_id: "ses_secret".to_string(),
+                },
+                "conversation_started",
+            ),
+        ];
+
+        for (event, expected) in events {
+            let kind = event.kind();
+            assert_eq!(kind, expected);
+            for forbidden in ["patient-12345", "secret", "awaiting_permission"] {
+                assert!(!kind.contains(forbidden), "{kind} leaked {forbidden}");
+            }
         }
     }
 

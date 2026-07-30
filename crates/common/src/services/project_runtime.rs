@@ -154,6 +154,8 @@ impl ProjectRuntime {
             state.session.window_name = build_worktree_window_name(&branch);
         }
         state.agent.last_event_at = Some(now.clone());
+        let event_at = now.clone();
+        let feedback_before = state.agent.feedback_state;
 
         match event {
             RuntimeEvent::AgentStopped { .. } => {
@@ -199,6 +201,20 @@ impl ProjectRuntime {
                 state.reported_session_id = Some(session_id.clone());
             }
         }
+
+        // Logged because this state drives whether the dashboard tells the user a worktree
+        // is waiting on them; a wrong or stuck badge is otherwise untraceable after the
+        // fact, since the state is in-memory and leaves no other record.
+        if let Some(record) = feedback_transition_record(
+            &worktree_id,
+            event.kind(),
+            feedback_before,
+            state.agent.feedback_state,
+            &event_at,
+        ) {
+            tracing::info!("{record}");
+        }
+
         Ok(())
     }
 
@@ -260,6 +276,32 @@ fn make_default_state(input: UpsertInput) -> ManagedWorktreeRuntimeState {
         prs: Vec::new(),
         reported_session_id: None,
     }
+}
+
+/// The log record for a feedback-state change, or `None` if nothing changed.
+///
+/// Returning `Option` puts "only log real transitions" in one testable place rather
+/// than leaving it to each caller.
+///
+/// Content-free by construction: every parameter is either an id, a fixed event
+/// discriminant, a state value, or a timestamp. There is no parameter through which a
+/// prompt, tool argument, terminal line, branch name, or token could reach the log, so
+/// the guarantee holds by signature rather than by reviewer vigilance.
+fn feedback_transition_record(
+    worktree_id: &str,
+    event_kind: &'static str,
+    from: AgentFeedbackState,
+    to: AgentFeedbackState,
+    at: &str,
+) -> Option<String> {
+    if from == to {
+        return None;
+    }
+    Some(format!(
+        "[runtime-feedback] {worktree_id}: {} -> {} via {event_kind} at {at}",
+        from.as_str(),
+        to.as_str(),
+    ))
 }
 
 #[cfg(test)]
@@ -481,6 +523,71 @@ mod tests {
                 agent(&rt).feedback_state,
                 AgentFeedbackState::UserQuestion,
                 "no event may produce UserQuestion, but {event:?} did"
+            );
+        }
+    }
+
+    const AT: &str = "2026-07-29T23:00:00.000Z";
+
+    #[test]
+    fn an_unchanged_feedback_state_produces_no_record() {
+        // One record per real transition. Logging every event would bury the handful of
+        // lines that matter under the 5s poll's worth of unchanged status reports.
+        for state in [
+            AgentFeedbackState::None,
+            AgentFeedbackState::PermissionRequest,
+            AgentFeedbackState::UserQuestion,
+        ] {
+            assert!(
+                feedback_transition_record(WT, "agent_status_changed", state, state, AT).is_none(),
+                "{state:?} -> {state:?} is not a transition"
+            );
+        }
+    }
+
+    #[test]
+    fn a_feedback_transition_record_names_the_transition() {
+        let record = feedback_transition_record(
+            WT,
+            "agent_status_changed",
+            AgentFeedbackState::None,
+            AgentFeedbackState::PermissionRequest,
+            AT,
+        )
+        .expect("a change must be recorded");
+
+        for expected in [WT, "agent_status_changed", "none", "permission_request", AT] {
+            assert!(
+                record.contains(expected),
+                "record {record:?} must mention {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_transition_record_carries_no_event_payload() {
+        // Built from a fixed event discriminant plus the two state values, so a crafted
+        // branch name or error message has no route into the log. Asserted rather than
+        // assumed so a future signature change has to break a test to regress it.
+        let event = RuntimeEvent::RuntimeError {
+            worktree_id: WT.to_string(),
+            branch: "feature/patient-12345".to_string(),
+            message: "tool output with a secret".to_string(),
+        };
+
+        let record = feedback_transition_record(
+            WT,
+            event.kind(),
+            AgentFeedbackState::PermissionRequest,
+            AgentFeedbackState::None,
+            AT,
+        )
+        .expect("a change must be recorded");
+
+        for forbidden in ["patient-12345", "secret", "tool output", "feature/"] {
+            assert!(
+                !record.contains(forbidden),
+                "record {record:?} leaked {forbidden}"
             );
         }
     }
