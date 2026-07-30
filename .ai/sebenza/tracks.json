@@ -39,8 +39,8 @@
         {
           "id": "phase-4",
           "name": "Ticker component and App shell",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification; ticker is now visible end to end."
         },
         {
           "id": "phase-5",
@@ -51,8 +51,8 @@
       ],
       "progress": {
         "total_tasks": 20,
-        "completed_tasks": 9,
-        "percentage": 45.0
+        "completed_tasks": 13,
+        "percentage": 65.0
       }
     }
   ]
