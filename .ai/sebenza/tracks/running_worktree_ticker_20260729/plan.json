@@ -5,31 +5,33 @@
     {
       "id": "phase-1",
       "name": "Runtime feedback state",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-1-task-1",
           "name": "Write tests for feedback_state transitions in apply_event",
           "description": "Inline #[cfg(test)] mod tests in crates/common/src/services/project_runtime.rs. Assert: AgentStatusChanged{lifecycle:\"awaiting_permission\"} sets lifecycle=AgentLifecycle::AwaitingPermission AND feedback_state=permission_request (FR1.2); the starting/running/idle arms set feedback_state=none (FR1.3); AgentStopped and RuntimeError each reset feedback_state to none from permission_request (FR1.4); reconcile paths never touch feedback_state (FR1.7). Confirm all fail before implementing.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "ccbd47e"
         },
         {
           "id": "phase-1-task-2",
           "name": "Implement feedback_state and the apply_event arms",
-          "description": "Add the provider-neutral feedback state enum (none | permission_request | user_question) to the runtime agent sub-state in crates/common (FR1.1). Add the awaiting_permission arm to apply_event's AgentStatusChanged match, which currently falls through to _ => AgentLifecycle::Stopped, setting lifecycle and feedback_state in the SAME arm so they cannot drift (FR1.2). Set feedback_state=none on the starting/running/idle arms and unconditionally on AgentStopped/RuntimeError (FR1.3, FR1.4). Never set user_question anywhere (FR1.5). Note the existing oneshot_watcher_service AwaitingPermission branch becomes live once this lands — verify its existing test still passes rather than assuming it.",
-          "status": "backlog"
+          "description": "Add the provider-neutral feedback state enum (none | permission_request | user_question) to the runtime agent sub-state in crates/common (FR1.1). Add the awaiting_permission arm to apply_event's AgentStatusChanged match, which currently falls through to _ => AgentLifecycle::Stopped, setting lifecycle and feedback_state in the SAME arm so they cannot drift (FR1.2). Set feedback_state=none on the starting/running/idle arms and unconditionally on AgentStopped/RuntimeError (FR1.3, FR1.4). Never set user_question anywhere (FR1.5). Note the existing oneshot_watcher_service AwaitingPermission branch becomes live once this lands \u2014 verify its existing test still passes rather than assuming it.",
+          "status": "done",
+          "commit_sha": "ccbd47e"
         },
         {
           "id": "phase-1-task-3",
           "name": "Add content-free tracing for feedback_state transitions",
           "description": "Write tests first for a small record-formatting helper, then implement it and call it from apply_event. One structured record per transition: timestamp, worktree_id, triggering event kind, old state, new state (FR1.6). Tests must assert the record contains no prompt, tool, terminal, or branch content and no control token. The runtime-event path has zero tracing calls today, so this is the first; keep it to the transition only, not general event logging.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-4",
           "name": "Phase verification & checkpoint",
-          "description": "Per workflow.md Phase Completion Verification and Checkpointing Protocol. Automated: cargo test. Manual verification is backend-shaped — drive an awaiting_permission runtime event and confirm the state transition and single tracing record.",
+          "description": "Per workflow.md Phase Completion Verification and Checkpointing Protocol. Automated: cargo test. Manual verification is backend-shaped \u2014 drive an awaiting_permission runtime event and confirm the state transition and single tracing record.",
           "status": "backlog"
         }
       ]
@@ -49,7 +51,7 @@
         {
           "id": "phase-2-task-2",
           "name": "Implement snapshot serialization of feedbackState",
-          "description": "Map the runtime feedback state onto the worktree snapshot next to status. Do not add any free-text field to WorktreeSnapshot or RuntimeEvent — the data-classification claim in design.md depends on there being no carrier for prompt/tool/terminal content (FR3.6).",
+          "description": "Map the runtime feedback state onto the worktree snapshot next to status. Do not add any free-text field to WorktreeSnapshot or RuntimeEvent \u2014 the data-classification claim in design.md depends on there being no carrier for prompt/tool/terminal content (FR3.6).",
           "status": "backlog"
         },
         {
@@ -113,25 +115,25 @@
         {
           "id": "phase-4-task-2",
           "name": "Implement ActiveWorktreeTicker",
-          "description": "Presentation-only component taking derived items, selectedBranch, and the selection callback as props (FR4.1). Must not subscribe to the Zustand store — App passes props, matching how WorktreeList already works. Horizontal scroll or bounded overflow affordance only; no marquee or auto-scrolling (FR4.6).",
+          "description": "Presentation-only component taking derived items, selectedBranch, and the selection callback as props (FR4.1). Must not subscribe to the Zustand store \u2014 App passes props, matching how WorktreeList already works. Horizontal scroll or bounded overflow affordance only; no marquee or auto-scrolling (FR4.6).",
           "status": "backlog"
         },
         {
           "id": "phase-4-task-3",
           "name": "Write App-level test for ticker selection parity",
-          "description": "Assert selecting via the ticker produces the same result as selecting the same worktree in the sidebar (AC6): selection persisted, revealed in filters when hidden, unread marker cleared, sidebar closed on mobile, and the view reset to terminal. The terminal reset is NOT in handleSelectWorktree — it is a separate useEffect keyed on selectedBranch, so test it explicitly; it is the break-point a future refactor of that effect would silently take out. Also assert selection does not alter feedbackState (AC7). Confirm failing first.",
+          "description": "Assert selecting via the ticker produces the same result as selecting the same worktree in the sidebar (AC6): selection persisted, revealed in filters when hidden, unread marker cleared, sidebar closed on mobile, and the view reset to terminal. The terminal reset is NOT in handleSelectWorktree \u2014 it is a separate useEffect keyed on selectedBranch, so test it explicitly; it is the break-point a future refactor of that effect would silently take out. Also assert selection does not alter feedbackState (AC7). Confirm failing first.",
           "status": "backlog"
         },
         {
           "id": "phase-4-task-4",
           "name": "Restructure the App root and mount the ticker",
-          "description": "The root is currently a flat flex h-dvh row with <aside> and <main> as siblings — there is no outer vertical wrapper. Introduce a flex-col container around that row with the ticker as its first child, keeping the existing row's behaviour and letting it fill remaining height (FR4.2). Wire the ticker to derived items and the existing handleSelectWorktree. Verify the terminal, chat, and tracks views still size correctly after the layout change.",
+          "description": "The root is currently a flat flex h-dvh row with <aside> and <main> as siblings \u2014 there is no outer vertical wrapper. Introduce a flex-col container around that row with the ticker as its first child, keeping the existing row's behaviour and letting it fill remaining height (FR4.2). Wire the ticker to derived items and the existing handleSelectWorktree. Verify the terminal, chat, and tracks views still size correctly after the layout change.",
           "status": "backlog"
         },
         {
           "id": "phase-4-task-5",
           "name": "Phase verification & checkpoint",
-          "description": "Per workflow.md. Automated: cd frontend && npm run check && CI=true npm test. Manual verification is dashboard-shaped per the workflow's frontend template — start the backend and Vite dev server, trigger an awaiting_permission state, and confirm the ticker shows the worktree marked as needing feedback, sorted first, and that clicking it opens the worktree.",
+          "description": "Per workflow.md. Automated: cd frontend && npm run check && CI=true npm test. Manual verification is dashboard-shaped per the workflow's frontend template \u2014 start the backend and Vite dev server, trigger an awaiting_permission state, and confirm the ticker shows the worktree marked as needing feedback, sorted first, and that clicking it opens the worktree.",
           "status": "backlog"
         }
       ]
@@ -157,7 +159,7 @@
         {
           "id": "phase-5-task-3",
           "name": "Phase verification & checkpoint",
-          "description": "Per workflow.md. Automated: cargo test. Manual verification is CLI-shaped per the workflow's backend/CLI template — with a worktree awaiting permission, run sebenza-cli worktree list and confirm the status and feedback marker are visible without colour.",
+          "description": "Per workflow.md. Automated: cargo test. Manual verification is CLI-shaped per the workflow's backend/CLI template \u2014 with a worktree awaiting permission, run sebenza-cli worktree list and confirm the status and feedback marker are visible without colour.",
           "status": "backlog"
         }
       ]
