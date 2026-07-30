@@ -45,14 +45,14 @@
         {
           "id": "phase-5",
           "name": "CLI parity",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification."
         }
       ],
       "progress": {
         "total_tasks": 20,
-        "completed_tasks": 13,
-        "percentage": 65.0
+        "completed_tasks": 15,
+        "percentage": 75.0
       }
     }
   ]

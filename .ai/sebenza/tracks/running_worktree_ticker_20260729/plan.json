@@ -156,26 +156,29 @@
     {
       "id": "phase-5",
       "name": "CLI parity",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-5-task-1",
           "name": "Write tests for worktree list rendering status and feedback",
           "description": "Inline #[cfg(test)] tests alongside print_list in crates/sebenza-cli/src/worktree.rs. Assert status appears in the human-readable output (FR5.1) and that a worktree with feedbackState != none carries a marker distinguishable in plain text without colour (FR5.2, AC11). print_list currently derives its printed status only from mux/archived and never reads the status field the CLI already deserializes. Confirm failing first.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "b8c6e68"
         },
         {
           "id": "phase-5-task-2",
           "name": "Implement status and feedback marker in worktree list",
           "description": "Extend the Row type and print_list to render status and the feedback marker (FR5.1, FR5.2, FR5.3). No new subcommand or operation (FR5.4). This is what makes Guiding Principle 8 genuinely satisfied rather than carved out.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "b8c6e68"
         },
         {
           "id": "phase-5-task-3",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md. Automated: cargo test. Manual verification is CLI-shaped per the workflow's backend/CLI template \u2014 with a worktree awaiting permission, run sebenza-cli worktree list and confirm the status and feedback marker are visible without colour.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "Automated verification passed (cargo test 158+9+17, fmt clean, no new clippy). Manual verification pending with the user; all five phases are code-complete so phases 1-5 can be verified in one pass. Checkpoint SHA to be recorded against b8c6e68."
         }
       ]
     }
