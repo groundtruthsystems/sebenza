@@ -189,6 +189,7 @@ mod tests {
             },
             agent: AgentRuntimeState {
                 lifecycle: AgentLifecycle::Closed,
+                feedback_state: crate::domain::model::AgentFeedbackState::None,
                 runtime: "host".to_string(),
                 last_started_at: None,
                 last_event_at: None,

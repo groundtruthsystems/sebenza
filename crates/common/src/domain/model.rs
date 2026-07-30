@@ -199,6 +199,32 @@ pub enum AgentLifecycle {
     Error,
 }
 
+/// Whether a worktree is waiting on an explicit human response, independent of
+/// [`AgentLifecycle`].
+///
+/// Provider-neutral on purpose. It is not merely a restatement of
+/// `AwaitingPermission`: an agent that asks a free-text question is still `Running`,
+/// so the lifecycle alone cannot express "this one needs a human". Keeping the answer
+/// in one field means the dashboard reads a single signal rather than unioning two
+/// orthogonal concepts.
+///
+/// Set only from observable runtime events. Never inferred from idleness, CI/PR state,
+/// errors, or unread notifications — a false "needs you" badge is worse than none.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFeedbackState {
+    /// Nothing is waiting on the user.
+    #[default]
+    None,
+    /// Blocked on a permission decision the agent is showing in its own UI.
+    PermissionRequest,
+    /// The agent asked a free-text question awaiting a human answer.
+    ///
+    /// Reserved. No built-in adapter can observe such an event today, so nothing sets
+    /// this yet; consumers must still render it correctly if it ever appears.
+    UserQuestion,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GitWorktreeRuntimeState {
@@ -223,6 +249,10 @@ pub struct SessionRuntimeState {
 pub struct AgentRuntimeState {
     pub runtime: String, // "host" | "docker"
     pub lifecycle: AgentLifecycle,
+    /// Written in the same `apply_event` arm as `lifecycle`, never from a separate path,
+    /// so the two cannot drift apart.
+    #[serde(default)]
+    pub feedback_state: AgentFeedbackState,
     pub last_started_at: Option<String>,
     pub last_event_at: Option<String>,
     pub last_error: Option<String>,
