@@ -21,13 +21,13 @@
         {
           "id": "phase-1",
           "name": "Runtime feedback state",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification, deferred until the frontend lands."
         },
         {
           "id": "phase-2",
           "name": "Snapshot and contract",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
@@ -51,8 +51,8 @@
       ],
       "progress": {
         "total_tasks": 20,
-        "completed_tasks": 3,
-        "percentage": 15.0
+        "completed_tasks": 5,
+        "percentage": 25.0
       }
     }
   ]

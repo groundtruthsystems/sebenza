@@ -33,33 +33,36 @@
           "id": "phase-1-task-4",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md Phase Completion Verification and Checkpointing Protocol. Automated: cargo test. Manual verification is backend-shaped \u2014 drive an awaiting_permission runtime event and confirm the state transition and single tracing record.",
-          "status": "doing"
+          "status": "blocked",
+          "blocked_reason": "Automated verification passed (cargo test 155+3+17, fmt clean, no new clippy). Manual verification deferred by user until the frontend lands in phase 4, since feedbackState is not yet on the API and the only external evidence this phase produced is a log line. Checkpoint SHA to be recorded against da5363d once end-to-end verification is possible."
         }
       ]
     },
     {
       "id": "phase-2",
       "name": "Snapshot and contract",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for snapshot serialization of feedbackState",
           "description": "Inline Rust tests alongside the snapshot mapping in crates/common/src/services/snapshot.rs. Assert feedbackState serializes adjacent to status for each variant (FR2.1) and that an absent field deserializes as none for backward compatibility (FR2.4, NFR5). Confirm failing first.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "4cfefdf"
         },
         {
           "id": "phase-2-task-2",
           "name": "Implement snapshot serialization of feedbackState",
           "description": "Map the runtime feedback state onto the worktree snapshot next to status. Do not add any free-text field to WorktreeSnapshot or RuntimeEvent \u2014 the data-classification claim in design.md depends on there being no carrier for prompt/tool/terminal content (FR3.6).",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "4cfefdf"
         },
         {
           "id": "phase-2-task-3",
           "name": "Write tests for contract and mapWorktree carrying feedbackState",
           "description": "Colocated frontend tests. Assert the Zod worktree snapshot schema accepts the three variants and rejects an unknown value (FR2.2), and that mapWorktree surfaces feedbackState on WorktreeInfo (FR2.3). The mapWorktree test is the important one: it picks named fields rather than spreading, so without it the field is silently dropped and every downstream test would still pass against stubs. Confirm failing first.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-2-task-4",
