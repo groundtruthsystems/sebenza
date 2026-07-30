@@ -33,13 +33,13 @@
         {
           "id": "phase-3",
           "name": "Ticker item derivation",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification, deferred until the frontend lands."
         },
         {
           "id": "phase-4",
           "name": "Ticker component and App shell",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
@@ -51,8 +51,8 @@
       ],
       "progress": {
         "total_tasks": 20,
-        "completed_tasks": 7,
-        "percentage": 35.0
+        "completed_tasks": 9,
+        "percentage": 45.0
       }
     }
   ]

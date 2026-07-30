@@ -91,33 +91,36 @@
           "id": "phase-3-task-1",
           "name": "Write tests for deriveTickerItems",
           "description": "Colocated deriveTickerItems.test.ts. Cover the eligibility predicate exactly as specified (FR3.2): included for status starting/running/awaiting_permission and for any feedbackState != none even when not executing; excluded for archived, kind == main, a worktree in a creation phase, and plain idle/stopped/error. Cover feedback-first ordering with snapshot order preserved within each group and stability across refreshes (FR3.3), label-else-branch naming (FR3.4), the selected-item flag (FR3.5), and that no excluded field leaks into an item (FR3.6). Confirm failing first.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "8da33e2"
         },
         {
           "id": "phase-3-task-2",
           "name": "Implement deriveTickerItems",
           "description": "Pure module taking WorktreeInfo[] plus the selected branch and returning TickerItem[] (FR3.1). No JSX, no store access, no side effects. Keep the predicate literal and readable so it can be checked against the spec line by line.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "8da33e2"
         },
         {
           "id": "phase-3-task-3",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md. Automated: cd frontend && CI=true npm test. This phase has no user-visible surface yet; manual verification is limited to confirming the derived output for a seeded snapshot.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "Automated verification passed (npm run check clean, CI=true npm test 204 passing). Manual verification deferred by user until the frontend lands in phase 4; this phase has no user-visible surface of its own. Checkpoint SHA to be recorded against 8da33e2."
         }
       ]
     },
     {
       "id": "phase-4",
       "name": "Ticker component and App shell",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-4-task-1",
           "name": "Write tests for ActiveWorktreeTicker",
           "description": "Colocated ActiveWorktreeTicker.test.tsx. Assert: renders nothing and occupies no height with an empty item list (FR4.3, AC8); feedback items carry accompanying text, not colour alone (FR4.5, AC11); the region is a labelled navigation landmark containing buttons with selected state and feedback kind exposed to assistive technology (FR4.7); clicking an item invokes the passed callback exactly once with the right branch and does nothing else (FR4.4); branch and label render as text (FR4.8). Confirm failing first.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-4-task-2",
