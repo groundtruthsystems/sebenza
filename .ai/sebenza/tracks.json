@@ -63,14 +63,14 @@
         {
           "id": "phase-8",
           "name": "CLI parity for cross-project listing",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification."
         }
       ],
       "progress": {
         "total_tasks": 31,
-        "completed_tasks": 21,
-        "percentage": 67.7
+        "completed_tasks": 23,
+        "percentage": 74.2
       }
     }
   ]
