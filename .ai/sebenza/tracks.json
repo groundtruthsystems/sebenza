@@ -10,7 +10,7 @@
     {
       "track_id": "running_worktree_ticker_20260729",
       "type": "feature",
-      "description": "Add a full-width ticker for active worktrees and explicit feedback requests.",
+      "description": "Add a full-width ticker for active worktrees and explicit feedback requests, across all loaded projects.",
       "status": "doing",
       "created_at": "2026-07-29T22:53:32Z",
       "updated_at": "2026-07-29T23:19:06Z",
@@ -47,12 +47,30 @@
           "name": "CLI parity",
           "status": "blocked",
           "blocked_reason": "Phase checkpoint awaiting manual verification."
+        },
+        {
+          "id": "phase-6",
+          "name": "Cross-project active-worktree endpoint",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-7",
+          "name": "Cross-project ticker",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-8",
+          "name": "CLI parity for cross-project listing",
+          "status": "backlog",
+          "blocked_reason": null
         }
       ],
       "progress": {
-        "total_tasks": 20,
+        "total_tasks": 31,
         "completed_tasks": 15,
-        "percentage": 75.0
+        "percentage": 48.4
       }
     }
   ]

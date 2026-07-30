@@ -403,3 +403,59 @@ scope for this track. The remaining questions below are still open.
 - Does any supported agent fire a tool-permission request concurrently with other tool activity in
   the same turn? This decides whether the clear-on-next-lifecycle-event heuristic is safe or must
   be replaced by a correlation field before `user_question` ships.
+
+## Addendum — Cross-project visibility (2026-07-29)
+
+Added after the per-project ticker was built, on the user's explicit decision to extend this track
+rather than open a new one. Recorded here because the change skips the architect stage, so the
+reasoning would otherwise exist nowhere: it alters the selection contract the rest of this design
+leans on.
+
+**Problem.** Switching projects hides the other projects' running work. The ticker reads
+`GET /api/worktrees`, which is scoped to one project prefix, so it can only ever show the project
+being viewed.
+
+**Why it is reachable.** One server process already owns runtime state for every project it serves
+(`ProjectManager` holds an `IndexMap<prefix, Arc<ProjectApp>>`, with `list_all`), and the router
+already has a hub tier with no project prefix (`/api/projects`, `/api/registry`, `/api/instances`).
+No new state or storage is needed — only a hub-level read.
+
+**Ruled out.** The existing `/api/registry` portfolio aggregates each project's `tracks.json`, i.e.
+Sebenza planning tracks, not live agent state. It cannot answer this.
+
+### Decisions
+
+1. **New hub endpoint** `GET /api/active-worktrees`, returning `{ projects: [{ prefix, name,
+   worktrees: [...] }] }` built from `ProjectManager::list_all`. Unauthenticated, like every other
+   hub route.
+2. **Eligibility stays in one place.** The endpoint returns worktree snapshots; the frontend runs the
+   existing `deriveTickerItems` per project and concatenates, so the predicate is not reimplemented
+   server-side and cannot drift from the spec.
+3. **Items gain a project identity.** `projectPrefix` and `projectName` are added, and item keys
+   become `prefix + branch` — branch alone stops being unique across projects. Foreign items display
+   their project name so a branch collision is distinguishable.
+4. **Ordering is feedback-first across all projects**, then grouped by project in registry order.
+   A worktree waiting on the user matters more than which project it belongs to.
+5. **Cross-prefix selection is a navigation, not a callback.** Selecting a worktree in the current
+   project keeps using `handleSelectWorktree`; selecting one in another project performs
+   `window.location.assign('/<prefix>/')`, matching `ProjectSwitcher`. It cannot be client-side:
+   `activePrefix` and `apiBase` are derived from `window.location.pathname` at module load, so a
+   client-side route change would leave every API call pointed at the old project.
+6. **No new timer.** The hub fetch folds into the existing foreground poll cycle. This is a
+   deliberate, narrow relaxation of the original "no independent poll" constraint — cross-project
+   data provably cannot come from a project-scoped snapshot — but it must not become a second
+   interval.
+7. **CLI parity** (Guiding Principle 8) requires the same cross-project view from
+   `sebenza-cli list --all-projects`.
+
+### Limitations, named rather than discovered later
+
+- **Only loaded projects appear.** Projects are initialized lazily, so a registered project this
+  server has not touched since starting holds no runtime state and contributes nothing. This is the
+  same in-memory limitation as the restart false-absence case above, widened to project scope.
+- **One server instance only.** With multiple instances (`/api/instances`), a server cannot see
+  another's runtime state without a network hop. Out of scope.
+- **Information disclosure is widened, though not to a new class.** Any client on the port can
+  already enumerate every project's path and tracks via `/api/registry`; this adds branch and label
+  names across projects to that surface. It does not change the loopback-by-default posture, and the
+  accepted control-token threat (row 1) is unaffected.

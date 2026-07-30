@@ -181,6 +181,96 @@
           "blocked_reason": "Automated verification passed (cargo test 158+9+17, fmt clean, no new clippy). Manual verification pending with the user; all five phases are code-complete so phases 1-5 can be verified in one pass. Checkpoint SHA to be recorded against b8c6e68."
         }
       ]
+    },
+    {
+      "id": "phase-6",
+      "name": "Cross-project active-worktree endpoint",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-6-task-1",
+          "name": "Write tests for the cross-project aggregate",
+          "description": "Inline Rust tests for a pure aggregate builder over the loaded projects: each project contributes its prefix, name, and worktree snapshots; a project with no worktrees still appears (so the caller can tell 'nothing running' from 'not loaded'); registry order is preserved. Confirm failing first.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6-task-2",
+          "name": "Implement the hub endpoint and contract",
+          "description": "Aggregate builder over ProjectManager::list_all, wired to a new hub route GET /api/active-worktrees (no project prefix, alongside /api/projects and /api/registry). Add the route to the ts-rest contract in frontend/src/lib/api-contract with a matching api.ts wrapper \u2014 a per-task quality gate. Reuse the existing WorktreeSnapshot shape so the frontend can run the same derivation.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6-task-3",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cargo test && cd frontend && npm run check. Manual: curl the hub endpoint with two projects loaded and confirm both appear.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-7",
+      "name": "Cross-project ticker",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-7-task-1",
+          "name": "Write tests for cross-project derivation",
+          "description": "Extend ticker tests: items carry projectPrefix and projectName; keys are prefix+branch so the same branch name in two projects yields two distinct items; feedback-first ordering holds across projects, then project order within each group; the current project's behaviour is unchanged when only one project is present. Confirm failing first.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-7-task-2",
+          "name": "Implement cross-project derivation",
+          "description": "Extend deriveTickerItems (or add a thin cross-project wrapper over it) so eligibility stays defined once. Do not reimplement the predicate per project.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-7-task-3",
+          "name": "Write tests for foreign-project display and navigation",
+          "description": "Component: a foreign item shows its project name, and a same-project item does not (noise). App: selecting a same-project item still calls handleSelectWorktree; selecting a foreign item navigates to /<prefix>/ rather than calling it \u2014 assert against a stubbed navigation, since apiBase is derived at module load and a client-side route change would leave API calls pointed at the old project. Confirm failing first.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-7-task-4",
+          "name": "Implement foreign-project display and navigation",
+          "description": "Project name on foreign items only; selection branches on prefix. Fold the hub fetch into the existing foreground poll cycle \u2014 no second interval (design addendum, decision 6).",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-7-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cd frontend && npm run check && CI=true npm test. Manual: with two projects loaded and an agent running in each, confirm both appear in the ticker and that clicking the foreign one switches project.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-8",
+      "name": "CLI parity for cross-project listing",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-8-task-1",
+          "name": "Write tests for list --all-projects",
+          "description": "Inline tests over list_lines (or its cross-project equivalent): each project's worktrees are grouped and labelled by project, feedback markers still render, and the flag's absence leaves current output byte-identical. Confirm failing first.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-8-task-2",
+          "name": "Implement list --all-projects",
+          "description": "Read the hub endpoint and render grouped output. Update the list usage text. Satisfies Guiding Principle 8 for the cross-project view rather than leaving it dashboard-only.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-8-task-3",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cargo test. Manual: sebenza-cli list --all-projects with two projects loaded.",
+          "status": "backlog"
+        }
+      ]
     }
   ]
 }
