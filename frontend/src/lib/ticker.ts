@@ -1,14 +1,5 @@
 import type { ActiveProjectWorktrees, WorktreeFeedbackState, WorktreeInfo } from "./types";
 
-/** Statuses that count as "this worktree is executing right now".
- *
- *  `awaiting_permission` is listed alongside the two active statuses deliberately.
- *  It is redundant with the feedback-state test below, because the server sets both
- *  fields in one place — but the item stays eligible even if the two ever disagree,
- *  and a worktree wrongly dropped from the ticker is invisible rather than merely
- *  mislabelled. */
-const ACTIVE_STATUSES = ["starting", "running", "awaiting_permission"] as const;
-
 /** One entry in the active-worktree ticker.
  *
  *  Display fields only. Nothing here may carry question text, prompts, tool input or
@@ -33,19 +24,28 @@ function needsFeedback(worktree: WorktreeInfo): boolean {
 
 /** Whether a worktree belongs in the ticker at all.
  *
- *  Kept as one readable expression so it can be checked line by line against the
- *  spec. The creation term is explicit rather than implied by status: nothing in the
- *  data model stops a worktree mid-creation from also reporting a status, so relying
- *  on status alone would let half-built worktrees flicker through the ticker. */
+ *  Keyed off the session being alive rather than the reported lifecycle. `status` is
+ *  event-driven: it is only populated when the agent posted lifecycle events to the
+ *  server process currently answering, and reconciliation never reconstructs it. In
+ *  practice most worktrees with a running agent report `closed` — because their agent
+ *  reports to a different (or since-restarted) server, since each worktree records the
+ *  server that created it. Gating on status therefore hid most of the work in flight.
+ *
+ *  `mux` is the opposite kind of fact: reconciliation observes the tmux session locally
+ *  every poll, so it is true whenever a session really exists, regardless of which
+ *  server the agent talks to. Status is still carried on the item for display.
+ *
+ *  A pending feedback state keeps a worktree eligible even once its session is gone, so
+ *  something blocked on the user does not vanish at the moment it needs attention.
+ *
+ *  The creation term is explicit rather than implied: nothing in the data model stops a
+ *  worktree mid-creation from also reporting a session or a status. */
 function isEligible(worktree: WorktreeInfo): boolean {
   if (worktree.archived) return false;
   if (worktree.kind === "main") return false;
   if (worktree.creating) return false;
 
-  return (
-    ACTIVE_STATUSES.includes(worktree.status as (typeof ACTIVE_STATUSES)[number])
-    || needsFeedback(worktree)
-  );
+  return worktree.mux === "\u2713" || needsFeedback(worktree);
 }
 
 function displayName(worktree: WorktreeInfo): string {

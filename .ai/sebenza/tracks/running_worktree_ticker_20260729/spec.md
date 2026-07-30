@@ -16,7 +16,10 @@ blocked waiting on them — in either surface.
 **Planning decisions fixed for this track:**
 
 1. Only `permission_request` is ever set. `user_question` ships in the enum but is never produced.
-2. A worktree in `starting` appears immediately; the predicate does not consult tmux liveness.
+2. ~~A worktree in `starting` appears immediately; the predicate does not consult tmux
+   liveness.~~ **Reversed 2026-07-30:** the predicate now keys off tmux liveness (`mux`)
+   precisely because the status-based rule hid most running work. A `starting` worktree
+   still appears immediately once its session exists.
 3. CLI parity is in scope, not deferred.
 
 ## Functional Requirements
@@ -57,8 +60,10 @@ blocked waiting on them — in either surface.
 - FR3.1 Add a pure module `deriveTickerItems` taking `WorktreeInfo[]` (plus the selected branch)
   and returning ticker items. It contains no JSX and no store access.
 - FR3.2 Eligibility is exactly:
-  `!archived && kind != main && creation == none &&
-  (status in {starting, running, awaiting_permission} || feedbackState != none)`.
+  `!archived && kind != main && creation == none && (mux || feedbackState != none)`.
+  **Revised 2026-07-30** after the original status-based rule was found to hide most work
+  in flight — see `design.md`, "Addendum — eligibility keys off session liveness".
+  `status` remains on the item for display but no longer gates inclusion.
 - FR3.3 Ordering: all feedback-needed items (`feedbackState != none`) before execution-only items;
   snapshot order preserved within each group. Ordering must be stable across refreshes.
 - FR3.4 Each item's display name is the worktree label when present, otherwise its branch.
@@ -121,8 +126,12 @@ blocked waiting on them — in either surface.
   feedback marker clears in both surfaces within one poll interval.
 - AC4 An agent that stops or errors while awaiting permission leaves **no** feedback marker in
   either surface.
-- AC5 Archived worktrees, the main checkout, worktrees in a creation phase, and plain
-  idle/stopped/error worktrees never appear in the ticker.
+- AC5 Archived worktrees, the main checkout, and worktrees in a creation phase never
+  appear in the ticker. A worktree with no live session and no pending feedback never
+  appears either, whatever its reported status.
+- AC12 A worktree with a live agent session appears in the ticker even when its reported
+  status is `closed` or `idle` — i.e. even when its agent reports to a different or
+  since-restarted server.
 - AC6 Selecting a ticker item selects that worktree, reveals it in filters if hidden, clears its
   unread marker, closes the sidebar on mobile, and resets the view to terminal — identical to
   selecting it in the sidebar.

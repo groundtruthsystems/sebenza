@@ -459,3 +459,51 @@ Sebenza planning tracks, not live agent state. It cannot answer this.
   already enumerate every project's path and tracks via `/api/registry`; this adds branch and label
   names across projects to that surface. It does not change the loopback-by-default posture, and the
   accepted control-token threat (row 1) is unaffected.
+
+
+## Addendum — eligibility keys off session liveness (2026-07-30)
+
+Written after the cross-project ticker shipped and the user reported that another
+project's running agents still did not appear. The endpoint was correct; the *predicate*
+was wrong, and the original design understated why.
+
+**What was wrong.** Eligibility gated on `status`, which is the string projection of the
+runtime's event-driven `AgentLifecycle`. Two properties make it unfit for that job:
+
+- It is only populated when the agent posts lifecycle events to *the server process
+  currently answering the request*. Each worktree records the server that created it in
+  its `control.env`, so a worktree created by a different (or since-restarted) server
+  reports nothing this dashboard can see.
+- Reconciliation never reconstructs it — the design's own invariant, "the agent sub-state
+  is event-driven and never overwritten by reconcile".
+
+Measured on a live instance: **9 of 12 worktrees reported `status = closed` while holding
+a live tmux session**, and the one project the user asked about contributed zero items.
+The original design called this the "restart false-absence" limitation and treated it as
+an edge case. It is the dominant case. That was a misjudgement in the design, not merely
+an implementation slip.
+
+**Revised rule.**
+
+```
+eligible = !archived && kind != main && creation == none && (mux || feedbackState != none)
+```
+
+`mux` is a fact of the opposite kind: reconciliation observes the tmux session locally on
+every poll, so it is true whenever a session really exists, independent of which server
+the agent talks to or when it last spoke. That is why this also fixes the cross-server and
+post-restart cases, which no status-based rule could.
+
+`feedbackState` still keeps a worktree eligible after its session ends, so something
+blocked on the user does not vanish at the moment it needs attention. `status` stays on the
+item for display.
+
+**Accepted cost.** "Active" now means "has an agent session open", which includes idle
+sessions. A worktree whose pane is open but doing nothing will appear. This was chosen
+deliberately over the alternative — a ticker that silently omits most running work is
+worse than one that occasionally includes a quiet session, because the first failure is
+invisible and the second is merely noisy.
+
+**Not done here.** Reconstructing `AgentLifecycle` from tmux at reconcile time would make
+`status` trustworthy for the sidebar and CLI too, not just the ticker. It breaks the
+event-driven invariant above and deserves its own track.

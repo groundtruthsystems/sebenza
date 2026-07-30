@@ -38,52 +38,60 @@ const branchesOf = (worktrees: WorktreeInfo[], selected: string | null = null): 
   deriveTickerItems(worktrees, selected).map((item) => item.branch);
 
 describe("deriveTickerItems eligibility", () => {
-  it("includes worktrees that are executing", () => {
+  it("includes any worktree with a live agent session, whatever its reported status", () => {
+    // Eligibility keys off the session actually being alive, not the reported lifecycle.
+    // `status` is event-driven and only populated when the agent posted events to THIS
+    // server process; in practice most worktrees with a live session report "closed".
     const worktrees = [
-      createWorktree("starting-wt", { status: "starting" }),
       createWorktree("running-wt", { status: "running" }),
+      createWorktree("idle-wt", { status: "idle" }),
+      createWorktree("no-events-wt", { status: "closed" }),
       createWorktree("awaiting-wt", {
         status: "awaiting_permission",
         feedbackState: "permission_request",
       }),
     ];
 
-    expect(branchesOf(worktrees)).toEqual(["awaiting-wt", "starting-wt", "running-wt"]);
+    expect(branchesOf(worktrees)).toEqual([
+      "awaiting-wt",
+      "running-wt",
+      "idle-wt",
+      "no-events-wt",
+    ]);
   });
 
-  it("includes a worktree awaiting feedback even when it has stopped executing", () => {
-    // The whole point of the ticker: something blocked on the user must stay visible
-    // after the agent has gone quiet, or it disappears exactly when it needs attention.
+  it("includes a worktree awaiting feedback even with no live session", () => {
+    // Something blocked on the user must stay visible after the session has gone, or it
+    // disappears exactly when it needs attention.
     const worktrees = [
-      createWorktree("blocked-but-idle", {
-        status: "idle",
+      createWorktree("blocked-no-session", {
+        mux: "",
+        status: "stopped",
         feedbackState: "permission_request",
       }),
     ];
 
-    expect(branchesOf(worktrees)).toEqual(["blocked-but-idle"]);
+    expect(branchesOf(worktrees)).toEqual(["blocked-no-session"]);
   });
 
-  it("excludes worktrees that are neither executing nor waiting on the user", () => {
+  it("excludes worktrees with neither a live session nor pending feedback", () => {
     const worktrees = [
-      createWorktree("idle-wt", { status: "idle" }),
-      createWorktree("stopped-wt", { status: "stopped" }),
-      createWorktree("error-wt", { status: "error" }),
-      createWorktree("closed-wt", { status: "closed" }),
+      createWorktree("closed-wt", { mux: "", status: "closed" }),
+      createWorktree("stopped-wt", { mux: "", status: "stopped" }),
+      createWorktree("error-wt", { mux: "", status: "error" }),
     ];
 
     expect(branchesOf(worktrees)).toEqual([]);
   });
 
   it("excludes archived worktrees, the main checkout, and worktrees still being created", () => {
+    // Each has a live session, so these are real exclusions rather than incidental ones.
     const worktrees = [
       createWorktree("archived-wt", { archived: true }),
       createWorktree("main", { kind: "main" }),
       createWorktree("creating-wt", { creating: true, creationPhase: "starting_session" }),
     ];
 
-    // Each would otherwise qualify on status alone, so these are real exclusions rather
-    // than incidental ones.
     expect(branchesOf(worktrees)).toEqual([]);
   });
 
@@ -104,7 +112,7 @@ describe("deriveTickerItems eligibility", () => {
 
   it("renders nothing when no worktree qualifies", () => {
     expect(deriveTickerItems([], null)).toEqual([]);
-    expect(deriveTickerItems([createWorktree("idle-wt", { status: "idle" })], null)).toEqual([]);
+    expect(deriveTickerItems([createWorktree("gone", { mux: "" })], null)).toEqual([]);
   });
 });
 
@@ -325,7 +333,7 @@ describe("deriveCrossProjectTickerItems", () => {
     const items = deriveCrossProjectTickerItems(
       [
         project("alpha", "Alpha", [
-          createWorktree("idle-wt", { status: "idle" }),
+          createWorktree("no-session-wt", { mux: "" }),
           createWorktree("archived-wt", { archived: true }),
           createWorktree("main", { kind: "main" }),
           createWorktree("running-wt"),
@@ -343,7 +351,7 @@ describe("deriveCrossProjectTickerItems", () => {
     // produce an empty group or a placeholder item.
     const items = deriveCrossProjectTickerItems(
       [
-        project("quiet", "Quiet", [createWorktree("idle-wt", { status: "idle" })]),
+        project("quiet", "Quiet", [createWorktree("no-session-wt", { mux: "" })]),
         project("empty", "Empty", []),
         project("busy", "Busy", [createWorktree("running-wt")]),
       ],
