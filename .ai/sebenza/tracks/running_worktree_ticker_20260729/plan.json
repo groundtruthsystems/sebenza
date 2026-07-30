@@ -26,13 +26,14 @@
           "id": "phase-1-task-3",
           "name": "Add content-free tracing for feedback_state transitions",
           "description": "Write tests first for a small record-formatting helper, then implement it and call it from apply_event. One structured record per transition: timestamp, worktree_id, triggering event kind, old state, new state (FR1.6). Tests must assert the record contains no prompt, tool, terminal, or branch content and no control token. The runtime-event path has zero tracing calls today, so this is the first; keep it to the transition only, not general event logging.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "e112625"
         },
         {
           "id": "phase-1-task-4",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md Phase Completion Verification and Checkpointing Protocol. Automated: cargo test. Manual verification is backend-shaped \u2014 drive an awaiting_permission runtime event and confirm the state transition and single tracing record.",
-          "status": "backlog"
+          "status": "doing"
         }
       ]
     },
