@@ -448,3 +448,58 @@ pub struct NotificationView {
     pub url: Option<String>,
     pub timestamp: i64,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feedback_state_as_str_matches_its_wire_spelling() {
+        // `as_str` feeds the transition log while serde feeds the snapshot. If they ever
+        // disagreed, a log line and the dashboard would name the same state differently
+        // and neither would be wrong on its own — so pin them to each other.
+        for state in [
+            AgentFeedbackState::None,
+            AgentFeedbackState::PermissionRequest,
+            AgentFeedbackState::UserQuestion,
+        ] {
+            let json = serde_json::to_string(&state).expect("state should serialize");
+            assert_eq!(
+                json,
+                format!("\"{}\"", state.as_str()),
+                "as_str and serde disagree about {state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn feedback_state_wire_spelling_is_snake_case() {
+        // Matches the `status` field's convention, which is produced by an explicit
+        // mapping rather than serde. The frontend contract keys off these literals.
+        assert_eq!(AgentFeedbackState::None.as_str(), "none");
+        assert_eq!(
+            AgentFeedbackState::PermissionRequest.as_str(),
+            "permission_request"
+        );
+        assert_eq!(AgentFeedbackState::UserQuestion.as_str(), "user_question");
+    }
+
+    #[test]
+    fn agent_state_written_before_feedback_existed_still_loads() {
+        // Backward compatibility: `~/.ai/sebenza` registries and any persisted agent state
+        // predate this field, and a reader that refused them would strand the worktree.
+        let legacy = serde_json::json!({
+            "runtime": "host",
+            "lifecycle": "idle",
+            "lastStartedAt": null,
+            "lastEventAt": null,
+            "lastError": null,
+        });
+
+        let state: AgentRuntimeState =
+            serde_json::from_value(legacy).expect("legacy agent state must still deserialize");
+
+        assert_eq!(state.feedback_state, AgentFeedbackState::None);
+        assert_eq!(state.lifecycle, AgentLifecycle::Idle);
+    }
+}
