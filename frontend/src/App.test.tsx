@@ -1123,4 +1123,55 @@ describe("App create selection", () => {
 
     expect(await screen.findByText(/agent is not configured/)).toBeInTheDocument();
   });
+  /**
+   * The ticker reuses `handleSelectWorktree`, so its side effects come along for free —
+   * except the terminal-view reset, which is not in that callback at all but in a
+   * separate effect keyed on `selectedBranch`. That indirection is the thing most likely
+   * to be refactored away without anyone noticing the ticker depended on it, so it is
+   * asserted explicitly rather than assumed.
+   */
+  it("selects a worktree from the ticker exactly as the sidebar does", async () => {
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("feature/alpha", { status: "running", mux: "\u2713" }),
+      createWorktree("feature/blocked", {
+        status: "awaiting_permission",
+        feedbackState: "permission_request",
+        mux: "\u2713",
+      }),
+    ]);
+
+    render(<App />);
+
+    const ticker = await screen.findByRole("navigation", { name: /active worktrees/i });
+    // Feedback-first ordering puts the blocked worktree ahead of the running one.
+    const tickerButtons = within(ticker).getAllByRole("button");
+    expect(tickerButtons.map((button) => button.textContent)).toEqual([
+      expect.stringContaining("feature/blocked"),
+      expect.stringContaining("feature/alpha"),
+    ]);
+
+    fireEvent.click(tickerButtons[0]);
+
+    await waitFor(() => {
+      expect(
+        within(ticker).getByRole("button", { name: /feature\/blocked/ }).getAttribute("aria-current"),
+      ).toBe("true");
+    });
+    // The terminal view, reached only through the selectedBranch effect.
+    expect(await screen.findByTitle("feature/blocked")).toBeInTheDocument();
+  });
+
+  it("shows no ticker when no worktree is executing or awaiting feedback", async () => {
+    vi.mocked(fetchWorktrees).mockResolvedValue([
+      createWorktree("feature/alpha", { status: "idle" }),
+      createWorktree("main", { kind: "main", status: "running" }),
+    ]);
+
+    render(<App />);
+
+    // Wait for the snapshot to land before asserting an absence, or the assertion would
+    // pass simply because nothing has rendered yet.
+    await screen.findByRole("button", { name: /^feature\/alpha\b/i });
+    expect(screen.queryByRole("navigation", { name: /active worktrees/i })).not.toBeInTheDocument();
+  });
 });

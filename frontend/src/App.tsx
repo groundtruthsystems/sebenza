@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import WorktreeList from "./lib/WorktreeList";
+import ActiveWorktreeTicker from "./lib/ActiveWorktreeTicker";
+import { deriveTickerItems } from "./lib/ticker";
 import TopBar from "./lib/TopBar";
 import Terminal, { type TerminalHandle } from "./lib/Terminal";
 import ConfirmDialog from "./lib/ConfirmDialog";
@@ -195,6 +197,12 @@ export default function App() {
   const visibleWorktreeRows = useMemo(
     () => buildWorktreeListRows(visibleWorktrees),
     [visibleWorktrees],
+  );
+  // Derived from the full snapshot, not the filtered list: the ticker is a status radiator
+  // and must not hide a worktree that needs a response merely because a search is active.
+  const tickerItems = useMemo(
+    () => deriveTickerItems(worktrees, selectedBranch),
+    [worktrees, selectedBranch],
   );
   const creatingWorktrees = useMemo(() => worktrees.filter((w) => w.creating), [worktrees]);
   const backendCreatingCount = creatingWorktrees.length;
@@ -1060,10 +1068,16 @@ export default function App() {
 
   return (
     <>
+      {/* The shell is a column so the ticker can span the full width above the
+          sidebar/workspace row. That row was previously the root element; it keeps its own
+          layout and now flexes to fill whatever height the ticker leaves. */}
       <div
-        className={`flex h-dvh bg-surface text-primary ${isResizingSidebar ? "select-none" : ""}`}
+        className={`flex h-dvh flex-col bg-surface text-primary ${isResizingSidebar ? "select-none" : ""}`}
         style={isResizingSidebar ? { cursor: "col-resize" } : undefined}
       >
+        <ActiveWorktreeTicker items={tickerItems} onselect={handleSelectWorktree} />
+
+        <div className="flex min-h-0 flex-1">
         {/* Sidebar: fixed overlay on mobile, static on desktop */}
         {(!isMobile || sidebarOpen) && (
           <>
@@ -1388,6 +1402,7 @@ export default function App() {
             <PaneBar activePane={activePane} panes={paneBarPanes} onselect={handlePaneSelect} />
           )}
         </main>
+        </div>
       </div>
 
       {showCreateDialog && (
