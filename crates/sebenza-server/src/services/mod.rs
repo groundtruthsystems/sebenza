@@ -6,6 +6,7 @@ pub use common::services::{
     session_restore_service, session_service, snapshot, tab_logic, worktree_service,
 };
 
+pub mod active_worktrees;
 pub mod agent_stream;
 pub mod oneshot_watcher_service;
 pub mod project_init_service;

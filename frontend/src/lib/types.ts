@@ -177,6 +177,18 @@ export interface WorktreeInfo {
   activeTabId: string | null;
 }
 
+/** One project's worktrees in the cross-project ticker, after mapping.
+ *
+ *  Distinct from the contract's `ActiveWorktreeProject`, which carries raw snapshots;
+ *  this holds `WorktreeInfo` so the same derivation runs over it as over the
+ *  single-project store. */
+export interface ActiveProjectWorktrees {
+  /** URL prefix — the identity the dashboard navigates to for another project. */
+  prefix: string;
+  name: string;
+  worktrees: WorktreeInfo[];
+}
+
 export interface WorktreeListRow {
   worktree: WorktreeInfo;
   depth: number;

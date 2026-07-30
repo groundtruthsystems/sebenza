@@ -651,6 +651,21 @@ export const ProjectSummarySchema = z.object({
   active: z.boolean(),
 });
 
+/** One project's slice of the cross-project ticker feed.
+ *
+ *  `worktrees` reuses the per-project snapshot shape so the same `deriveTickerItems`
+ *  runs over it — eligibility is defined once, on the client, and cannot drift between
+ *  the single-project and cross-project paths. */
+export const ActiveWorktreeProjectSchema = z.object({
+  prefix: z.string(),
+  name: z.string(),
+  worktrees: z.array(ProjectWorktreeSnapshotSchema).default([]),
+});
+
+export const ActiveWorktreesResponseSchema = z.object({
+  projects: z.array(ActiveWorktreeProjectSchema).default([]),
+});
+
 export const ProjectsResponseSchema = z.object({
   projects: z.array(ProjectSummarySchema),
 });
@@ -742,6 +757,8 @@ export type LaunchWorktreeRequest = z.infer<typeof LaunchWorktreeRequestSchema>;
 export type WorktreeSource = z.infer<typeof WorktreeSourceSchema>;
 export type WorktreeKind = z.infer<typeof WorktreeKindSchema>;
 export type WorktreeFeedbackState = z.infer<typeof WorktreeFeedbackStateSchema>;
+export type ActiveWorktreeProject = z.infer<typeof ActiveWorktreeProjectSchema>;
+export type ActiveWorktreesResponse = z.infer<typeof ActiveWorktreesResponseSchema>;
 export type CreateWorktreeResponse = z.infer<typeof CreateWorktreeResponseSchema>;
 export type SetWorktreeArchivedRequest = z.infer<typeof SetWorktreeArchivedRequestSchema>;
 export type SetWorktreeArchivedResponse = z.infer<typeof SetWorktreeArchivedResponseSchema>;

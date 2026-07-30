@@ -1,5 +1,6 @@
 import { AgentsUiConversationEventSchema, apiPaths, createApi } from "./api-contract";
 import type {
+  ActiveProjectWorktrees,
   AgentDetails,
   AgentResponse,
   AgentsUiConversationEvent,
@@ -125,6 +126,21 @@ export function deleteWorktreeTab(branch: string, tabId: string): Promise<void> 
 export async function fetchWorktrees(): Promise<WorktreeInfo[]> {
   const response = await api.fetchWorktrees();
   return response.worktrees.map((worktree) => mapWorktree(worktree));
+}
+
+/** Every loaded project's worktrees, for the cross-project ticker.
+ *
+ *  Hub-scoped, so it deliberately bypasses `apiBase`: the point is to see past the
+ *  active project. Returns the raw snapshots — the caller runs the same
+ *  `deriveTickerItems` used for the single-project ticker, so eligibility stays defined
+ *  in one place. */
+export async function fetchActiveWorktrees(): Promise<ActiveProjectWorktrees[]> {
+  const response = await hubApi.fetchActiveWorktrees();
+  return response.projects.map((project) => ({
+    prefix: project.prefix,
+    name: project.name,
+    worktrees: project.worktrees.map((worktree) => mapWorktree(worktree)),
+  }));
 }
 
 export async function setWorktreeLabel(branch: string, label: string | null): Promise<string | null> {
