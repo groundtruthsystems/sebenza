@@ -1,0 +1,166 @@
+{
+  "$schema": "sebenza-plan-v1",
+  "track_id": "running_worktree_ticker_20260729",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Runtime feedback state",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-1-task-1",
+          "name": "Write tests for feedback_state transitions in apply_event",
+          "description": "Inline #[cfg(test)] mod tests in crates/common/src/services/project_runtime.rs. Assert: AgentStatusChanged{lifecycle:\"awaiting_permission\"} sets lifecycle=AgentLifecycle::AwaitingPermission AND feedback_state=permission_request (FR1.2); the starting/running/idle arms set feedback_state=none (FR1.3); AgentStopped and RuntimeError each reset feedback_state to none from permission_request (FR1.4); reconcile paths never touch feedback_state (FR1.7). Confirm all fail before implementing.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-2",
+          "name": "Implement feedback_state and the apply_event arms",
+          "description": "Add the provider-neutral feedback state enum (none | permission_request | user_question) to the runtime agent sub-state in crates/common (FR1.1). Add the awaiting_permission arm to apply_event's AgentStatusChanged match, which currently falls through to _ => AgentLifecycle::Stopped, setting lifecycle and feedback_state in the SAME arm so they cannot drift (FR1.2). Set feedback_state=none on the starting/running/idle arms and unconditionally on AgentStopped/RuntimeError (FR1.3, FR1.4). Never set user_question anywhere (FR1.5). Note the existing oneshot_watcher_service AwaitingPermission branch becomes live once this lands — verify its existing test still passes rather than assuming it.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-3",
+          "name": "Add content-free tracing for feedback_state transitions",
+          "description": "Write tests first for a small record-formatting helper, then implement it and call it from apply_event. One structured record per transition: timestamp, worktree_id, triggering event kind, old state, new state (FR1.6). Tests must assert the record contains no prompt, tool, terminal, or branch content and no control token. The runtime-event path has zero tracing calls today, so this is the first; keep it to the transition only, not general event logging.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-4",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md Phase Completion Verification and Checkpointing Protocol. Automated: cargo test. Manual verification is backend-shaped — drive an awaiting_permission runtime event and confirm the state transition and single tracing record.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Snapshot and contract",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-2-task-1",
+          "name": "Write tests for snapshot serialization of feedbackState",
+          "description": "Inline Rust tests alongside the snapshot mapping in crates/common/src/services/snapshot.rs. Assert feedbackState serializes adjacent to status for each variant (FR2.1) and that an absent field deserializes as none for backward compatibility (FR2.4, NFR5). Confirm failing first.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-2",
+          "name": "Implement snapshot serialization of feedbackState",
+          "description": "Map the runtime feedback state onto the worktree snapshot next to status. Do not add any free-text field to WorktreeSnapshot or RuntimeEvent — the data-classification claim in design.md depends on there being no carrier for prompt/tool/terminal content (FR3.6).",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-3",
+          "name": "Write tests for contract and mapWorktree carrying feedbackState",
+          "description": "Colocated frontend tests. Assert the Zod worktree snapshot schema accepts the three variants and rejects an unknown value (FR2.2), and that mapWorktree surfaces feedbackState on WorktreeInfo (FR2.3). The mapWorktree test is the important one: it picks named fields rather than spreading, so without it the field is silently dropped and every downstream test would still pass against stubs. Confirm failing first.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-4",
+          "name": "Implement the contract, mapWorktree, and WorktreeInfo changes",
+          "description": "Add feedbackState to the ts-rest/Zod schema in frontend/src/lib/api-contract as a typed enum, not a bare string (FR2.2). Extend mapWorktree in frontend/src/lib/api.ts and the WorktreeInfo type in frontend/src/lib/types.ts (FR2.3). No new route, so no new api.ts wrapper is needed.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cargo test && cd frontend && CI=true npm test. Manual: confirm GET /api/worktrees returns feedbackState and that the browser store holds it.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "Ticker item derivation",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-3-task-1",
+          "name": "Write tests for deriveTickerItems",
+          "description": "Colocated deriveTickerItems.test.ts. Cover the eligibility predicate exactly as specified (FR3.2): included for status starting/running/awaiting_permission and for any feedbackState != none even when not executing; excluded for archived, kind == main, a worktree in a creation phase, and plain idle/stopped/error. Cover feedback-first ordering with snapshot order preserved within each group and stability across refreshes (FR3.3), label-else-branch naming (FR3.4), the selected-item flag (FR3.5), and that no excluded field leaks into an item (FR3.6). Confirm failing first.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-2",
+          "name": "Implement deriveTickerItems",
+          "description": "Pure module taking WorktreeInfo[] plus the selected branch and returning TickerItem[] (FR3.1). No JSX, no store access, no side effects. Keep the predicate literal and readable so it can be checked against the spec line by line.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-3",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cd frontend && CI=true npm test. This phase has no user-visible surface yet; manual verification is limited to confirming the derived output for a seeded snapshot.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "Ticker component and App shell",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-4-task-1",
+          "name": "Write tests for ActiveWorktreeTicker",
+          "description": "Colocated ActiveWorktreeTicker.test.tsx. Assert: renders nothing and occupies no height with an empty item list (FR4.3, AC8); feedback items carry accompanying text, not colour alone (FR4.5, AC11); the region is a labelled navigation landmark containing buttons with selected state and feedback kind exposed to assistive technology (FR4.7); clicking an item invokes the passed callback exactly once with the right branch and does nothing else (FR4.4); branch and label render as text (FR4.8). Confirm failing first.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-2",
+          "name": "Implement ActiveWorktreeTicker",
+          "description": "Presentation-only component taking derived items, selectedBranch, and the selection callback as props (FR4.1). Must not subscribe to the Zustand store — App passes props, matching how WorktreeList already works. Horizontal scroll or bounded overflow affordance only; no marquee or auto-scrolling (FR4.6).",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-3",
+          "name": "Write App-level test for ticker selection parity",
+          "description": "Assert selecting via the ticker produces the same result as selecting the same worktree in the sidebar (AC6): selection persisted, revealed in filters when hidden, unread marker cleared, sidebar closed on mobile, and the view reset to terminal. The terminal reset is NOT in handleSelectWorktree — it is a separate useEffect keyed on selectedBranch, so test it explicitly; it is the break-point a future refactor of that effect would silently take out. Also assert selection does not alter feedbackState (AC7). Confirm failing first.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-4",
+          "name": "Restructure the App root and mount the ticker",
+          "description": "The root is currently a flat flex h-dvh row with <aside> and <main> as siblings — there is no outer vertical wrapper. Introduce a flex-col container around that row with the ticker as its first child, keeping the existing row's behaviour and letting it fill remaining height (FR4.2). Wire the ticker to derived items and the existing handleSelectWorktree. Verify the terminal, chat, and tracks views still size correctly after the layout change.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cd frontend && npm run check && CI=true npm test. Manual verification is dashboard-shaped per the workflow's frontend template — start the backend and Vite dev server, trigger an awaiting_permission state, and confirm the ticker shows the worktree marked as needing feedback, sorted first, and that clicking it opens the worktree.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "CLI parity",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-5-task-1",
+          "name": "Write tests for worktree list rendering status and feedback",
+          "description": "Inline #[cfg(test)] tests alongside print_list in crates/sebenza-cli/src/worktree.rs. Assert status appears in the human-readable output (FR5.1) and that a worktree with feedbackState != none carries a marker distinguishable in plain text without colour (FR5.2, AC11). print_list currently derives its printed status only from mux/archived and never reads the status field the CLI already deserializes. Confirm failing first.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-2",
+          "name": "Implement status and feedback marker in worktree list",
+          "description": "Extend the Row type and print_list to render status and the feedback marker (FR5.1, FR5.2, FR5.3). No new subcommand or operation (FR5.4). This is what makes Guiding Principle 8 genuinely satisfied rather than carved out.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-3",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cargo test. Manual verification is CLI-shaped per the workflow's backend/CLI template — with a worktree awaiting permission, run sebenza-cli worktree list and confirm the status and feedback marker are visible without colour.",
+          "status": "backlog"
+        }
+      ]
+    }
+  ]
+}
