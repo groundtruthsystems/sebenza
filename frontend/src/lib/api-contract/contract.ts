@@ -45,6 +45,7 @@ import {
   NotificationIdParamsSchema,
   AutoNameConfigResponseSchema,
   InstancesResponseSchema,
+  ActiveWorktreesResponseSchema,
   ProjectsResponseSchema,
   AddProjectRequestSchema,
   AddProjectResponseSchema,
@@ -102,6 +103,7 @@ export const apiPaths = {
   projectInits: "/api/projects/init",
   migrateProjects: "/api/projects/migrate",
   removeProject: "/api/projects/:prefix",
+  fetchActiveWorktrees: "/api/active-worktrees",
   fetchRegistry: "/api/registry",
   fetchRegistryFile: "/api/registry/file",
 } as const;
@@ -506,6 +508,15 @@ export const apiContract = c.router({
     responses: {
       200: TrackFileResponseSchema,
       ...commonErrorResponses,
+    },
+  },
+  /** Hub-level: spans every loaded project, so it carries no project prefix. */
+  fetchActiveWorktrees: {
+    method: "GET",
+    path: apiPaths.fetchActiveWorktrees,
+    responses: {
+      200: ActiveWorktreesResponseSchema,
+      500: ErrorResponseSchema,
     },
   },
   fetchProjects: {

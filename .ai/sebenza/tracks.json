@@ -3,8 +3,75 @@
   "version": "1.0",
   "project": {
     "name": "sebenza",
-    "path": "/home/kevinbayes/git/oss/worktrees/sebenza-goose-opencode-embed",
+    "path": "/home/kevinbayes/git/oss/worktrees/sebenza-running-dashboard",
     "registered_at": "2026-07-27T14:49:46Z"
   },
-  "tracks": []
+  "tracks": [
+    {
+      "track_id": "running_worktree_ticker_20260729",
+      "type": "feature",
+      "description": "Add a full-width ticker for active worktrees and explicit feedback requests, across all loaded projects.",
+      "status": "doing",
+      "created_at": "2026-07-29T22:53:32Z",
+      "updated_at": "2026-07-29T23:19:06Z",
+      "design_path": ".ai/sebenza/tracks/running_worktree_ticker_20260729/design.md",
+      "spec_path": ".ai/sebenza/tracks/running_worktree_ticker_20260729/spec.md",
+      "plan_path": ".ai/sebenza/tracks/running_worktree_ticker_20260729/plan.json",
+      "phases_summary": [
+        {
+          "id": "phase-1",
+          "name": "Runtime feedback state",
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification, deferred until the frontend lands."
+        },
+        {
+          "id": "phase-2",
+          "name": "Snapshot and contract",
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification, deferred until the frontend lands."
+        },
+        {
+          "id": "phase-3",
+          "name": "Ticker item derivation",
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification, deferred until the frontend lands."
+        },
+        {
+          "id": "phase-4",
+          "name": "Ticker component and App shell",
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification; ticker is now visible end to end."
+        },
+        {
+          "id": "phase-5",
+          "name": "CLI parity",
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification."
+        },
+        {
+          "id": "phase-6",
+          "name": "Cross-project active-worktree endpoint",
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification."
+        },
+        {
+          "id": "phase-7",
+          "name": "Cross-project ticker",
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification."
+        },
+        {
+          "id": "phase-8",
+          "name": "CLI parity for cross-project listing",
+          "status": "blocked",
+          "blocked_reason": "Phase checkpoint awaiting manual verification."
+        }
+      ],
+      "progress": {
+        "total_tasks": 31,
+        "completed_tasks": 23,
+        "percentage": 74.2
+      }
+    }
+  ]
 }

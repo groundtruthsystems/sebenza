@@ -6,6 +6,7 @@ import type {
   ServiceStatus,
   TrackFileResponse,
   WorktreeCreationPhase,
+  WorktreeFeedbackState,
   WorktreeKind,
   WorktreeSource,
   WorktreeTab,
@@ -50,6 +51,7 @@ export type {
   ProjectSummary,
   ProjectWorktreeSnapshot,
   PullMainResult,
+  WorktreeFeedbackState,
   ServiceConfig,
   UpsertCustomAgentRequest,
   ServiceStatus,
@@ -156,6 +158,9 @@ export interface WorktreeInfo {
   dirty: boolean;
   unpushed: boolean;
   status: string;
+  /** Whether this worktree is waiting on an explicit human response. Drives the
+   *  active-worktree ticker; `status` alone cannot express it. */
+  feedbackState: WorktreeFeedbackState;
   elapsed: string;
   profile: string | null;
   agentName: AgentId | null;
@@ -170,6 +175,18 @@ export interface WorktreeInfo {
   oneshot: OneshotConfig | null;
   tabs: WorktreeTab[];
   activeTabId: string | null;
+}
+
+/** One project's worktrees in the cross-project ticker, after mapping.
+ *
+ *  Distinct from the contract's `ActiveWorktreeProject`, which carries raw snapshots;
+ *  this holds `WorktreeInfo` so the same derivation runs over it as over the
+ *  single-project store. */
+export interface ActiveProjectWorktrees {
+  /** URL prefix — the identity the dashboard navigates to for another project. */
+  prefix: string;
+  name: string;
+  worktrees: WorktreeInfo[];
 }
 
 export interface WorktreeListRow {

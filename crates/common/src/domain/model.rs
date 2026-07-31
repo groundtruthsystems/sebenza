@@ -199,6 +199,46 @@ pub enum AgentLifecycle {
     Error,
 }
 
+/// Whether a worktree is waiting on an explicit human response, independent of
+/// [`AgentLifecycle`].
+///
+/// Provider-neutral on purpose. It is not merely a restatement of
+/// `AwaitingPermission`: an agent that asks a free-text question is still `Running`,
+/// so the lifecycle alone cannot express "this one needs a human". Keeping the answer
+/// in one field means the dashboard reads a single signal rather than unioning two
+/// orthogonal concepts.
+///
+/// Set only from observable runtime events. Never inferred from idleness, CI/PR state,
+/// errors, or unread notifications — a false "needs you" badge is worse than none.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFeedbackState {
+    /// Nothing is waiting on the user.
+    #[default]
+    None,
+    /// Blocked on a permission decision the agent is showing in its own UI.
+    PermissionRequest,
+    /// The agent asked a free-text question awaiting a human answer.
+    ///
+    /// Reserved. No built-in adapter can observe such an event today, so nothing sets
+    /// this yet; consumers must still render it correctly if it ever appears.
+    UserQuestion,
+}
+
+impl AgentFeedbackState {
+    /// The stable wire/log spelling, matching what serde emits.
+    ///
+    /// Shared by the snapshot mapping and the transition log so the two can never
+    /// disagree about what a state is called.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AgentFeedbackState::None => "none",
+            AgentFeedbackState::PermissionRequest => "permission_request",
+            AgentFeedbackState::UserQuestion => "user_question",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct GitWorktreeRuntimeState {
@@ -223,6 +263,10 @@ pub struct SessionRuntimeState {
 pub struct AgentRuntimeState {
     pub runtime: String, // "host" | "docker"
     pub lifecycle: AgentLifecycle,
+    /// Written in the same `apply_event` arm as `lifecycle`, never from a separate path,
+    /// so the two cannot drift apart.
+    #[serde(default)]
+    pub feedback_state: AgentFeedbackState,
     pub last_started_at: Option<String>,
     pub last_event_at: Option<String>,
     pub last_error: Option<String>,
@@ -363,6 +407,13 @@ pub struct WorktreeSnapshot {
     pub unpushed: bool,
     pub pane_count: i32,
     pub status: String,
+    /// Whether a human is being waited on, which `status` cannot express on its own:
+    /// an agent asking a free-text question is still `running`.
+    ///
+    /// `#[serde(default)]` so a payload from a server predating the field loads as
+    /// `None` instead of being rejected.
+    #[serde(default)]
+    pub feedback_state: AgentFeedbackState,
     pub elapsed: String,
     pub services: Vec<ServiceRuntimeState>,
     pub prs: Vec<PrEntry>,
@@ -403,4 +454,59 @@ pub struct NotificationView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     pub timestamp: i64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn feedback_state_as_str_matches_its_wire_spelling() {
+        // `as_str` feeds the transition log while serde feeds the snapshot. If they ever
+        // disagreed, a log line and the dashboard would name the same state differently
+        // and neither would be wrong on its own — so pin them to each other.
+        for state in [
+            AgentFeedbackState::None,
+            AgentFeedbackState::PermissionRequest,
+            AgentFeedbackState::UserQuestion,
+        ] {
+            let json = serde_json::to_string(&state).expect("state should serialize");
+            assert_eq!(
+                json,
+                format!("\"{}\"", state.as_str()),
+                "as_str and serde disagree about {state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn feedback_state_wire_spelling_is_snake_case() {
+        // Matches the `status` field's convention, which is produced by an explicit
+        // mapping rather than serde. The frontend contract keys off these literals.
+        assert_eq!(AgentFeedbackState::None.as_str(), "none");
+        assert_eq!(
+            AgentFeedbackState::PermissionRequest.as_str(),
+            "permission_request"
+        );
+        assert_eq!(AgentFeedbackState::UserQuestion.as_str(), "user_question");
+    }
+
+    #[test]
+    fn agent_state_written_before_feedback_existed_still_loads() {
+        // Backward compatibility: `~/.ai/sebenza` registries and any persisted agent state
+        // predate this field, and a reader that refused them would strand the worktree.
+        let legacy = serde_json::json!({
+            "runtime": "host",
+            "lifecycle": "idle",
+            "lastStartedAt": null,
+            "lastEventAt": null,
+            "lastError": null,
+        });
+
+        let state: AgentRuntimeState =
+            serde_json::from_value(legacy).expect("legacy agent state must still deserialize");
+
+        assert_eq!(state.feedback_state, AgentFeedbackState::None);
+        assert_eq!(state.lifecycle, AgentLifecycle::Idle);
+    }
 }

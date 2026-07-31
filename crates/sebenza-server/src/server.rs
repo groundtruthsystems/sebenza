@@ -294,6 +294,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/projects/migrate", post(migrate_projects))
         .route("/api/projects/{prefix}", delete(remove_project))
         .route("/api/instances", get(fetch_instances))
+        .route("/api/active-worktrees", get(get_active_worktrees))
         .route("/api/registry", get(fetch_registry))
         .route("/api/registry/file", get(fetch_registry_file))
         .route("/api/runtime/events", post(runtime_event))
@@ -1899,6 +1900,34 @@ async fn fetch_registry_file(
     })
     .await?;
     Ok(Json(response))
+}
+
+/// Every loaded project and its worktree snapshots, for the cross-project ticker.
+///
+/// Hub-level (no project prefix) because it deliberately spans projects. Reconciles each
+/// project the same way `get_worktrees` does, so a worktree that appeared or vanished
+/// since the last poll is reflected here too.
+///
+/// Only projects this process has loaded contribute; projects initialize lazily, so a
+/// registered-but-untouched project is absent rather than empty.
+async fn get_active_worktrees(
+    State(state): State<AppState>,
+) -> Json<crate::services::active_worktrees::ActiveWorktreesResponse> {
+    let apps = state.manager.list();
+    let projects = tokio::task::spawn_blocking(move || {
+        apps.into_iter()
+            .map(|app| {
+                let snapshot = reconcile_and_snapshot(&app);
+                (app.prefix.clone(), app.name(), snapshot.worktrees)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .expect("cross-project snapshot task panicked");
+
+    Json(crate::services::active_worktrees::build_active_worktrees(
+        projects,
+    ))
 }
 
 async fn list_projects(State(state): State<AppState>) -> Json<serde_json::Value> {

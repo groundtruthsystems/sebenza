@@ -73,6 +73,7 @@ mod tests {
             unpushed: false,
             pane_count: 1,
             status: "idle".to_string(),
+            feedback_state: crate::domain::model::AgentFeedbackState::None,
             elapsed: String::new(),
             services: Vec::new(),
             prs: Vec::new(),
