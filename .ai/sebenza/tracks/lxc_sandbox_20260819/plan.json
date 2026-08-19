@@ -1,0 +1,202 @@
+{
+  "$schema": "sebenza-plan-v1",
+  "track_id": "lxc_sandbox_20260819",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Domain and config",
+      "status": "doing",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-1-task-1",
+          "name": "Write tests for RuntimeKind Lxc and Apple",
+          "description": "Colocated tests: runtime_kind_str maps lxc/apple; ProfileConfig deserializes runtime: lxc and runtime: apple; runtime: docker still deserializes (FR1). Confirm they fail before adding the variants.",
+          "status": "done",
+          "commit_sha": "10d2fad"
+        },
+        {
+          "id": "phase-1-task-2",
+          "name": "Add RuntimeKind::Lxc and RuntimeKind::Apple",
+          "description": "Extend the enum in domain/config.rs; keep Docker; update runtime_kind_str and any exhaustive matches so the crate compiles. Do not launch sandboxes yet.",
+          "status": "done",
+          "commit_sha": "10d2fad"
+        },
+        {
+          "id": "phase-1-task-3",
+          "name": "Write tests for docker/lxc/apple profile validation",
+          "description": "Tests that create/open/adopt refuse docker with a migrate 422; refuse lxc/apple without image; refuse lxc off Linux and apple off the Apple-Silicon macOS 26 probe (injectable). Host unchanged (FR2).",
+          "status": "doing"
+        },
+        {
+          "id": "phase-1-task-4",
+          "name": "Implement profile validation for the new runtimes",
+          "description": "Centralize is_sandboxed + docker-removed error. Wire create/adopt (and open if it validates the profile) to FR2. Platform probe must be injectable for tests.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cargo test. Manual: load a yaml with runtime: docker and confirm the project still loads; creating that profile is 422.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "LXC adapter",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-2-task-1",
+          "name": "Write tests for LXC config and name builders",
+          "description": "Pure tests for name sanitiser, idmap ranges from injected uid/gid/subuid, same-path lxc.mount.entry, image parse ubuntu:24.04 → download args, reserved env, credential mounts only when host path exists, find/remove prefix filter (FR3).",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-2",
+          "name": "Implement adapters/lxc.rs",
+          "description": "Detect lxc-create, preflight subuid/usernet, build config, create/start/reuse/destroy. No real containers in unit tests.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-3",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cargo test. Manual on Ubuntu: optional smoke of the builders via a dry-run if exposed; otherwise tests suffice this phase.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "Apple adapter",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-3-task-1",
+          "name": "Write tests for Apple Container argv builders",
+          "description": "Tests for machine create flags (home-mount none), same-path shares, exec argv, name filter, delete --force (FR4).",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-2",
+          "name": "Implement adapters/apple_container.rs",
+          "description": "Detect container + system status, create/start/exec/delete machine. Platform refuse stays in the service layer.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-3",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cargo test.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "Agent pane commands",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-4-task-1",
+          "name": "Write tests for LXC and Apple pane commands",
+          "description": "Assert quoting, uid/gid/cwd, runtime.env bootstrap, host-home PATH fallback — not /root (FR5).",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-2",
+          "name": "Implement build_lxc_* and build_apple_* pane commands",
+          "description": "Add builders next to the existing host/docker ones in agent_service.rs.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-3",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cargo test.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "Lifecycle integration",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-5-task-1",
+          "name": "Write tests for lifecycle dispatch and rollback",
+          "description": "materialize launches lxc/apple; remove destroys the instance; failed create removes git worktree and instance; tabs refuse sandboxed runtimes (FR6). Mock adapters.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-2",
+          "name": "Wire lifecycle to LXC and Apple adapters",
+          "description": "Replace Docker launch in materialize_runtime_session with lxc/apple. Remove/rollback destroy. is_sandboxed for tabs.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-3",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cargo test.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-6",
+      "name": "Remove Docker launch support",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-6-task-1",
+          "name": "Write tests for docker-orphan remove and launch refusal",
+          "description": "Remove of meta.runtime=docker still attempts docker rm of sebenza-<branch>-* names. No code path builds docker run/exec anymore (FR6.6).",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6-task-2",
+          "name": "Delete Docker launch adapter and pane builders",
+          "description": "Remove adapters/docker.rs launch API and build_docker_*. Keep a tiny orphan-rm helper. Drop docker from init optional tools.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6-task-3",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cargo test.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-7",
+      "name": "Init, docs, CLI/UI parity",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-7-task-1",
+          "name": "Write tests for init optional-tool detection",
+          "description": "init lists lxc-create on Linux and container on macOS, not docker (FR7.1).",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-7-task-2",
+          "name": "Update init example, README, tech-stack, workflow, init_authoring",
+          "description": "Commented sandbox profile is lxc/apple. tech-stack optional deps and workflow cross-runtime line updated. Frontend runtime unions if typed (FR7).",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-7-task-3",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md. Automated: cargo test && CI=true npm test. Manual: Ubuntu create lxc-profile worktree, lxc-ls, write a file, open in Zed, save, remove, instance gone. macOS 26: same with container machine list.",
+          "status": "backlog"
+        }
+      ]
+    }
+  ]
+}

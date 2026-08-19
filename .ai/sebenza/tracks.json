@@ -3,7 +3,7 @@
   "version": "1.0",
   "project": {
     "name": "sebenza",
-    "path": "/home/kevinbayes/git/oss/worktrees/sebenza-running-dashboard",
+    "path": "/home/kevinbayes/git/oss/sebenza",
     "registered_at": "2026-07-27T14:49:46Z"
   },
   "tracks": [
@@ -14,9 +14,9 @@
       "status": "doing",
       "created_at": "2026-07-29T22:53:32Z",
       "updated_at": "2026-07-29T23:19:06Z",
-      "design_path": ".ai/sebenza/tracks/running_worktree_ticker_20260729/design.md",
-      "spec_path": ".ai/sebenza/tracks/running_worktree_ticker_20260729/spec.md",
-      "plan_path": ".ai/sebenza/tracks/running_worktree_ticker_20260729/plan.json",
+      "design_path": "./tracks/running_worktree_ticker_20260729/design.md",
+      "spec_path": "./tracks/running_worktree_ticker_20260729/spec.md",
+      "plan_path": "./tracks/running_worktree_ticker_20260729/plan.json",
       "phases_summary": [
         {
           "id": "phase-1",
@@ -71,6 +71,31 @@
         "total_tasks": 31,
         "completed_tasks": 23,
         "percentage": 74.2
+      }
+    },
+    {
+      "track_id": "lxc_sandbox_20260819",
+      "type": "feature",
+      "description": "Replace the Docker worktree sandbox with classic LXC on Linux and Apple Container machines on macOS, same-path mounts, host-UID files so Zed/IntelliJ keep working.",
+      "status": "doing",
+      "created_at": "2026-08-19T15:38:57Z",
+      "updated_at": "2026-08-19T15:45:00Z",
+      "design_path": "./tracks/lxc_sandbox_20260819/design.md",
+      "spec_path": "./tracks/lxc_sandbox_20260819/spec.md",
+      "plan_path": "./tracks/lxc_sandbox_20260819/plan.json",
+      "phases_summary": [
+        { "id": "phase-1", "name": "Domain and config", "status": "doing", "blocked_reason": null },
+        { "id": "phase-2", "name": "LXC adapter", "status": "backlog", "blocked_reason": null },
+        { "id": "phase-3", "name": "Apple adapter", "status": "backlog", "blocked_reason": null },
+        { "id": "phase-4", "name": "Agent pane commands", "status": "backlog", "blocked_reason": null },
+        { "id": "phase-5", "name": "Lifecycle integration", "status": "backlog", "blocked_reason": null },
+        { "id": "phase-6", "name": "Remove Docker launch support", "status": "backlog", "blocked_reason": null },
+        { "id": "phase-7", "name": "Init, docs, CLI/UI parity", "status": "backlog", "blocked_reason": null }
+      ],
+      "progress": {
+        "total_tasks": 23,
+        "completed_tasks": 2,
+        "percentage": 8.7
       }
     }
   ]
