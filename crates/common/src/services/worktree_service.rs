@@ -15,6 +15,8 @@ pub fn runtime_kind_str(runtime: RuntimeKind) -> &'static str {
     match runtime {
         RuntimeKind::Host => "host",
         RuntimeKind::Docker => "docker",
+        RuntimeKind::Lxc => "lxc",
+        RuntimeKind::Apple => "apple",
     }
 }
 
@@ -257,6 +259,14 @@ mod tests {
             .output()
             .unwrap();
         assert!(status.status.success(), "git {args:?} failed");
+    }
+
+    #[test]
+    fn runtime_kind_str_maps_lxc_and_apple_and_keeps_existing_values() {
+        assert_eq!(runtime_kind_str(RuntimeKind::Host), "host");
+        assert_eq!(runtime_kind_str(RuntimeKind::Docker), "docker");
+        assert_eq!(runtime_kind_str(RuntimeKind::Lxc), "lxc");
+        assert_eq!(runtime_kind_str(RuntimeKind::Apple), "apple");
     }
 
     #[test]

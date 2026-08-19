@@ -133,7 +133,7 @@ pub struct WorktreeMeta {
     pub created_at: String,
     pub profile: String,
     pub agent: String,
-    pub runtime: String, // "host" | "docker"
+    pub runtime: String, // "host" | "docker" | "lxc" | "apple"
     pub startup_env_values: HashMap<String, String>,
     pub allocated_ports: HashMap<String, u16>,
     pub source: Option<WorktreeSource>,
@@ -261,7 +261,7 @@ pub struct SessionRuntimeState {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRuntimeState {
-    pub runtime: String, // "host" | "docker"
+    pub runtime: String, // "host" | "docker" | "lxc" | "apple"
     pub lifecycle: AgentLifecycle,
     /// Written in the same `apply_event` arm as `lifecycle`, never from a separate path,
     /// so the two cannot drift apart.

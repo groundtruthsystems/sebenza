@@ -69,6 +69,8 @@ pub struct MountSpec {
 pub enum RuntimeKind {
     Host,
     Docker,
+    Lxc,
+    Apple,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -178,4 +180,28 @@ pub struct ProjectConfig {
     pub lifecycle_hooks: LifecycleHooksConfig,
     pub auto_name: Option<AutoNameConfig>,
     pub oneshot: OneshotConfig,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn profile_yaml(runtime: &str) -> String {
+        format!("runtime: {runtime}\nenvPassthrough: []\npanes: []\n")
+    }
+
+    #[test]
+    fn profile_config_deserializes_lxc_and_apple_and_still_accepts_docker() {
+        let lxc: ProfileConfig = serde_yaml::from_str(&profile_yaml("lxc")).unwrap();
+        assert_eq!(lxc.runtime, RuntimeKind::Lxc);
+
+        let apple: ProfileConfig = serde_yaml::from_str(&profile_yaml("apple")).unwrap();
+        assert_eq!(apple.runtime, RuntimeKind::Apple);
+
+        let docker: ProfileConfig = serde_yaml::from_str(&profile_yaml("docker")).unwrap();
+        assert_eq!(docker.runtime, RuntimeKind::Docker);
+
+        let host: ProfileConfig = serde_yaml::from_str(&profile_yaml("host")).unwrap();
+        assert_eq!(host.runtime, RuntimeKind::Host);
+    }
 }
