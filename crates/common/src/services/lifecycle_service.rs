@@ -20,7 +20,9 @@ use crate::adapters::tmux::{
     build_worktree_window_name,
 };
 use crate::config::expand_template;
-use crate::domain::config::{PaneKind, PaneTemplate, ProfileConfig, ProjectConfig, RuntimeKind};
+use crate::domain::config::{
+    PaneKind, PaneTemplate, ProfileConfig, ProjectConfig, RuntimeKind, profile_runtime_error,
+};
 use crate::domain::model::OneshotMeta;
 use crate::domain::model::{
     MAIN_REPO_AGENT_SENTINEL, WORKTREE_META_SCHEMA_VERSION, WorktreeMeta, WorktreeSource,
@@ -52,6 +54,7 @@ use crate::services::tab_logic::{
 use crate::services::worktree_service::{
     AdoptManagedWorktreeOptions, CreateManagedWorktreeOptions, InitializeManagedWorktreeResult,
     adopt_managed_worktree, build_create_worktree_targets, create_managed_worktree,
+    detect_host_platform,
 };
 use chrono::{SecondsFormat, Utc};
 use std::collections::HashMap;
@@ -280,6 +283,17 @@ impl LifecycleService {
         }
     }
 
+    fn refuse_invalid_runtime(&self, profile: &ProfileConfig) -> Result<(), LifecycleError> {
+        if let Some(err) = profile_runtime_error(
+            profile.runtime,
+            profile.image.as_deref(),
+            detect_host_platform(),
+        ) {
+            return Err(LifecycleError::new(err.message, err.status));
+        }
+        Ok(())
+    }
+
     /// The git gateway (used by the oneshot watcher to resolve a worktree's git
     /// dir before reading its persisted meta).
     pub fn git(&self) -> &GitGateway {
@@ -413,12 +427,7 @@ impl LifecycleService {
         worktree_path: &str,
     ) -> Result<WorktreeMeta, LifecycleError> {
         let profile = self.resolve_profile(None)?;
-        if profile.profile.runtime == RuntimeKind::Docker && profile.profile.image.is_none() {
-            return Err(LifecycleError::new(
-                "Docker profile is missing an image",
-                422,
-            ));
-        }
+        self.refuse_invalid_runtime(&profile.profile)?;
         let agent = self.resolve_agent_definition(None)?;
         let control_token = load_control_token().map_err(|e| LifecycleError::new(e, 422))?;
         let control_url = self.control_url(profile.profile.runtime);
@@ -709,12 +718,7 @@ impl LifecycleService {
         let delete_branch_on_rollback =
             mode == CreateMode::New || availability.delete_branch_on_rollback;
 
-        if profile.profile.runtime == RuntimeKind::Docker && profile.profile.image.is_none() {
-            return Err(LifecycleError::new(
-                "Docker profile is missing an image",
-                422,
-            ));
-        }
+        self.refuse_invalid_runtime(&profile.profile)?;
 
         // git worktree add + meta + env (session is built separately below).
         if let Some(parent) = Path::new(&worktree_path).parent() {
@@ -894,8 +898,11 @@ impl LifecycleService {
             pin_session_id: None,
         };
 
+        self.refuse_invalid_runtime(&profile.profile)?;
+
         let (agent_command, shell_command) = if profile.profile.runtime == RuntimeKind::Docker {
             // Launch (or reuse) the sandbox container, then exec into it.
+            // Docker is refused above; this arm is unreachable until adapters replace it.
             let image =
                 profile.profile.image.clone().ok_or_else(|| {
                     LifecycleError::new("Docker profile is missing an image", 422)

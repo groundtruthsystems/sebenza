@@ -3,7 +3,7 @@ use crate::adapters::fs::{
     write_control_env, write_runtime_env, write_worktree_meta,
 };
 use crate::adapters::git::{CreateGitWorktreeOptions, CreateWorktreeMode, GitGateway};
-use crate::domain::config::RuntimeKind;
+use crate::domain::config::{HostPlatform, RuntimeKind};
 use crate::domain::model::{
     OneshotMeta, WORKTREE_META_SCHEMA_VERSION, WorktreeMeta, WorktreeSource, WorktreeStoragePaths,
 };
@@ -17,6 +17,32 @@ pub fn runtime_kind_str(runtime: RuntimeKind) -> &'static str {
         RuntimeKind::Docker => "docker",
         RuntimeKind::Lxc => "lxc",
         RuntimeKind::Apple => "apple",
+    }
+}
+
+/// Major version from `sw_vers -productVersion` (e.g. `26.0.1` → 26).
+pub fn parse_macos_major(version: &str) -> Option<u32> {
+    version.split('.').next()?.parse().ok()
+}
+
+/// OS/arch bucket for `profile_runtime_error`.
+pub fn detect_host_platform() -> HostPlatform {
+    if cfg!(target_os = "linux") {
+        HostPlatform::Linux
+    } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        let major = std::process::Command::new("sw_vers")
+            .arg("-productVersion")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| parse_macos_major(s.trim()));
+        if major.is_some_and(|v| v >= 26) {
+            HostPlatform::MacOsAppleSilicon26
+        } else {
+            HostPlatform::Other
+        }
+    } else {
+        HostPlatform::Other
     }
 }
 
@@ -267,6 +293,13 @@ mod tests {
         assert_eq!(runtime_kind_str(RuntimeKind::Docker), "docker");
         assert_eq!(runtime_kind_str(RuntimeKind::Lxc), "lxc");
         assert_eq!(runtime_kind_str(RuntimeKind::Apple), "apple");
+    }
+
+    #[test]
+    fn parse_macos_major_reads_the_first_component() {
+        assert_eq!(parse_macos_major("26.0.1"), Some(26));
+        assert_eq!(parse_macos_major("15.6"), Some(15));
+        assert_eq!(parse_macos_major("not-a-version"), None);
     }
 
     #[test]

@@ -73,6 +73,70 @@ pub enum RuntimeKind {
     Apple,
 }
 
+/// Host OS/arch/version bucket used to refuse a sandbox runtime early.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HostPlatform {
+    Linux,
+    MacOsAppleSilicon26,
+    Other,
+}
+
+/// A profile that cannot be launched on this host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileRuntimeError {
+    pub message: String,
+    pub status: u16,
+}
+
+/// True for the live sandbox runtimes (not host, not the removed docker runtime).
+pub fn is_sandboxed(runtime: RuntimeKind) -> bool {
+    matches!(runtime, RuntimeKind::Lxc | RuntimeKind::Apple)
+}
+
+/// Returns a 422 when this profile must not be launched on `platform`.
+///
+/// `docker` is always refused (removed). `lxc`/`apple` need a non-empty `image`
+/// and the matching OS. `host` is always ok.
+pub fn profile_runtime_error(
+    runtime: RuntimeKind,
+    image: Option<&str>,
+    platform: HostPlatform,
+) -> Option<ProfileRuntimeError> {
+    let image = image.map(str::trim).filter(|s| !s.is_empty());
+    let err = |message: String| {
+        Some(ProfileRuntimeError {
+            message,
+            status: 422,
+        })
+    };
+    match runtime {
+        RuntimeKind::Host => None,
+        RuntimeKind::Docker => err(
+            "The docker runtime has been removed. Use runtime: lxc on Linux or runtime: apple on macOS.".to_string(),
+        ),
+        RuntimeKind::Lxc => {
+            if image.is_none() {
+                return err("LXC profile is missing an image".to_string());
+            }
+            if platform != HostPlatform::Linux {
+                return err("LXC runtime is only available on Linux.".to_string());
+            }
+            None
+        }
+        RuntimeKind::Apple => {
+            if image.is_none() {
+                return err("Apple profile is missing an image".to_string());
+            }
+            if platform != HostPlatform::MacOsAppleSilicon26 {
+                return err(
+                    "Apple runtime requires macOS 26 or later on Apple Silicon.".to_string(),
+                );
+            }
+            None
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ProfileConfig {
@@ -203,5 +267,90 @@ mod tests {
 
         let host: ProfileConfig = serde_yaml::from_str(&profile_yaml("host")).unwrap();
         assert_eq!(host.runtime, RuntimeKind::Host);
+    }
+
+    #[test]
+    fn docker_runtime_is_refused_even_when_an_image_is_set() {
+        let err = profile_runtime_error(RuntimeKind::Docker, Some("example"), HostPlatform::Linux)
+            .expect("docker must be refused");
+        assert_eq!(err.status, 422);
+        let msg = err.message.to_lowercase();
+        assert!(msg.contains("removed"), "{msg}");
+        assert!(msg.contains("lxc"), "{msg}");
+        assert!(msg.contains("apple"), "{msg}");
+    }
+
+    #[test]
+    fn lxc_and_apple_require_an_image() {
+        let lxc = profile_runtime_error(RuntimeKind::Lxc, None, HostPlatform::Linux)
+            .expect("lxc needs an image");
+        assert_eq!(lxc.status, 422);
+        assert!(
+            lxc.message.to_lowercase().contains("image"),
+            "{}",
+            lxc.message
+        );
+
+        let apple =
+            profile_runtime_error(RuntimeKind::Apple, None, HostPlatform::MacOsAppleSilicon26)
+                .expect("apple needs an image");
+        assert_eq!(apple.status, 422);
+        assert!(
+            apple.message.to_lowercase().contains("image"),
+            "{}",
+            apple.message
+        );
+    }
+
+    #[test]
+    fn lxc_and_apple_are_refused_on_the_wrong_platform() {
+        let lxc =
+            profile_runtime_error(RuntimeKind::Lxc, Some("ubuntu:24.04"), HostPlatform::Other)
+                .expect("lxc is linux-only");
+        assert_eq!(lxc.status, 422);
+        assert!(
+            lxc.message.to_lowercase().contains("linux"),
+            "{}",
+            lxc.message
+        );
+
+        let apple = profile_runtime_error(
+            RuntimeKind::Apple,
+            Some("ubuntu:24.04"),
+            HostPlatform::Linux,
+        )
+        .expect("apple is macos-only");
+        assert_eq!(apple.status, 422);
+        let msg = apple.message.to_lowercase();
+        assert!(msg.contains("macos"), "{msg}");
+        assert!(
+            msg.contains("apple silicon") || msg.contains("apple-silicon"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn host_and_matching_sandbox_profiles_are_ok() {
+        assert!(profile_runtime_error(RuntimeKind::Host, None, HostPlatform::Linux).is_none());
+        assert!(
+            profile_runtime_error(RuntimeKind::Lxc, Some("ubuntu:24.04"), HostPlatform::Linux)
+                .is_none()
+        );
+        assert!(
+            profile_runtime_error(
+                RuntimeKind::Apple,
+                Some("ubuntu:24.04"),
+                HostPlatform::MacOsAppleSilicon26,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn is_sandboxed_is_lxc_or_apple_only() {
+        assert!(!is_sandboxed(RuntimeKind::Host));
+        assert!(!is_sandboxed(RuntimeKind::Docker));
+        assert!(is_sandboxed(RuntimeKind::Lxc));
+        assert!(is_sandboxed(RuntimeKind::Apple));
     }
 }
