@@ -26,13 +26,15 @@
           "id": "phase-1-task-3",
           "name": "Write tests for docker/lxc/apple profile validation",
           "description": "Tests that create/open/adopt refuse docker with a migrate 422; refuse lxc/apple without image; refuse lxc off Linux and apple off the Apple-Silicon macOS 26 probe (injectable). Host unchanged (FR2).",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "734d725"
         },
         {
           "id": "phase-1-task-4",
           "name": "Implement profile validation for the new runtimes",
           "description": "Centralize is_sandboxed + docker-removed error. Wire create/adopt (and open if it validates the profile) to FR2. Platform probe must be injectable for tests.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "734d725"
         },
         {
           "id": "phase-1-task-5",

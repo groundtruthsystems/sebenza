@@ -79,7 +79,7 @@
       "description": "Replace the Docker worktree sandbox with classic LXC on Linux and Apple Container machines on macOS, same-path mounts, host-UID files so Zed/IntelliJ keep working.",
       "status": "doing",
       "created_at": "2026-08-19T15:38:57Z",
-      "updated_at": "2026-08-19T15:45:00Z",
+      "updated_at": "2026-08-19T16:00:00Z",
       "design_path": "./tracks/lxc_sandbox_20260819/design.md",
       "spec_path": "./tracks/lxc_sandbox_20260819/spec.md",
       "plan_path": "./tracks/lxc_sandbox_20260819/plan.json",
@@ -94,8 +94,8 @@
       ],
       "progress": {
         "total_tasks": 23,
-        "completed_tasks": 2,
-        "percentage": 8.7
+        "completed_tasks": 4,
+        "percentage": 17.4
       }
     }
   ]
