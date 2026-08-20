@@ -47,20 +47,22 @@
     {
       "id": "phase-2",
       "name": "LXC adapter",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for LXC config and name builders",
           "description": "Pure tests for name sanitiser, idmap ranges from injected uid/gid/subuid, same-path lxc.mount.entry, image parse ubuntu:24.04 → download args, reserved env, credential mounts only when host path exists, find/remove prefix filter (FR3).",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "e1afa78"
         },
         {
           "id": "phase-2-task-2",
           "name": "Implement adapters/lxc.rs",
           "description": "Detect lxc-create, preflight subuid/usernet, build config, create/start/reuse/destroy. No real containers in unit tests.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "e1afa78"
         },
         {
           "id": "phase-2-task-3",
