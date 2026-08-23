@@ -103,20 +103,22 @@
     {
       "id": "phase-4",
       "name": "Agent pane commands",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-4-task-1",
           "name": "Write tests for LXC and Apple pane commands",
           "description": "Assert quoting, uid/gid/cwd, runtime.env bootstrap, host-home PATH fallback — not /root (FR5).",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "c2c8bb4"
         },
         {
           "id": "phase-4-task-2",
           "name": "Implement build_lxc_* and build_apple_* pane commands",
           "description": "Add builders next to the existing host/docker ones in agent_service.rs.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "c2c8bb4"
         },
         {
           "id": "phase-4-task-3",

@@ -79,7 +79,7 @@
       "description": "Replace the Docker worktree sandbox with classic LXC on Linux and Apple Container machines on macOS, same-path mounts, host-UID files so Zed/IntelliJ keep working.",
       "status": "doing",
       "created_at": "2026-08-19T15:38:57Z",
-      "updated_at": "2026-08-23T01:58:34Z",
+      "updated_at": "2026-08-23T02:10:00Z",
       "design_path": "./tracks/lxc_sandbox_20260819/design.md",
       "spec_path": "./tracks/lxc_sandbox_20260819/spec.md",
       "plan_path": "./tracks/lxc_sandbox_20260819/plan.json",
@@ -87,15 +87,15 @@
         { "id": "phase-1", "name": "Domain and config", "status": "doing", "blocked_reason": null },
         { "id": "phase-2", "name": "LXC adapter", "status": "doing", "blocked_reason": null },
         { "id": "phase-3", "name": "Apple adapter", "status": "doing", "blocked_reason": null },
-        { "id": "phase-4", "name": "Agent pane commands", "status": "backlog", "blocked_reason": null },
+        { "id": "phase-4", "name": "Agent pane commands", "status": "doing", "blocked_reason": null },
         { "id": "phase-5", "name": "Lifecycle integration", "status": "backlog", "blocked_reason": null },
         { "id": "phase-6", "name": "Remove Docker launch support", "status": "backlog", "blocked_reason": null },
         { "id": "phase-7", "name": "Init, docs, CLI/UI parity", "status": "backlog", "blocked_reason": null }
       ],
       "progress": {
         "total_tasks": 23,
-        "completed_tasks": 8,
-        "percentage": 34.8
+        "completed_tasks": 10,
+        "percentage": 43.5
       }
     }
   ]
