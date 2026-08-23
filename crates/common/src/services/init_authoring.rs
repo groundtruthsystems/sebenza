@@ -146,7 +146,7 @@ pub fn build_init_prompt_spec(context: &InitProjectContext) -> InitPromptSpec {
         "Command panes should use the repository's real dev command and pass the relevant port env var into the command when needed.".to_string(),
         "Use split: right for the first command pane and split: bottom for later command panes.".to_string(),
         "Include integrations.github.linkedRepos as an empty list and startupEnvs as an empty object.".to_string(),
-        "Only include optional sections like auto_name, lifecycleHooks, sandbox/docker config, mounts, or systemPrompt if the repository gives clear evidence they are needed.".to_string(),
+        "Only include optional sections like auto_name, lifecycleHooks, sandbox/lxc/apple config, mounts, or systemPrompt if the repository gives clear evidence they are needed.".to_string(),
         "Prefer editing the existing keys over replacing the file with a completely different shape.".to_string(),
         "Preserve the existing template structure and comments unless a specific change requires updating them.".to_string(),
         "Before finishing, verify that `.ai/sebenza.yaml` exists and contains the final YAML.".to_string(),
@@ -384,12 +384,12 @@ profiles:
       #   # Start this pane in the repo root or managed worktree.
       #   cwd: repo
 
-  # Example sandbox profile that runs panes inside Docker.
+  # Example sandbox profile (Linux: lxc, macOS 26 Apple Silicon: apple).
   # sandbox:
-  #   # Run panes inside a container instead of on the host.
-  #   runtime: docker
-  #   # Docker image used for the sandbox container.
-  #   image: ghcr.io/your-org/your-image:latest
+  #   # Run agent/shell panes inside an LXC container (or Apple Container machine).
+  #   runtime: lxc
+  #   # LXC download image (ubuntu:24.04) or Apple OCI ref.
+  #   image: ubuntu:24.04
   #   # Forward selected host env vars into the container.
   #   envPassthrough:
   #     - ANTHROPIC_API_KEY
@@ -399,13 +399,9 @@ profiles:
   #     Extra instructions for the sandbox profile.
   #   # Skip agent permission prompts in this profile.
   #   yolo: true
-  #   # Extra host paths to mount into the container.
+  #   # Extra host paths to mount into the sandbox (same path on the guest by default).
   #   mounts:
-  #     # Host path mounted into the sandbox.
   #     - hostPath: ~/.codex
-  #       # Path inside the container.
-  #       guestPath: /root/.codex
-  #       # Allow writes through this mount.
   #       writable: true
   #   # Panes define the tmux layout created for sandbox sessions.
   #   panes:

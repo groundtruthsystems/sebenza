@@ -45,7 +45,7 @@ A Cargo workspace (Rust) plus a React frontend:
 
 | Component | Path | What it is |
 |---|---|---|
-| **`common`** | `crates/common` | Shared library: config, domain model, adapters (git, tmux, fs, docker…), services. |
+| **`common`** | `crates/common` | Shared library: config, domain model, adapters (git, tmux, fs, lxc, apple container…), services. |
 | **`sebenza-server`** | `crates/sebenza-server` | The axum HTTP/WebSocket daemon. Binary: **`sebenza-server`**. |
 | **`sebenza-cli`** | `crates/sebenza-cli` | All-HTTP command-line client. Binary: **`sebenza-cli`**. |
 | **frontend** | `frontend` | React 19 + Zustand + Vite + Tailwind SPA; talks to the server over `/api` + `/ws`. |
@@ -60,7 +60,7 @@ session survives even if you close the tab or the CLI process.
 ### 1. Prerequisites
 
 - **git** and **tmux** — required for worktrees and terminal sessions.
-- Optional: **`gh`** (PR/CI monitoring), **`docker`** (sandboxed worktree runtime), and
+- Optional: **`gh`** (PR/CI monitoring), **`lxc-create`** (Linux sandbox) or **`container`** (macOS 26 Apple Silicon sandbox), and
   the built-in agent CLIs — **`claude`**, **`codex`**, **`opencode`** (1.18.7+).
   `sebenza-cli init` lists which it found and at what version.
 

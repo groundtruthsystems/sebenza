@@ -9,6 +9,16 @@ use common::services::init_authoring::{
     InitAgent, analyze_config, detect_init_project_context, scaffold_config,
 };
 
+fn optional_init_tools() -> Vec<&'static str> {
+    let mut tools = vec!["gh", "claude", "codex", "goose", "opencode"];
+    if cfg!(target_os = "linux") {
+        tools.push("lxc-create");
+    } else if cfg!(target_os = "macos") {
+        tools.push("container");
+    }
+    tools
+}
+
 fn which(bin: &str) -> bool {
     Command::new("which")
         .arg(bin)
@@ -86,7 +96,7 @@ pub fn run(cwd: &str) -> i32 {
         ("git", "https://git-scm.com"),
         ("tmux", "https://github.com/tmux/tmux/wiki/Installing"),
     ];
-    let optional = ["gh", "claude", "codex", "goose", "opencode", "docker"];
+    let optional = optional_init_tools();
     let mut missing_required: Vec<(&str, &str)> = Vec::new();
     for (tool, hint) in required {
         if which(tool) {
@@ -184,4 +194,23 @@ fn finish() {
     println!("  1. Review .ai/sebenza.yaml and adjust panes, ports, and profiles if needed");
     println!("  2. Run: sebenza-cli serve");
     println!("  3. Enable tab completion: eval \"$(sebenza-cli completion zsh)\"  (or bash)");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn optional_tools_include_the_platform_sandbox_cli_not_docker() {
+        let tools = optional_init_tools();
+        assert!(!tools.contains(&"docker"));
+        assert!(tools.contains(&"gh"));
+        if cfg!(target_os = "linux") {
+            assert!(tools.contains(&"lxc-create"));
+            assert!(!tools.contains(&"container"));
+        } else if cfg!(target_os = "macos") {
+            assert!(tools.contains(&"container"));
+            assert!(!tools.contains(&"lxc-create"));
+        }
+    }
 }

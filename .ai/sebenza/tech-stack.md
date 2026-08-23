@@ -35,7 +35,7 @@ wrapper in `frontend/src/lib/api.ts`.
 ## External dependencies
 
 - **Required:** `git`, `tmux`.
-- **Optional:** `gh` (PR/CI monitoring), `docker` (sandboxed worktree runtime), and the
+- **Optional:** `gh` (PR/CI monitoring), `lxc` / `lxc-create` (Linux sandboxed worktree runtime) or Apple `container` (macOS 26 Apple Silicon), and the
   built-in agent CLIs below.
 
 ### Built-in agent CLIs and minimum supported versions

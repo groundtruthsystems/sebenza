@@ -356,12 +356,13 @@ cargo build --release
 ### Cross-Platform & Runtime Testing
 
 Sebenza ships prebuilt binaries for Linux (x86-64, arm64) and macOS (Apple
-Silicon), and supports both a host and a Docker worktree runtime.
+Silicon), and supports a host worktree runtime plus LXC (Linux) and Apple
+Container machines (macOS 26 Apple Silicon).
 
 -   Verify behaviour on **Linux and macOS** — path handling, `SHELL` resolution,
     and the systemd vs. launchd service units differ.
--   Exercise both **host** and **docker** runtimes for any change touching agent
-    launch, pane commands, or environment passthrough.
+-   Exercise **host** and the platform sandbox (`lxc` or `apple`) for any change
+    touching agent launch, pane commands, or environment passthrough.
 -   Confirm generated artifacts (hook configs, `sebenza-agentctl`) are written
     idempotently and stay git-excluded.
 

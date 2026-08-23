@@ -90,7 +90,7 @@ startupEnvs:
 profiles:
   # Any profile name is allowed. The UI shows these names as choices.
   default:
-    # Allowed values: host, docker
+    # Allowed values: host, lxc (Linux), apple (macOS 26 Apple Silicon)
     runtime: host
 
     # Enables permissive agent flags:
@@ -145,13 +145,12 @@ profiles:
         command: bun run frontend:dev
 
   sandbox:
-    runtime: docker
+    # Linux: lxc. macOS 26 Apple Silicon: apple.
+    runtime: lxc
     yolo: true
 
-    # Required when `runtime: docker`.
-    # Custom images should expose `claude` or `codex` on the container PATH
-    # via the image itself, e.g. `ENV PATH=/your/tool/bin:$PATH`.
-    image: example-sandbox-image
+    # Required. LXC: ubuntu:24.04 (download template). Apple: OCI ref.
+    image: ubuntu:24.04
 
     envPassthrough:
       - AWS_ACCESS_KEY_ID
@@ -159,18 +158,12 @@ profiles:
       - AWS_SESSION_TOKEN
 
     systemPrompt: >
-      You are running inside a sandbox container.
-      Use the runtime env file before starting services.
+      You are running inside a Sebenza sandbox.
+      The worktree is mounted at the same path as on the host.
 
-    # Optional Docker mounts.
+    # Optional extra host paths. guestPath defaults to the same host path.
     mounts:
-      # Host path to mount into the container.
       - hostPath: ~/.codex
-
-        # Optional container path. Defaults to `hostPath` if omitted.
-        guestPath: /root/.codex
-
-        # Optional write access. Omit or set false for read-only.
         writable: true
 
     panes:
