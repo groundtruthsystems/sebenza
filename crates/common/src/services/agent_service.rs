@@ -1,6 +1,6 @@
 //! Agent launch-command builders. Produces the shell command a
 //! tmux pane runs to source the runtime env then exec the agent (claude/codex or
-//! a custom template). Docker variants are deferred until the docker adapter lands.
+//! a custom template). Host, Docker, LXC, and Apple Container machine variants.
 
 use crate::services::agent_registry::{AgentDefinition, AgentImplementation, BuiltinAgentId};
 
@@ -67,6 +67,138 @@ pub fn build_docker_shell_command(
         docker_runtime_bootstrap(runtime_env_path)
     );
     docker_exec_command(container, worktree_path, &inner)
+}
+
+/// PATH dirs that live under the guest `$HOME` (host home, same path).
+const SANDBOX_PATH_FALLBACK: &str =
+    "$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.opencode/bin";
+
+fn sandbox_runtime_bootstrap(runtime_env_path: &str) -> String {
+    format!(
+        "{}; export PATH=\"$PATH:{SANDBOX_PATH_FALLBACK}\"",
+        runtime_bootstrap(runtime_env_path)
+    )
+}
+
+fn sandbox_shell_inner(runtime_env_path: &str) -> String {
+    format!(
+        "{}; if [ -x '/bin/bash' ]; then exec '/bin/bash' -i; elif [ -x /bin/sh ]; then exec /bin/sh -i; else echo 'sebenza: no shell found in sandbox' >&2; exit 127; fi",
+        sandbox_runtime_bootstrap(runtime_env_path)
+    )
+}
+
+fn lxc_attach_command(
+    instance: &str,
+    worktree_path: &str,
+    host_uid: u32,
+    host_gid: u32,
+    host_home: &str,
+    command: &str,
+) -> String {
+    let inner = format!("cd {} || exit 1; {}", quote_shell(worktree_path), command);
+    format!(
+        "lxc-attach -n {} --uid {} --gid {} --clear-env -v HOME={} --keep-var TERM -- /bin/sh -c {}",
+        quote_shell(instance),
+        host_uid,
+        host_gid,
+        quote_shell(host_home),
+        quote_shell(&inner)
+    )
+}
+
+/// Agent pane: `lxc-attach` as the host uid, cwd = worktree, then the agent.
+pub fn build_lxc_agent_pane_command(
+    instance: &str,
+    worktree_path: &str,
+    runtime_env_path: &str,
+    host_uid: u32,
+    host_gid: u32,
+    host_home: &str,
+    inv: &AgentInvocation,
+) -> String {
+    let inner = format!(
+        "{}; {}",
+        sandbox_runtime_bootstrap(runtime_env_path),
+        agent_invocation(inv)
+    );
+    lxc_attach_command(
+        instance,
+        worktree_path,
+        host_uid,
+        host_gid,
+        host_home,
+        &inner,
+    )
+}
+
+/// Shell pane for an LXC-runtime worktree.
+pub fn build_lxc_shell_command(
+    instance: &str,
+    worktree_path: &str,
+    runtime_env_path: &str,
+    host_uid: u32,
+    host_gid: u32,
+    host_home: &str,
+) -> String {
+    lxc_attach_command(
+        instance,
+        worktree_path,
+        host_uid,
+        host_gid,
+        host_home,
+        &sandbox_shell_inner(runtime_env_path),
+    )
+}
+
+fn apple_machine_run_command(
+    instance: &str,
+    worktree_path: &str,
+    host_uid: u32,
+    host_gid: u32,
+    command: &str,
+) -> String {
+    format!(
+        "container machine run -n {} -it --uid {} --gid {} --workdir {} -- /bin/sh -c {}",
+        quote_shell(instance),
+        host_uid,
+        host_gid,
+        quote_shell(worktree_path),
+        quote_shell(command)
+    )
+}
+
+/// Agent pane: `container machine run` as the host uid, cwd = worktree.
+pub fn build_apple_agent_pane_command(
+    instance: &str,
+    worktree_path: &str,
+    runtime_env_path: &str,
+    host_uid: u32,
+    host_gid: u32,
+    inv: &AgentInvocation,
+) -> String {
+    let inner = format!(
+        "{}; {}",
+        sandbox_runtime_bootstrap(runtime_env_path),
+        agent_invocation(inv)
+    );
+    apple_machine_run_command(instance, worktree_path, host_uid, host_gid, &inner)
+}
+
+/// Shell pane for an Apple Container machine worktree.
+pub fn build_apple_shell_command(
+    instance: &str,
+    worktree_path: &str,
+    runtime_env_path: &str,
+    host_uid: u32,
+    host_gid: u32,
+) -> String {
+    apple_machine_run_command(
+        instance,
+        worktree_path,
+        host_uid,
+        host_gid,
+        &sandbox_shell_inner(runtime_env_path),
+    )
 }
 
 /// Parameters shared by the invocation builders.
@@ -492,6 +624,87 @@ mod tests {
         // The bootstrap's own single quotes are shell-escaped by the outer quoting.
         assert!(cmd.contains("set -a; . '\\''/x/runtime.env'\\''; set +a"));
         assert!(cmd.contains("exec "));
+    }
+
+    #[test]
+    fn lxc_agent_pane_attaches_as_host_uid_and_uses_host_home_path() {
+        let a = builtin("claude");
+        let i = inv(&a);
+        let cmd = build_lxc_agent_pane_command(
+            "sebenza-feat-1",
+            "/home/u/repo/__wt/feat",
+            "/home/u/repo/__wt/feat/.git/.ai/sebenza/runtime.env",
+            1000,
+            1000,
+            "/home/u",
+            &i,
+        );
+        assert!(cmd.contains("lxc-attach -n 'sebenza-feat-1'"), "{cmd}");
+        assert!(cmd.contains("--uid 1000"), "{cmd}");
+        assert!(cmd.contains("--gid 1000"), "{cmd}");
+        assert!(cmd.contains("cd "), "{cmd}");
+        assert!(cmd.contains("/home/u/repo/__wt/feat"), "{cmd}");
+        assert!(cmd.contains("runtime.env"), "{cmd}");
+        assert!(cmd.contains("$HOME/.local/bin"), "{cmd}");
+        assert!(cmd.contains("$HOME/.opencode/bin"), "{cmd}");
+        assert!(!cmd.contains("/root/.local/bin"), "{cmd}");
+        assert!(cmd.contains("claude"), "{cmd}");
+    }
+
+    #[test]
+    fn lxc_shell_pane_falls_back_to_sh() {
+        let cmd = build_lxc_shell_command(
+            "sebenza-feat-1",
+            "/home/u/wt",
+            "/home/u/wt/.git/.ai/sebenza/runtime.env",
+            1000,
+            1000,
+            "/home/u",
+        );
+        assert!(cmd.contains("lxc-attach"), "{cmd}");
+        assert!(cmd.contains("/bin/bash"), "{cmd}");
+        assert!(cmd.contains("/bin/sh"), "{cmd}");
+        assert!(cmd.contains("$HOME/.local/bin"), "{cmd}");
+        assert!(!cmd.contains("/root/.local/bin"), "{cmd}");
+    }
+
+    #[test]
+    fn apple_agent_pane_runs_machine_as_host_uid_with_workdir() {
+        let a = builtin("claude");
+        let i = inv(&a);
+        let cmd = build_apple_agent_pane_command(
+            "sebenza-feat-1",
+            "/Users/u/repo/__wt/feat",
+            "/Users/u/repo/__wt/feat/.git/.ai/sebenza/runtime.env",
+            501,
+            20,
+            &i,
+        );
+        assert!(
+            cmd.contains("container machine run -n 'sebenza-feat-1'"),
+            "{cmd}"
+        );
+        assert!(cmd.contains("--uid 501"), "{cmd}");
+        assert!(cmd.contains("--gid 20"), "{cmd}");
+        assert!(cmd.contains("--workdir '/Users/u/repo/__wt/feat'"), "{cmd}");
+        assert!(cmd.contains("$HOME/.local/bin"), "{cmd}");
+        assert!(!cmd.contains("/root/.local/bin"), "{cmd}");
+        assert!(cmd.contains("claude"), "{cmd}");
+    }
+
+    #[test]
+    fn apple_shell_pane_uses_machine_run() {
+        let cmd = build_apple_shell_command(
+            "sebenza-feat-1",
+            "/Users/u/wt",
+            "/Users/u/wt/.git/.ai/sebenza/runtime.env",
+            501,
+            20,
+        );
+        assert!(cmd.contains("container machine run"), "{cmd}");
+        assert!(cmd.contains("/bin/bash"), "{cmd}");
+        assert!(cmd.contains("$HOME/.opencode/bin"), "{cmd}");
+        assert!(!cmd.contains("/root/.opencode/bin"), "{cmd}");
     }
 
     #[test]
