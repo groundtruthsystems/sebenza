@@ -16,6 +16,7 @@ pub mod portfolio_service;
 pub mod pr_service;
 pub mod project_runtime;
 pub mod reconciliation;
+pub mod sandbox;
 pub mod session_restore_service;
 pub mod session_service;
 pub mod snapshot;

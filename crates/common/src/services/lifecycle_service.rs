@@ -2,7 +2,7 @@ use crate::adapters::agent_runtime::{
     ensure_agent_runtime_artifacts, scan_untrusted_agent_plugins,
 };
 use crate::adapters::control_token::load_control_token;
-use crate::adapters::docker::{LaunchContainerOpts, launch_container};
+
 use crate::adapters::fs::{
     build_control_env_map, build_runtime_env_map, get_worktree_storage_paths, load_dotenv_local,
     read_worktree_archive_state, read_worktree_meta, write_control_env, write_runtime_env,
@@ -21,7 +21,8 @@ use crate::adapters::tmux::{
 };
 use crate::config::expand_template;
 use crate::domain::config::{
-    PaneKind, PaneTemplate, ProfileConfig, ProjectConfig, RuntimeKind, profile_runtime_error,
+    PaneKind, PaneTemplate, ProfileConfig, ProjectConfig, RuntimeKind, is_sandboxed,
+    profile_runtime_error,
 };
 use crate::domain::model::OneshotMeta;
 use crate::domain::model::{
@@ -35,14 +36,14 @@ use crate::services::agent_registry::{
     AgentDefinition, AgentImplementation, BuiltinAgentId, get_agent_definition,
 };
 use crate::services::agent_service::{
-    AgentInvocation, AgentLaunchMode, build_agent_pane_command, build_docker_agent_pane_command,
-    build_docker_shell_command, build_managed_shell_command,
+    AgentInvocation, AgentLaunchMode, build_agent_pane_command, build_managed_shell_command,
 };
 use crate::services::archive_service::set_archived_worktree_state;
 use crate::services::auto_name_service::generate_branch_name;
 use crate::services::config_view::get_default_profile_name;
 use crate::services::project_runtime::ProjectRuntime;
 use crate::services::reconciliation::{ReconciliationService, make_main_worktree_id};
+use crate::services::sandbox::{self, SandboxLaunchSpec};
 use crate::services::session_service::{
     PaneCommandSet, SessionLayoutContext, ensure_session_layout, plan_session_layout,
 };
@@ -900,44 +901,38 @@ impl LifecycleService {
 
         self.refuse_invalid_runtime(&profile.profile)?;
 
-        let (agent_command, shell_command) = if profile.profile.runtime == RuntimeKind::Docker {
-            // Launch (or reuse) the sandbox container, then exec into it.
-            // Docker is refused above; this arm is unreachable until adapters replace it.
-            let image =
-                profile.profile.image.clone().ok_or_else(|| {
-                    LifecycleError::new("Docker profile is missing an image", 422)
-                })?;
-            let container = launch_container(&LaunchContainerOpts {
-                branch: branch.to_string(),
-                wt_dir: worktree_path.to_string(),
-                main_repo_dir: self.project_root.clone(),
-                image,
-                env_passthrough: profile.profile.env_passthrough.clone(),
-                mounts: profile.profile.mounts.clone().unwrap_or_default(),
-                service_port_envs: self
-                    .config
-                    .services
-                    .iter()
-                    .map(|s| s.port_env.clone())
-                    .collect(),
-                runtime_env: initialized.runtime_env.clone(),
-            })
-            .map_err(|e| LifecycleError::new(e, 422))?;
-            (
-                build_docker_agent_pane_command(
-                    &container,
-                    worktree_path,
-                    &runtime_env_path,
-                    &invocation,
-                ),
-                build_docker_shell_command(&container, worktree_path, &runtime_env_path),
-            )
-        } else {
-            (
-                build_agent_pane_command(&runtime_env_path, &invocation),
-                build_managed_shell_command(&runtime_env_path),
-            )
-        };
+        let mounts = profile.profile.mounts.clone().unwrap_or_default();
+        let service_port_envs: Vec<String> = self
+            .config
+            .services
+            .iter()
+            .map(|s| s.port_env.clone())
+            .collect();
+        let instance = sandbox::launch(&SandboxLaunchSpec {
+            runtime: profile.profile.runtime,
+            branch,
+            worktree_path,
+            repo_root: &self.project_root,
+            image: profile.profile.image.as_deref().unwrap_or(""),
+            env_passthrough: &profile.profile.env_passthrough,
+            mounts: &mounts,
+            service_port_envs: &service_port_envs,
+            runtime_env: &initialized.runtime_env,
+        })
+        .map_err(|e| LifecycleError::new(e, 422))?;
+        let (host_uid, host_gid) = sandbox::host_user_ids();
+        let host_home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+        let (agent_command, shell_command) = sandbox::pane_commands(
+            profile.profile.runtime,
+            instance.as_deref(),
+            worktree_path,
+            &runtime_env_path,
+            &invocation,
+            host_uid,
+            host_gid,
+            &host_home,
+        )
+        .map_err(|e| LifecycleError::new(e, 422))?;
 
         let plan = plan_session_layout(
             &self.project_root,
@@ -963,6 +958,7 @@ impl LifecycleService {
         worktree_path: &str,
         delete_branch: bool,
     ) -> Result<(), LifecycleError> {
+        sandbox::remove_any(branch);
         let _ = self.kill_worktree_windows(branch);
         op(self
             .git
@@ -1154,7 +1150,8 @@ impl LifecycleService {
     ) -> Result<WorktreeTab, LifecycleError> {
         // The main repo is a terminal-only session by design: no agents there.
         self.refuse_for_main_repo(branch, "start an agent session in")?;
-        let slot = self.prepare_tab_slot(branch, "Tabs are not supported for Docker worktrees")?;
+        let slot =
+            self.prepare_tab_slot(branch, "Tabs are not supported for sandboxed worktrees")?;
         // The *chosen* agent, which may differ from the worktree's own.
         let agent = self.resolve_agent_definition(Some(agent_id))?;
         // An Option, not a gate: it only decides whether we can capture a session
@@ -1215,8 +1212,10 @@ impl LifecycleService {
     /// the visible slot. Available for any open host-runtime worktree (not just
     /// the built-in agents), so custom-agent worktrees can get a browser shell.
     pub fn create_worktree_shell_tab(&self, branch: &str) -> Result<WorktreeTab, LifecycleError> {
-        let slot =
-            self.prepare_tab_slot(branch, "Shell tabs are not supported for Docker worktrees")?;
+        let slot = self.prepare_tab_slot(
+            branch,
+            "Shell tabs are not supported for sandboxed worktrees",
+        )?;
         let shell_count = list_tabs(&slot.meta)
             .iter()
             .filter(|t| t.kind == WorktreeTabKind::Shell)
@@ -1245,7 +1244,8 @@ impl LifecycleService {
     /// Bring a parked tab's pane into the visible agent slot. Works for any tab
     /// kind on any agent — swapping panes needs no session discovery.
     pub fn select_worktree_tab(&self, branch: &str, tab_id: &str) -> Result<(), LifecycleError> {
-        let slot = self.prepare_tab_slot(branch, "Tabs are not supported for Docker worktrees")?;
+        let slot =
+            self.prepare_tab_slot(branch, "Tabs are not supported for sandboxed worktrees")?;
         let target = find_tab(&slot.meta, tab_id)
             .ok_or_else(|| LifecycleError::new(format!("Tab not found: {tab_id}"), 404))?;
         let outgoing_active_id = read_active_tab_id(&slot.meta);
@@ -1278,7 +1278,8 @@ impl LifecycleService {
     /// Kill a non-root tab's pane and drop it from the tab list. Works for any
     /// tab kind on any agent — killing a pane needs no session discovery.
     pub fn delete_worktree_tab(&self, branch: &str, tab_id: &str) -> Result<(), LifecycleError> {
-        let slot = self.prepare_tab_slot(branch, "Tabs are not supported for Docker worktrees")?;
+        let slot =
+            self.prepare_tab_slot(branch, "Tabs are not supported for sandboxed worktrees")?;
         let target = find_tab(&slot.meta, tab_id)
             .ok_or_else(|| LifecycleError::new(format!("Tab not found: {tab_id}"), 404))?;
         if target.kind == WorktreeTabKind::Root {
@@ -1335,7 +1336,7 @@ impl LifecycleService {
         }
 
         let profile = self.resolve_profile(Some(&meta.profile))?;
-        if profile.profile.runtime == RuntimeKind::Docker {
+        if is_sandboxed(profile.profile.runtime) {
             return Err(LifecycleError::new(docker_error, 409));
         }
         let agent = self.resolve_agent_definition(Some(&meta.agent))?;
@@ -1366,7 +1367,8 @@ impl LifecycleService {
         &self,
         branch: &str,
     ) -> Result<(TabSlot, DiscoverableAgentKind), LifecycleError> {
-        let slot = self.prepare_tab_slot(branch, "Tabs are not supported for Docker worktrees")?;
+        let slot =
+            self.prepare_tab_slot(branch, "Tabs are not supported for sandboxed worktrees")?;
         let agent_kind = discoverable_agent_kind(&slot.agent).ok_or_else(|| {
             LifecycleError::new(
                 "Forking a tab is only available for the built-in Claude and Codex agents",
@@ -1423,10 +1425,10 @@ impl LifecycleService {
         profile: &ResolvedProfile,
         runtime_env_path: &str,
     ) -> Result<(), LifecycleError> {
-        // Docker worktrees have no parked-pane path at all. Note we deliberately
+        // Sandboxed worktrees have no parked-pane path at all. Note we deliberately
         // do NOT bail on custom agents any more: their agent tabs need rebuilding
         // too, and a fresh relaunch needs no session discovery.
-        if profile.profile.runtime == RuntimeKind::Docker {
+        if is_sandboxed(profile.profile.runtime) {
             return Ok(());
         }
         let Some(meta) = read_worktree_meta(git_dir) else {
@@ -1628,8 +1630,8 @@ impl LifecycleService {
             .clone()
             .unwrap_or_else(|| resolved.entry.path.clone());
 
-        if resolved.meta.as_ref().map(|m| m.runtime.as_str()) == Some("docker") {
-            crate::adapters::docker::remove_container(&branch);
+        if let Some(runtime) = resolved.meta.as_ref().map(|m| m.runtime.as_str()) {
+            sandbox::remove(runtime, &branch);
         }
 
         self.kill_worktree_windows(&branch)?;
