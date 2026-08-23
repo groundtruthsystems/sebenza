@@ -1,4 +1,5 @@
 pub mod agent_runtime;
+pub mod apple_container;
 pub mod claude_cli;
 pub mod codex_session_log;
 pub mod control_token;
