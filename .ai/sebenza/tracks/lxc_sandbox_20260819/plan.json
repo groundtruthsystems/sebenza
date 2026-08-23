@@ -75,20 +75,22 @@
     {
       "id": "phase-3",
       "name": "Apple adapter",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Write tests for Apple Container argv builders",
           "description": "Tests for machine create flags (home-mount none), same-path shares, exec argv, name filter, delete --force (FR4).",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "0c8f2a1"
         },
         {
           "id": "phase-3-task-2",
           "name": "Implement adapters/apple_container.rs",
           "description": "Detect container + system status, create/start/exec/delete machine. Platform refuse stays in the service layer.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "0c8f2a1"
         },
         {
           "id": "phase-3-task-3",
