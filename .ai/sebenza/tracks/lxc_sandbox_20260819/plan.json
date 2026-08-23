@@ -131,20 +131,22 @@
     {
       "id": "phase-5",
       "name": "Lifecycle integration",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-5-task-1",
           "name": "Write tests for lifecycle dispatch and rollback",
           "description": "materialize launches lxc/apple; remove destroys the instance; failed create removes git worktree and instance; tabs refuse sandboxed runtimes (FR6). Mock adapters.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "756de24"
         },
         {
           "id": "phase-5-task-2",
           "name": "Wire lifecycle to LXC and Apple adapters",
           "description": "Replace Docker launch in materialize_runtime_session with lxc/apple. Remove/rollback destroy. is_sandboxed for tabs.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "756de24"
         },
         {
           "id": "phase-5-task-3",
@@ -164,13 +166,15 @@
           "id": "phase-6-task-1",
           "name": "Write tests for docker-orphan remove and launch refusal",
           "description": "Remove of meta.runtime=docker still attempts docker rm of sebenza-<branch>-* names. No code path builds docker run/exec anymore (FR6.6).",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "756de24"
         },
         {
           "id": "phase-6-task-2",
           "name": "Delete Docker launch adapter and pane builders",
           "description": "Remove adapters/docker.rs launch API and build_docker_*. Keep a tiny orphan-rm helper. Drop docker from init optional tools.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "eed08b5"
         },
         {
           "id": "phase-6-task-3",
@@ -190,13 +194,15 @@
           "id": "phase-7-task-1",
           "name": "Write tests for init optional-tool detection",
           "description": "init lists lxc-create on Linux and container on macOS, not docker (FR7.1).",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "eed08b5"
         },
         {
           "id": "phase-7-task-2",
           "name": "Update init example, README, tech-stack, workflow, init_authoring",
           "description": "Commented sandbox profile is lxc/apple. tech-stack optional deps and workflow cross-runtime line updated. Frontend runtime unions if typed (FR7).",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "eed08b5"
         },
         {
           "id": "phase-7-task-3",
