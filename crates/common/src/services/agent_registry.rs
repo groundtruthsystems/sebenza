@@ -119,16 +119,15 @@ fn builtin_capabilities(id: BuiltinAgentId) -> AgentCapabilities {
         // something that does not work yet.
         BuiltinAgentId::Grok => AgentCapabilities {
             terminal: true,
-            // Needs StreamProvider::Grok + run_grok. grok's
-            // `--output-format streaming-messages-json` is the Messages `stream-json` wire
-            // format, so it reuses `parse_claude_stream_line` verbatim (verified against
-            // grok 1.0.5), but the provider itself is not wired yet.
-            in_app_chat: false,
+            // `--output-format streaming-messages-json` IS the Messages `stream-json` wire
+            // format, so StreamProvider::Grok reuses `parse_claude_stream_line` verbatim
+            // (verified against grok 1.0.5).
+            in_app_chat: true,
             // The updates.jsonl adapter plus the pinned `-s` id and the SessionStart hook
             // round trip both landed.
             conversation_history: true,
-            // Comes with the streaming provider.
-            interrupt: false,
+            // The streaming provider kills the child process, same as claude's.
+            interrupt: true,
             // `-r/--resume <id>`, or `-c/--continue` for the newest session in the cwd.
             resume: true,
             // `--resume <id> --fork-session`, the same shape as claude.
@@ -499,19 +498,17 @@ mod tests {
             !grok.capabilities.permission_interception,
             "grok's PreToolUse CAN deny, but answering a prompt from the dashboard has no UI yet"
         );
-        // Flipped by the phases that implement them, so the UI never advertises a feature
-        // whose code does not exist. See the opencode assertions below for the precedent.
         assert!(
-            !grok.capabilities.in_app_chat,
-            "chat needs StreamProvider::Grok + run_grok, not yet landed"
+            grok.capabilities.in_app_chat,
+            "StreamProvider::Grok reuses the Messages stream-json parser"
         );
         assert!(
             grok.capabilities.conversation_history,
             "the updates.jsonl adapter and the pinned session id both landed"
         );
         assert!(
-            !grok.capabilities.interrupt,
-            "interrupt needs the streaming provider"
+            grok.capabilities.interrupt,
+            "the streaming provider kills the child, same as claude's"
         );
 
         let codex = defs

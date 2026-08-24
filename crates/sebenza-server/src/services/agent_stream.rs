@@ -12,10 +12,23 @@ use tokio::sync::broadcast;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum StreamProvider {
     Claude,
+    Grok,
     Codex,
 }
 
 impl StreamProvider {
+    /// Namespace for this provider's turn and message ids. Claude and Codex share
+    /// `claude` because they always have: the value is a diagnostic label, not something
+    /// the frontend parses, and changing Codex's would alter existing behaviour for no
+    /// gain. A third provider emitting `claude-turn:` ids is the cross-provider confusion
+    /// `conversation_router`'s module docs were written about, so grok gets its own.
+    pub fn id_prefix(self) -> &'static str {
+        match self {
+            StreamProvider::Claude | StreamProvider::Codex => "claude",
+            StreamProvider::Grok => "grok",
+        }
+    }
+
     /// The streaming provider for a built-in agent, or `None` when that agent has no
     /// in-app chat implementation. Exhaustive on `BuiltinAgentId`, so a new built-in
     /// must decide here rather than silently inheriting Claude's provider.
@@ -26,12 +39,10 @@ impl StreamProvider {
         match id {
             BuiltinAgentId::Claude => Some(StreamProvider::Claude),
             BuiltinAgentId::Codex => Some(StreamProvider::Codex),
-            // grok has no streaming provider yet. Its
-            // `--output-format streaming-messages-json` is the Messages `stream-json` wire
-            // format, so `parse_claude_stream_line` handles it unchanged (verified against
-            // grok 1.0.5) - but `run_grok` is not written yet, and its capabilities declare
-            // in_app_chat: false, so nothing offers chat for it.
-            BuiltinAgentId::Grok => None,
+            // grok's `--output-format streaming-messages-json` IS the Messages
+            // `stream-json` wire format, verified against grok 1.0.5 down to the
+            // snake_case `session_id` field, so it shares Claude's line parser.
+            BuiltinAgentId::Grok => Some(StreamProvider::Grok),
             // opencode has no streaming provider yet: in-app chat depends on the
             // generated plugin and the export-based history adapter, later in this phase.
             // Its capabilities declare in_app_chat: false, so nothing offers chat for it.
@@ -120,13 +131,14 @@ impl AgentStreamManager {
             .unwrap_or(false)
     }
 
-    /// Start a Claude streaming turn. Returns the new turn id, or an error if a
-    /// turn is already running for this conversation.
+    /// Start a streaming turn for `input.provider`. Returns the new turn id, or an error if
+    /// a turn is already running for this conversation.
     pub fn start_run(&self, input: StartRunInput) -> Result<String, String> {
         if self.has_active_run(&input.conversation_id) {
-            return Err("Claude is already responding in this conversation".to_string());
+            return Err("The agent is already responding in this conversation".to_string());
         }
-        let turn_id = format!("claude-turn:{}", random_uuid());
+        let prefix = input.provider.id_prefix();
+        let turn_id = format!("{prefix}-turn:{}", random_uuid());
         let (tx, _rx) = broadcast::channel::<StreamEvent>(1024);
         let run = Arc::new(RunState {
             turn_id: turn_id.clone(),
@@ -142,7 +154,7 @@ impl AgentStreamManager {
 
         // Optimistic user message + running status, before the process starts.
         let user_msg = DraftMessage {
-            id: format!("claude-user:{turn_id}"),
+            id: format!("{prefix}-user:{turn_id}"),
             turn_id: turn_id.clone(),
             role: "user".to_string(),
             kind: "text".to_string(),
@@ -161,6 +173,7 @@ impl AgentStreamManager {
         tokio::spawn(async move {
             match input.provider {
                 StreamProvider::Claude => run_claude(input, run.clone()).await,
+                StreamProvider::Grok => run_grok(input, run.clone()).await,
                 StreamProvider::Codex => run_codex(input, run.clone()).await,
             }
             finish_run(&run, "completed");
@@ -253,33 +266,33 @@ fn finish_run(run: &RunState, status: &str) {
     emit_status(run, false);
 }
 
-/// Spawn `claude` and pump its stream-json output into the run's broadcast.
-async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
-    let mut args: Vec<String> = vec![
-        "-p".into(),
-        "--verbose".into(),
-        "--output-format".into(),
-        "stream-json".into(),
-        "--include-partial-messages".into(),
-    ];
-    if let Some(resume) = &input.resume_session_id {
-        args.push("-r".into());
-        args.push(resume.clone());
-    }
-    if let Some(mode) = &input.permission_mode {
-        args.push("--permission-mode".into());
-        args.push(mode.clone());
-    }
-    if let Some(sys) = &input.system_prompt {
-        args.push("--append-system-prompt".into());
-        args.push(sys.clone());
-    }
-
-    let mut command = tokio::process::Command::new("claude");
+/// Spawn a Messages-`stream-json` agent and pump its NDJSON into the run's broadcast.
+///
+/// Shared by Claude and grok because grok's `streaming-messages-json` IS the Messages
+/// `stream-json` wire format - verified against grok 1.0.5, whose lines carry `session_id`,
+/// `message.id`, `content_block_start.index` and `text_delta` exactly where
+/// `parse_claude_stream_line` looks for them. Keeping one pump means interrupt and teardown
+/// behaviour cannot drift between the two providers.
+///
+/// `stdin_prompt` is the one real difference: `claude -p` reads the prompt from stdin, while
+/// `grok -p` takes it as the flag's value, so grok passes `false` and puts the prompt in
+/// `args`.
+async fn run_messages_stream_agent(
+    binary: &str,
+    args: Vec<String>,
+    stdin_prompt: bool,
+    input: StartRunInput,
+    run: Arc<RunState>,
+) {
+    let mut command = tokio::process::Command::new(binary);
     command
         .args(&args)
         .current_dir(&input.cwd)
-        .stdin(Stdio::piped())
+        .stdin(if stdin_prompt {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     for (k, v) in &input.env {
@@ -290,14 +303,14 @@ async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
         Ok(child) => child,
         Err(e) => {
             let _ = run.tx.send(StreamEvent::Error {
-                message: format!("failed to spawn claude: {e}"),
+                message: format!("failed to spawn {binary}: {e}"),
             });
             return;
         }
     };
 
     // Feed the prompt on stdin, then close it.
-    if let Some(mut stdin) = child.stdin.take() {
+    if stdin_prompt && let Some(mut stdin) = child.stdin.take() {
         let prompt = if input.prompt.ends_with('\n') {
             input.prompt.clone()
         } else {
@@ -336,6 +349,70 @@ async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
         }
     }
     let _ = child.wait().await;
+}
+
+/// Spawn `claude` and pump its stream-json output into the run's broadcast.
+async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
+    let mut args: Vec<String> = vec![
+        "-p".into(),
+        "--verbose".into(),
+        "--output-format".into(),
+        "stream-json".into(),
+        "--include-partial-messages".into(),
+    ];
+    if let Some(resume) = &input.resume_session_id {
+        args.push("-r".into());
+        args.push(resume.clone());
+    }
+    if let Some(mode) = &input.permission_mode {
+        args.push("--permission-mode".into());
+        args.push(mode.clone());
+    }
+    if let Some(sys) = &input.system_prompt {
+        args.push("--append-system-prompt".into());
+        args.push(sys.clone());
+    }
+    run_messages_stream_agent("claude", args, true, input, run).await;
+}
+
+/// Spawn `grok` headless and pump its Messages-format NDJSON into the run's broadcast.
+///
+/// Differences from `run_claude`, all verified against grok 1.0.5:
+/// - `--output-format streaming-messages-json` is grok's name for Messages `stream-json`.
+///   There is no `--verbose`; the stream is already fully framed.
+/// - **the prompt is `-p`'s value, not stdin.** `grok -p/--single <PROMPT>` requires a
+///   value, so there is nothing to write to stdin (`--prompt-file` is the file form).
+/// - `--rules` carries the system prompt, the additive form. `--system-prompt-override`
+///   would replace grok's own system prompt and strip its tool instructions.
+/// - `GROK_CLAUDE_HOOKS_ENABLED=0`, for the same reason the pane command sets it: grok
+///   reads `.claude/settings.local.json` hooks by default, which are Sebenza's *Claude*
+///   hooks and would fire `claude-*` handlers with grok's camelCase payloads.
+async fn run_grok(input: StartRunInput, run: Arc<RunState>) {
+    let mut args: Vec<String> = vec![
+        "-p".into(),
+        input.prompt.clone(),
+        "--output-format".into(),
+        "streaming-messages-json".into(),
+        "--include-partial-messages".into(),
+    ];
+    if let Some(resume) = &input.resume_session_id {
+        args.push("-r".into());
+        args.push(resume.clone());
+    }
+    if let Some(mode) = &input.permission_mode {
+        args.push("--permission-mode".into());
+        args.push(mode.clone());
+    }
+    if let Some(sys) = &input.system_prompt {
+        args.push("--rules".into());
+        args.push(sys.clone());
+    }
+
+    let mut input = input;
+    input
+        .env
+        .insert("GROK_CLAUDE_HOOKS_ENABLED".to_string(), "0".to_string());
+    run_messages_stream_agent("grok", args, false, input, run).await;
 }
 
 /// Apply one parsed stream line to the run (mirrors `handleStreamLine` +
@@ -546,6 +623,17 @@ mod stream_provider_tests {
     use super::*;
     use common::services::agent_registry::BuiltinAgentId;
 
+    /// grok must not emit `claude-turn:`/`claude-user:` ids. Claude and Codex keep sharing
+    /// the `claude` namespace, because that is what they already do and the value is a
+    /// diagnostic label rather than something the frontend parses - changing Codex's would
+    /// be a behaviour change for no gain.
+    #[test]
+    fn each_provider_namespaces_its_ids_and_grok_does_not_borrow_claudes() {
+        assert_eq!(StreamProvider::Claude.id_prefix(), "claude");
+        assert_eq!(StreamProvider::Codex.id_prefix(), "claude");
+        assert_eq!(StreamProvider::Grok.id_prefix(), "grok");
+    }
+
     #[test]
     fn every_builtin_maps_to_a_stream_provider_or_explicitly_to_none() {
         // Exhaustive by construction: if a new BuiltinAgentId variant is added,
@@ -556,9 +644,7 @@ mod stream_provider_tests {
             match id {
                 BuiltinAgentId::Claude => assert!(matches!(provider, Some(StreamProvider::Claude))),
                 BuiltinAgentId::Codex => assert!(matches!(provider, Some(StreamProvider::Codex))),
-                // Explicitly no provider yet — chat is disabled for grok via its
-                // capabilities until `run_grok` lands.
-                BuiltinAgentId::Grok => assert!(provider.is_none()),
+                BuiltinAgentId::Grok => assert!(matches!(provider, Some(StreamProvider::Grok))),
                 // Explicitly no provider yet — chat is disabled for opencode via its
                 // capabilities until the plugin and export adapter land.
                 BuiltinAgentId::Opencode => assert!(provider.is_none()),
