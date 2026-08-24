@@ -47,19 +47,26 @@ fn git_root(cwd: &str) -> Option<String> {
 /// conventional directory,
 /// so a bare `which` reports a perfectly good install as missing — particularly for a
 /// server started from systemd, which need not inherit the login shell's PATH.
-fn resolve_optional_tool(tool: &str) -> Option<String> {
-    if which(tool) {
-        return Some(tool.to_string());
-    }
-    let home = std::env::var_os("HOME")?;
-    let candidates: &[&str] = match tool {
+/// Home-relative places a tool may live when it is not on `PATH`, keyed by tool name.
+///
+/// Separate from `resolve_optional_tool` so the table can be asserted without mutating
+/// `HOME`/`PATH`, which would race the other tests in this binary.
+fn home_relative_candidates(tool: &str) -> &'static [&'static str] {
+    match tool {
         "opencode" => &[".opencode/bin/opencode"],
         // grok installs to ~/.grok/bin, which is not on a default PATH either.
         "grok" => &[".grok/bin/grok"],
         "goose" => &[".local/bin/goose"],
         _ => &[],
-    };
-    candidates.iter().find_map(|rel| {
+    }
+}
+
+fn resolve_optional_tool(tool: &str) -> Option<String> {
+    if which(tool) {
+        return Some(tool.to_string());
+    }
+    let home = std::env::var_os("HOME")?;
+    home_relative_candidates(tool).iter().find_map(|rel| {
         let p = std::path::Path::new(&home).join(rel);
         p.is_file().then(|| p.to_string_lossy().to_string())
     })
@@ -202,6 +209,31 @@ fn finish() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every built-in agent must be detected, or `init` reports a working install as
+    /// missing and the user has no way to tell why their agent never starts.
+    #[test]
+    fn every_builtin_agent_cli_is_detected() {
+        let tools = optional_init_tools();
+        for agent in ["claude", "grok", "codex", "opencode"] {
+            assert!(tools.contains(&agent), "{agent} is a built-in agent");
+        }
+    }
+
+    /// grok installs to `~/.grok/bin` and opencode to `~/.opencode/bin`, neither on a
+    /// default `PATH` - so a bare `which` reports a good install as missing, particularly
+    /// for a server started from systemd, which need not inherit the login shell's PATH.
+    #[test]
+    fn the_agents_with_unconventional_install_dirs_have_home_relative_fallbacks() {
+        assert_eq!(home_relative_candidates("grok"), &[".grok/bin/grok"]);
+        assert_eq!(
+            home_relative_candidates("opencode"),
+            &[".opencode/bin/opencode"]
+        );
+        // claude and codex install onto PATH, so they need no fallback.
+        assert!(home_relative_candidates("claude").is_empty());
+        assert!(home_relative_candidates("codex").is_empty());
+    }
 
     #[test]
     fn optional_tools_include_the_platform_sandbox_cli_not_docker() {
