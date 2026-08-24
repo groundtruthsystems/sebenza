@@ -6,6 +6,7 @@ pub mod control_token;
 pub mod docker;
 pub mod fs;
 pub mod git;
+pub mod grok_session_log;
 pub mod hooks;
 pub mod instance_registry;
 pub mod lxc;

@@ -1,5 +1,5 @@
 //! Agent registry.
-//! Resolves built-in (claude/codex) and custom agent definitions used when
+//! Resolves built-in (claude/grok/codex/opencode) and custom agent definitions used when
 //! building a worktree's agent launch command.
 
 use crate::domain::config::{CustomAgentConfig, ProjectConfig};
@@ -38,6 +38,7 @@ pub struct AgentCapabilities {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BuiltinAgentId {
     Claude,
+    Grok,
     Codex,
     Opencode,
 }
@@ -46,6 +47,7 @@ impl BuiltinAgentId {
     /// Every built-in agent, in the order they are offered.
     pub const ALL: &'static [BuiltinAgentId] = &[
         BuiltinAgentId::Claude,
+        BuiltinAgentId::Grok,
         BuiltinAgentId::Codex,
         BuiltinAgentId::Opencode,
     ];
@@ -55,6 +57,7 @@ impl BuiltinAgentId {
     pub fn as_str(self) -> &'static str {
         match self {
             BuiltinAgentId::Claude => "claude",
+            BuiltinAgentId::Grok => "grok",
             BuiltinAgentId::Codex => "codex",
             BuiltinAgentId::Opencode => "opencode",
         }
@@ -64,6 +67,7 @@ impl BuiltinAgentId {
     pub fn label(self) -> &'static str {
         match self {
             BuiltinAgentId::Claude => "Claude",
+            BuiltinAgentId::Grok => "Grok",
             BuiltinAgentId::Codex => "Codex",
             BuiltinAgentId::Opencode => "OpenCode",
         }
@@ -106,6 +110,34 @@ fn builtin_capabilities(id: BuiltinAgentId) -> AgentCapabilities {
             fork: true,
             // `--session-id` lets Sebenza choose the id up front.
             pinnable_session_id: true,
+            permission_interception: false,
+        },
+        // grok arrives incrementally, like opencode did: the terminal and hook-driven
+        // status work as soon as the agent is registered, while chat and history depend on
+        // the streaming provider and the updates.jsonl adapter landing in later phases.
+        // Each flag is flipped by the phase that makes it true, so the UI never advertises
+        // something that does not work yet.
+        BuiltinAgentId::Grok => AgentCapabilities {
+            terminal: true,
+            // Needs StreamProvider::Grok + run_grok. grok's
+            // `--output-format streaming-messages-json` is the Messages `stream-json` wire
+            // format, so it reuses `parse_claude_stream_line` verbatim (verified against
+            // grok 1.0.5), but the provider itself is not wired yet.
+            in_app_chat: false,
+            // Needs the `~/.grok/sessions/<encoded-cwd>/<id>/updates.jsonl` adapter.
+            conversation_history: false,
+            // Comes with the streaming provider.
+            interrupt: false,
+            // `-r/--resume <id>`, or `-c/--continue` for the newest session in the cwd.
+            resume: true,
+            // `--resume <id> --fork-session`, the same shape as claude.
+            fork: true,
+            // `-s/--session-id <uuid>` pins a new session, so the id never has to be
+            // discovered by polling.
+            pinnable_session_id: true,
+            // grok's PreToolUse hook genuinely CAN deny a tool call - it is the first
+            // built-in that could claim this - but answering a permission prompt from the
+            // dashboard needs a UI, not just a flag. Deferred; see TODO.md.
             permission_interception: false,
         },
         BuiltinAgentId::Codex => AgentCapabilities {
@@ -417,8 +449,9 @@ mod tests {
     }
 
     /// The verified per-agent capability matrix. `fork` and `pinnable_session_id` differ
-    /// between the two built-ins today; `permission_interception` is false for both
-    /// because neither Claude's nor Codex's hooks can gate a tool call.
+    /// across the built-ins; `permission_interception` is false for all of them, because
+    /// Claude's and Codex's hooks only observe, opencode's `permission.ask` was never seen
+    /// firing, and grok's `PreToolUse` can deny but has no dashboard UI to answer with.
     #[test]
     fn builtin_capability_matrix_matches_verified_behaviour() {
         let config = config_with(&[]);
@@ -439,6 +472,45 @@ mod tests {
         assert!(
             !claude.capabilities.permission_interception,
             "claude hooks observe; they cannot deny a tool call"
+        );
+
+        let grok = defs
+            .iter()
+            .find(|d| d.id == "grok")
+            .expect("grok is builtin");
+        assert!(
+            grok.capabilities.terminal,
+            "the terminal works from registration"
+        );
+        assert!(
+            grok.capabilities.resume,
+            "`-r/--resume <id>` and `-c/--continue` both work from launch"
+        );
+        assert!(
+            grok.capabilities.fork,
+            "grok forks via --resume <id> --fork-session, the same shape as claude"
+        );
+        assert!(
+            grok.capabilities.pinnable_session_id,
+            "grok accepts -s/--session-id <uuid> for a new session, so the id is pinned at launch"
+        );
+        assert!(
+            !grok.capabilities.permission_interception,
+            "grok's PreToolUse CAN deny, but answering a prompt from the dashboard has no UI yet"
+        );
+        // Flipped by the phases that implement them, so the UI never advertises a feature
+        // whose code does not exist. See the opencode assertions below for the precedent.
+        assert!(
+            !grok.capabilities.in_app_chat,
+            "chat needs StreamProvider::Grok + run_grok, not yet landed"
+        );
+        assert!(
+            !grok.capabilities.conversation_history,
+            "history needs the updates.jsonl adapter, not yet landed"
+        );
+        assert!(
+            !grok.capabilities.interrupt,
+            "interrupt needs the streaming provider"
         );
 
         let codex = defs

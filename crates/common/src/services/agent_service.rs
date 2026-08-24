@@ -1,6 +1,6 @@
 //! Agent launch-command builders. Produces the shell command a
-//! tmux pane runs to source the runtime env then exec the agent (claude/codex or
-//! a custom template). Host, Docker, LXC, and Apple Container machine variants.
+//! tmux pane runs to source the runtime env then exec the agent (claude/grok/codex/
+//! opencode or a custom template). Host, Docker, LXC, and Apple Container machine variants.
 
 use crate::services::agent_registry::{AgentDefinition, AgentImplementation, BuiltinAgentId};
 
@@ -19,10 +19,9 @@ fn runtime_bootstrap(runtime_env_path: &str) -> String {
     format!("set -a; . {}; set +a", quote_shell(runtime_env_path))
 }
 
-// `/root/.opencode/bin` is opencode's own install location, which is not a conventional
-// directory and is not on a container's default PATH.
-const DOCKER_PATH_FALLBACK: &str =
-    "/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin:/root/.opencode/bin";
+// `/root/.opencode/bin` and `/root/.grok/bin` are opencode's and grok's own install
+// locations, neither a conventional directory nor on a container's default PATH.
+const DOCKER_PATH_FALLBACK: &str = "/root/.local/bin:/usr/local/bin:/root/.bun/bin:/root/.cargo/bin:/root/.opencode/bin:/root/.grok/bin";
 
 fn docker_runtime_bootstrap(runtime_env_path: &str) -> String {
     format!(
@@ -71,7 +70,7 @@ pub fn build_docker_shell_command(
 
 /// PATH dirs that live under the guest `$HOME` (host home, same path).
 const SANDBOX_PATH_FALLBACK: &str =
-    "$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.opencode/bin";
+    "$HOME/.local/bin:$HOME/.bun/bin:$HOME/.cargo/bin:$HOME/.opencode/bin:$HOME/.grok/bin";
 
 fn sandbox_runtime_bootstrap(runtime_env_path: &str) -> String {
     format!(
@@ -259,6 +258,66 @@ fn claude_invocation(inv: &AgentInvocation, prompt_suffix: &str) -> String {
     format!("claude{yolo}{pin}{prompt_suffix}")
 }
 
+/// grok's launch argv (verified against Grok Build 1.0.5).
+///
+/// The flag shapes match Claude's almost exactly - `--session-id`, `--resume`,
+/// `--fork-session`, `--continue` - so this mirrors `claude_invocation`. Three things are
+/// grok-specific and deliberate:
+///
+/// - **`GROK_CLAUDE_HOOKS_ENABLED=0` is required, not cosmetic.** grok scans
+///   `<project>/.claude/settings.json` and `settings.local.json` for hooks by default
+///   (`[compat.claude] hooks`), which is exactly where Sebenza writes its *Claude* hooks. A
+///   grok pane would otherwise fire `sebenza-agentctl claude-*` handlers with grok's
+///   camelCase payloads (`sessionId`, not `session_id`). Verified with `grok inspect`: with
+///   this set, those hooks report `[disabled]` and compat reads `hooks OFF (env)`.
+/// - **`--rules`, not `--system-prompt-override`.** Sebenza's `system_prompt` is additive,
+///   the role claude's `--append-system-prompt` plays. `--system-prompt-override` *replaces*
+///   grok's own system prompt, which would strip its tool instructions.
+/// - **no `--trust`.** grok gates project hooks and plugins behind folder trust, and a
+///   worktree inherits its parent repo's trust through the git common dir (verified), so the
+///   flag is unnecessary. Passing it would grant an unvetted repo the right to run
+///   `.grok/hooks/` and load `.grok/plugins/`; `scan_untrusted_agent_plugins` is the
+///   compensating control for the case where trust is already granted.
+///
+/// Unlike opencode, grok takes a positional prompt, so `-- '<prompt>'` (the shared
+/// `prompt_suffix`) parses correctly and is used.
+fn grok_invocation(inv: &AgentInvocation, prompt_suffix: &str) -> String {
+    // Scoped to the pane rather than written into the shared runtime env file, so the argv
+    // is self-describing and the collision fix is covered by the GOLDEN table.
+    let base = "GROK_CLAUDE_HOOKS_ENABLED=0 grok";
+    let yolo = if inv.yolo { " --always-approve" } else { "" };
+    if inv.launch_mode == AgentLaunchMode::Fork
+        && let Some(fork) = inv.fork_from_session_id
+    {
+        let pin = inv
+            .pin_session_id
+            .map(|id| format!(" --session-id {}", quote_shell(id)))
+            .unwrap_or_default();
+        return format!(
+            "{base}{yolo} --resume {} --fork-session{pin}{prompt_suffix}",
+            quote_shell(fork)
+        );
+    }
+    if inv.launch_mode == AgentLaunchMode::Resume {
+        let target = inv
+            .resume_conversation_id
+            .map(|id| format!(" --resume {}", quote_shell(id)))
+            .unwrap_or_else(|| " --continue".to_string());
+        return format!("{base}{yolo}{target}{prompt_suffix}");
+    }
+    let pin = inv
+        .pin_session_id
+        .map(|id| format!(" --session-id {}", quote_shell(id)))
+        .unwrap_or_default();
+    if let Some(sys) = inv.system_prompt {
+        return format!(
+            "{base}{yolo}{pin} --rules {}{prompt_suffix}",
+            quote_shell(sys)
+        );
+    }
+    format!("{base}{yolo}{pin}{prompt_suffix}")
+}
+
 /// Codex's launch argv. Unlike Claude, Codex needs `--enable hooks` explicitly and
 /// ignores `pin_session_id` (it assigns its own session id).
 fn codex_invocation(inv: &AgentInvocation, prompt_suffix: &str) -> String {
@@ -333,6 +392,7 @@ fn built_in_invocation(agent: BuiltinAgentId, inv: &AgentInvocation) -> String {
 
     match agent {
         BuiltinAgentId::Claude => claude_invocation(inv, &prompt_suffix),
+        BuiltinAgentId::Grok => grok_invocation(inv, &prompt_suffix),
         BuiltinAgentId::Codex => codex_invocation(inv, &prompt_suffix),
         // opencode takes its prompt via --prompt, so it builds its own rather than
         // using the shared `-- <prompt>` suffix.
@@ -466,6 +526,36 @@ mod tests {
             "fork",
             "claude --resume 'fid' --fork-session --session-id 'pin'",
         ),
+        (
+            BuiltinAgentId::Grok,
+            "fresh",
+            "GROK_CLAUDE_HOOKS_ENABLED=0 grok",
+        ),
+        (
+            BuiltinAgentId::Grok,
+            "fresh+yolo",
+            "GROK_CLAUDE_HOOKS_ENABLED=0 grok --always-approve",
+        ),
+        (
+            BuiltinAgentId::Grok,
+            "fresh+sys+prompt",
+            "GROK_CLAUDE_HOOKS_ENABLED=0 grok --rules 'be x' -- 'do y'",
+        ),
+        (
+            BuiltinAgentId::Grok,
+            "resume+last",
+            "GROK_CLAUDE_HOOKS_ENABLED=0 grok --continue",
+        ),
+        (
+            BuiltinAgentId::Grok,
+            "resume+id",
+            "GROK_CLAUDE_HOOKS_ENABLED=0 grok --resume 'sid'",
+        ),
+        (
+            BuiltinAgentId::Grok,
+            "fork",
+            "GROK_CLAUDE_HOOKS_ENABLED=0 grok --resume 'fid' --fork-session --session-id 'pin'",
+        ),
         (BuiltinAgentId::Codex, "fresh", "codex --enable hooks"),
         (
             BuiltinAgentId::Codex,
@@ -574,7 +664,7 @@ mod tests {
     #[test]
     fn all_lists_exactly_the_builtin_agents() {
         let ids: Vec<&str> = BuiltinAgentId::ALL.iter().map(|a| a.as_str()).collect();
-        assert_eq!(ids, vec!["claude", "codex", "opencode"]);
+        assert_eq!(ids, vec!["claude", "grok", "codex", "opencode"]);
     }
 
     fn inv<'a>(agent: &'a AgentDefinition) -> AgentInvocation<'a> {

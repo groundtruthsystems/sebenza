@@ -26,6 +26,12 @@ impl StreamProvider {
         match id {
             BuiltinAgentId::Claude => Some(StreamProvider::Claude),
             BuiltinAgentId::Codex => Some(StreamProvider::Codex),
+            // grok has no streaming provider yet. Its
+            // `--output-format streaming-messages-json` is the Messages `stream-json` wire
+            // format, so `parse_claude_stream_line` handles it unchanged (verified against
+            // grok 1.0.5) - but `run_grok` is not written yet, and its capabilities declare
+            // in_app_chat: false, so nothing offers chat for it.
+            BuiltinAgentId::Grok => None,
             // opencode has no streaming provider yet: in-app chat depends on the
             // generated plugin and the export-based history adapter, later in this phase.
             // Its capabilities declare in_app_chat: false, so nothing offers chat for it.
@@ -550,6 +556,9 @@ mod stream_provider_tests {
             match id {
                 BuiltinAgentId::Claude => assert!(matches!(provider, Some(StreamProvider::Claude))),
                 BuiltinAgentId::Codex => assert!(matches!(provider, Some(StreamProvider::Codex))),
+                // Explicitly no provider yet — chat is disabled for grok via its
+                // capabilities until `run_grok` lands.
+                BuiltinAgentId::Grok => assert!(provider.is_none()),
                 // Explicitly no provider yet — chat is disabled for opencode via its
                 // capabilities until the plugin and export adapter land.
                 BuiltinAgentId::Opencode => assert!(provider.is_none()),

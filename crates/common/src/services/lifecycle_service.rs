@@ -239,11 +239,18 @@ fn warn_on_untrusted_agent_plugins(git_dir: &str, worktree_path: &str) {
     );
 }
 
-/// The built-in agent kind (`claude`/`codex`) whose sessions we can discover.
+/// The built-in agent kind whose sessions we can discover on disk.
+///
+/// This gates more than discovery: `prepare_fork_slot` refuses to fork when it is `None`,
+/// so an agent that advertises `fork: true` must appear here or the capability is dead.
+/// (opencode is exactly that case today - `fork: true` in the registry, `None` here. See
+/// TODO.md.) grok's sessions are plain directories under `<grok-home>/sessions`, so unlike
+/// opencode's SQLite store they genuinely are discoverable.
 fn discoverable_agent_kind(agent: &AgentDefinition) -> Option<DiscoverableAgentKind> {
     match &agent.implementation {
         AgentImplementation::Builtin(id) => match id {
             BuiltinAgentId::Claude => Some(DiscoverableAgentKind::Claude),
+            BuiltinAgentId::Grok => Some(DiscoverableAgentKind::Grok),
             BuiltinAgentId::Codex => Some(DiscoverableAgentKind::Codex),
             BuiltinAgentId::Opencode => None,
         },
@@ -1101,9 +1108,15 @@ impl LifecycleService {
         // ensure_root_session_id may have persisted root.sessionId; re-read for a fresh base.
         let meta = self.read_meta_or_throw(&slot.resolved.git_dir)?;
         let seq = next_fork_seq(&meta);
-        // Claude can pin the forked child id (deterministic); Codex self-assigns.
-        let pin_session_id =
-            (agent_kind == DiscoverableAgentKind::Claude).then(crate::util::id::random_uuid);
+        // Pin the forked child id when the agent lets us choose it (claude `--session-id`,
+        // grok `-s`); Codex self-assigns and must be polled for instead. Driven by the
+        // registry capability rather than a per-agent literal, so a new pinnable agent does
+        // not have to be remembered here.
+        let pin_session_id = slot
+            .agent
+            .capabilities
+            .pinnable_session_id
+            .then(crate::util::id::random_uuid);
         let invocation = AgentInvocation {
             agent: &slot.agent,
             yolo: slot.profile.profile.yolo == Some(true),
@@ -1165,7 +1178,10 @@ impl LifecycleService {
             .system_prompt
             .as_deref()
             .map(|sp| expand_template(sp, &slot.initialized.runtime_env));
-        let pin_session_id = (discoverable == Some(DiscoverableAgentKind::Claude))
+        // See the fork path: pinning follows the registry capability, not an agent literal.
+        let pin_session_id = agent
+            .capabilities
+            .pinnable_session_id
             .then(crate::util::id::random_uuid);
 
         let invocation = AgentInvocation {
