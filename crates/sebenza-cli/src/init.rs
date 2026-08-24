@@ -10,7 +10,7 @@ use common::services::init_authoring::{
 };
 
 fn optional_init_tools() -> Vec<&'static str> {
-    let mut tools = vec!["gh", "claude", "codex", "goose", "opencode"];
+    let mut tools = vec!["gh", "claude", "grok", "codex", "goose", "opencode"];
     if cfg!(target_os = "linux") {
         tools.push("lxc-create");
     } else if cfg!(target_os = "macos") {
@@ -43,7 +43,8 @@ fn git_root(cwd: &str) -> Option<String> {
 }
 
 /// Resolve an optional tool, falling back to its own install directory when it is not on
-/// `PATH`. opencode installs to `~/.opencode/bin`, which is not a conventional directory,
+/// `PATH`. opencode installs to `~/.opencode/bin` and grok to `~/.grok/bin`, neither a
+/// conventional directory,
 /// so a bare `which` reports a perfectly good install as missing — particularly for a
 /// server started from systemd, which need not inherit the login shell's PATH.
 fn resolve_optional_tool(tool: &str) -> Option<String> {
@@ -53,6 +54,8 @@ fn resolve_optional_tool(tool: &str) -> Option<String> {
     let home = std::env::var_os("HOME")?;
     let candidates: &[&str] = match tool {
         "opencode" => &[".opencode/bin/opencode"],
+        // grok installs to ~/.grok/bin, which is not on a default PATH either.
+        "grok" => &[".grok/bin/grok"],
         "goose" => &[".local/bin/goose"],
         _ => &[],
     };

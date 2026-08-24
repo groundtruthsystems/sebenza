@@ -43,6 +43,7 @@ wrapper in `frontend/src/lib/api.ts`.
 | Agent | Minimum verified | Notes |
 |---|---|---|
 | `claude` | — | Session logs under `~/.claude/projects/<encoded-cwd>/` |
+| `grok` | **1.0.5** | xAI "Grok Build" (`curl -fsSL https://x.ai/cli/install.sh \| bash`). Installs to `~/.grok/bin`, which is **not** on a default `PATH`. History from `~/.grok/sessions/<url-encoded-cwd>/<id>/updates.jsonl`. Needs `GROK_CLAUDE_HOOKS_ENABLED=0` and folder trust — see below |
 | `codex` | — | Needs `--enable hooks`; assigns its own session id |
 | `opencode` | **1.18.7** | Installs to `~/.opencode/bin`, which is **not** on a default `PATH`. History is read via `opencode export <id>` (never `--sanitize`, which redacts the transcript). Session store is SQLite; Sebenza never reads it directly |
 
@@ -50,6 +51,58 @@ wrapper in `frontend/src/lib/api.ts`.
 that breaks history can be diagnosed against the version actually installed rather than
 guessed at. opencode moves fast — 1.18.7 → 1.18.9 was observed within a day — so the
 adapter tolerates unknown fields and degrades rather than failing.
+
+### Verified grok integration constraints
+
+Established by direct observation against Grok Build 1.0.5. grok's surface is close enough
+to Claude Code's that the differences are easy to assume away, and each of these was found
+by testing rather than reading:
+
+- **grok reads Sebenza's *Claude* hooks by default.** `[compat.claude] hooks` is on, and it
+  scans `<worktree>/.claude/settings.json` **and `settings.local.json`** — exactly where
+  Sebenza writes its claude hooks. Confirmed with `grok inspect`, which listed all five as
+  `project [claude]`. Every grok pane command therefore sets
+  **`GROK_CLAUDE_HOOKS_ENABLED=0`**; with it, those five report `[disabled]` and the
+  Harness Compatibility table reads `claude → hooks OFF (env)`, while all seven of
+  Sebenza's own `.grok/hooks/sebenza.json` hooks stay active.
+- **Hook payloads are camelCase, and the tool output field is `toolResult`.** grok sends
+  `sessionId`/`toolName`/`toolInput`/`toolResult` where Claude sends
+  `session_id`/`tool_name`/`tool_input`/`tool_response`. Untranslated, `maybe_send_pr_opened`
+  never fires and nothing reports an error — hence the `grok-*` agentctl subcommands
+  normalise first.
+- **The chat stream is the exception: it *is* snake_case.** `streaming-messages-json` lines
+  carry `session_id`, matching the Messages wire format, so `parse_claude_stream_line`
+  handles grok unchanged. Pinned by a committed fixture of a real captured run.
+- **Project hooks are silently skipped in an untrusted folder.** With trust revoked
+  `grok inspect` reports `Hooks (0)` and no diagnostic, so status reporting simply stops.
+  **Trust resolves through the git common dir**: trusting the main repo also trusts every
+  `git worktree` of it, even one living outside that directory. Sebenza does not pass
+  `--trust` (that would let an unvetted repo run its own `.grok/hooks/` and load
+  `.grok/plugins/`); it warns instead.
+- **An extra observe-only `Stop` fires at session end**, so genuine turn ends must be
+  filtered on `reason == "end_turn"` — while still admitting the `StopCancelled` reasons.
+- **`StopCancelled` has no Claude/Codex analogue and is required.** It fires *instead of*
+  `Stop` on an interrupt, a declined permission, `--max-turns`, or a no-progress bail-out;
+  without it an interrupted worktree shows "running" forever.
+- **Subagent events carry `subagentType`.** A background subagent outlives the parent turn,
+  so unfiltered its events hold the worktree at "running" after the main agent went idle.
+- **`Notification` must match `permission_prompt`, not `idle_prompt`.** grok fires
+  `idle_prompt` on *any* turn end, including interrupted and errored ones.
+- **Hooks default to a 5-second timeout**, short enough to cut off the control POST, so
+  every generated hook sets `timeout` explicitly.
+- **`grok -p` takes the prompt as the flag's value, not on stdin** (unlike `claude -p`).
+- **`--rules` appends to the system prompt; `--system-prompt-override` replaces it** and
+  would strip grok's own tool instructions.
+- **`updates.jsonl` is the history source, not `chat_history.jsonl`.** Only the former has
+  per-message timestamps and a `params.sessionId` on every line to verify the transcript
+  with. `turn_completed` arrives with method `_x.ai/session/update`, so the method must not
+  be filtered on; each `*_chunk` is a whole message, not a fragment; and `tool_call_update`
+  has an enrichment flavour and a `status`-bearing result flavour, only the latter of which
+  is a message.
+- **`grok sessions list` has no `--json`**, so it cannot be used for correlation. Sebenza
+  pins the id with `-s` at launch instead and cross-checks the `SessionStart` hook.
+- **Do not use `-w/--worktree`** — that is grok's own worktree feature and would fight
+  Sebenza for control of the checkout.
 
 ### Verified opencode integration constraints
 

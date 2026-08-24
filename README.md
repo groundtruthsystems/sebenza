@@ -3,7 +3,7 @@
 **Manage Git worktrees with AI coding agents — from your browser.**
 
 Sebenza is a self-hosted dashboard for running many coding tasks in parallel. Each
-task lives in its own **Git worktree** with a dedicated AI agent (Claude, Codex,
+task lives in its own **Git worktree** with a dedicated AI agent (Claude, Grok, Codex,
 OpenCode, or your own CLI) running in a **tmux-backed terminal** you can drive from the browser.
 It watches your pull requests and CI, visualises task progress, and lets you spin
 worktrees up, merge them, and tear them down without leaving the dashboard.
@@ -18,7 +18,7 @@ URL prefixes — and everything the dashboard does is also available from the
 
 - **Worktree lifecycle** — create, open, close, label, archive, merge, and remove
   Git worktrees, each on its own branch, from the UI or CLI.
-- **AI agents in the browser** — launch `claude`, `codex`, `opencode`, or a custom agent in a
+- **AI agents in the browser** — launch `claude`, `grok`, `codex`, `opencode`, or a custom agent in a
   worktree; interact through an embedded terminal or the in-app **web chat**.
 - **Tracks board** — a per-worktree Kanban view of a project's Sebenza tracks
   (`.ai/sebenza/tracks.json`, written by the `sebenza` Claude Code plugin):
@@ -61,7 +61,7 @@ session survives even if you close the tab or the CLI process.
 
 - **git** and **tmux** — required for worktrees and terminal sessions.
 - Optional: **`gh`** (PR/CI monitoring), **`lxc-create`** (Linux sandbox) or **`container`** (macOS 26 Apple Silicon sandbox), and
-  the built-in agent CLIs — **`claude`**, **`codex`**, **`opencode`** (1.18.7+).
+  the built-in agent CLIs — **`claude`**, **`grok`** (1.0.5+), **`codex`**, **`opencode`** (1.18.7+).
   `sebenza-cli init` lists which it found and at what version.
 
 Building from source additionally needs **Rust 1.85+** (2024 edition) and

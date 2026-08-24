@@ -28,6 +28,17 @@ const BUILTIN_FALLBACK: Record<string, Partial<Record<CapabilityKey, boolean>>> 
     // Accepts `--session-id`, so Sebenza can choose the id at launch.
     pinnableSessionId: true,
   },
+  // grok's flag surface matches claude's almost exactly: `--resume <id> --fork-session`,
+  // `-s/--session-id`, `--always-approve`, and a `streaming-messages-json` output that IS
+  // the Messages stream-json wire format, so it shares claude's stream parser.
+  grok: {
+    fork: true,
+    inAppChat: true,
+    conversationHistory: true,
+    interrupt: true,
+    resume: true,
+    pinnableSessionId: true,
+  },
   codex: {
     fork: true,
     inAppChat: true,
@@ -48,9 +59,11 @@ const BUILTIN_FALLBACK: Record<string, Partial<Record<CapabilityKey, boolean>>> 
   },
 };
 
-// No agent can gate a tool call: claude's and codex's hooks observe only, and opencode's
-// `permission.ask` hook was verified not to fire on 1.18.9. Left out of the fallback table
-// entirely so it resolves false for everyone.
+// No agent gates a tool call yet, so `permissionInterception` is left out of the table
+// entirely and resolves false for everyone. claude's and codex's hooks observe only, and
+// opencode's `permission.ask` was verified not to fire on 1.18.9. grok is the first that
+// COULD claim it - its PreToolUse hook can return a deny decision - but answering a
+// permission prompt from the dashboard needs a UI, not just a flag. See TODO.md.
 
 /**
  * Whether `agentId` supports `key`, per the server's advertised capabilities.

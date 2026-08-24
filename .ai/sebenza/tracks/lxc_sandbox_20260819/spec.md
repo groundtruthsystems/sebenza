@@ -49,7 +49,7 @@ When a worktree is created with `runtime: lxc` (Linux) or `runtime: apple` (macO
 
 1. LXC panes: `lxc-attach` as host uid/gid, cwd = worktree path, source `runtime.env`, then agent or interactive shell.
 2. Apple panes: `container exec --uid --gid --workdir` (or `container machine run` if exec is not wired for machines — one path only).
-3. PATH fallback uses host-home tool dirs (`$HOME/.local/bin`, `$HOME/.opencode/bin`, cargo/bun), not `/root/...`.
+3. PATH fallback uses host-home tool dirs (`$HOME/.local/bin`, `$HOME/.opencode/bin`, `$HOME/.grok/bin`, cargo/bun), not `/root/...`.
 4. Host runtime pane commands are unchanged.
 
 ### FR6 — Lifecycle

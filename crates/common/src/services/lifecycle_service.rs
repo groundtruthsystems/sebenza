@@ -239,6 +239,30 @@ fn warn_on_untrusted_agent_plugins(git_dir: &str, worktree_path: &str) {
     );
 }
 
+/// Labels of the built-in agents whose tabs can actually be forked.
+///
+/// Derived from `discoverable_agent_kind`, the gate `prepare_fork_slot` uses - deliberately
+/// NOT from the registry's `fork` capability, which would over-promise: opencode advertises
+/// `fork: true` while that gate refuses it. Deriving it from the gate means the user-facing
+/// message cannot drift from the behaviour, which a hardcoded list already had (it named
+/// Claude and Codex after opencode existed).
+fn forkable_builtin_labels() -> Vec<&'static str> {
+    BuiltinAgentId::ALL
+        .iter()
+        .filter(|id| {
+            discoverable_agent_kind(&AgentDefinition {
+                id: id.as_str().to_string(),
+                label: id.label().to_string(),
+                kind: "builtin",
+                capabilities: crate::services::agent_registry::capabilities_for(**id),
+                implementation: AgentImplementation::Builtin(**id),
+            })
+            .is_some()
+        })
+        .map(|id| id.label())
+        .collect()
+}
+
 /// Warn when a grok worktree's repo is not a trusted folder.
 ///
 /// grok skips project hooks in an untrusted folder **silently**, so
@@ -1417,8 +1441,12 @@ impl LifecycleService {
         let slot =
             self.prepare_tab_slot(branch, "Tabs are not supported for sandboxed worktrees")?;
         let agent_kind = discoverable_agent_kind(&slot.agent).ok_or_else(|| {
+            let forkable = forkable_builtin_labels();
             LifecycleError::new(
-                "Forking a tab is only available for the built-in Claude and Codex agents",
+                &format!(
+                    "Forking a tab is only available for these built-in agents: {}",
+                    forkable.join(", ")
+                ),
                 409,
             )
         })?;
@@ -1998,6 +2026,26 @@ fn normalize_worktree_label(label: Option<&str>) -> Result<Option<String>, Lifec
 
 #[cfg(test)]
 mod tests {
+
+    /// The fork-refusal message must name exactly what the gate allows. A hardcoded list
+    /// here had already drifted once (it said "Claude and Codex" after opencode shipped),
+    /// and the registry's `fork` capability would over-promise, since opencode advertises
+    /// `fork: true` while the gate refuses it.
+    #[test]
+    fn the_fork_refusal_message_names_exactly_the_agents_the_gate_allows() {
+        let forkable = super::forkable_builtin_labels();
+        assert!(forkable.contains(&"Claude"));
+        assert!(
+            forkable.contains(&"Grok"),
+            "grok forks via --resume <id> --fork-session"
+        );
+        assert!(forkable.contains(&"Codex"));
+        assert!(
+            !forkable.contains(&"OpenCode"),
+            "opencode advertises fork: true but discoverable_agent_kind refuses it, so \
+             offering it here would promise something that 409s"
+        );
+    }
     use super::*;
 
     fn existing_main_meta() -> WorktreeMeta {

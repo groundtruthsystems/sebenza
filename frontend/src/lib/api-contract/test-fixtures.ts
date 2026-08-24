@@ -27,7 +27,7 @@ export function agentCapabilities(
   };
 }
 
-/** Capabilities of a fully-featured built-in agent (claude/codex today). */
+/** Capabilities of a fully-featured built-in agent (claude/grok/codex today). */
 export function builtinAgentCapabilities(
   overrides: Partial<AgentCapabilities> = {},
 ): AgentCapabilities {

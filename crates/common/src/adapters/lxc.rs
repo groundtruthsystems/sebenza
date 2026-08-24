@@ -419,6 +419,10 @@ fn mount_lines(input: &LxcConfigInput<'_>) -> Vec<String> {
         format!("{home}/.codex"),
         format!("{home}/.config/opencode"),
         format!("{home}/.local/share/opencode"),
+        // One mount covers both grok's credentials (auth.json) and its session
+        // transcripts, the same posture as ~/.claude.json and ~/.codex. Splitting it
+        // would break either auth or history inside the sandbox.
+        format!("{home}/.grok"),
     ];
     for path in rw_home {
         if extra_guest.contains(&path) {
@@ -765,6 +769,10 @@ pub fn launch_instance(opts: &LaunchLxcOpts) -> Result<String, String> {
         format!("{home}/.codex"),
         format!("{home}/.config/opencode"),
         format!("{home}/.local/share/opencode"),
+        // One mount covers both grok's credentials (auth.json) and its session
+        // transcripts, the same posture as ~/.claude.json and ~/.codex. Splitting it
+        // would break either auth or history inside the sandbox.
+        format!("{home}/.grok"),
     ] {
         if Path::new(&p).exists() {
             existing_paths.insert(p);

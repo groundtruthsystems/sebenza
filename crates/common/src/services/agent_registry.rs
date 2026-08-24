@@ -99,7 +99,7 @@ pub struct AgentDefinition {
 
 /// Per-agent capabilities, from verified behaviour. See the design's comparison table
 /// and `spec.md` → *Verified findings*.
-fn builtin_capabilities(id: BuiltinAgentId) -> AgentCapabilities {
+pub fn capabilities_for(id: BuiltinAgentId) -> AgentCapabilities {
     match id {
         BuiltinAgentId::Claude => AgentCapabilities {
             terminal: true,
@@ -184,7 +184,7 @@ fn builtin(id: BuiltinAgentId) -> AgentDefinition {
         id: id.as_str().to_string(),
         label: id.label().to_string(),
         kind: "builtin",
-        capabilities: builtin_capabilities(id),
+        capabilities: capabilities_for(id),
         implementation: AgentImplementation::Builtin(id),
     }
 }

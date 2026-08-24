@@ -5,6 +5,9 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 const DEFAULT_CLAUDE_MODEL: &str = "claude-haiku-4-5-20251001";
+// grok's own default. `grok models` lists grok-4.6 (default) and grok-4.5; there is no
+// smaller/faster tier to pick for a naming call, so `--effort low` does that work instead.
+const DEFAULT_GROK_MODEL: &str = "grok-4.6";
 
 fn escape_toml_string(s: &str) -> String {
     s.replace('\\', "\\\\")
@@ -35,6 +38,26 @@ pub fn build_llm_args(
             "--effort".into(),
             "low".into(),
             user_prompt.into(),
+        ],
+        // grok's headless mode. Mirrors claude's: `-p` carries the prompt (as the flag's
+        // VALUE - grok does not read it from stdin), `--output-format plain` gives prose
+        // rather than JSON, and `--rules` appends the system prompt. `--rules` and not
+        // `--system-prompt-override`, which would replace grok's own system prompt.
+        AutoNameProvider::Grok => vec![
+            "grok".into(),
+            "-p".into(),
+            user_prompt.into(),
+            "--output-format".into(),
+            "plain".into(),
+            "--rules".into(),
+            system_prompt.into(),
+            "--model".into(),
+            config
+                .model
+                .clone()
+                .unwrap_or_else(|| DEFAULT_GROK_MODEL.to_string()),
+            "--effort".into(),
+            "low".into(),
         ],
         // opencode's one-shot mode. `--format json` emits raw JSON events rather than
         // prose, so auto-naming reads plain output instead; `--agent`/`--model` carry the
@@ -154,6 +177,7 @@ fn drain(pipe: Option<impl Read + Send + 'static>) -> mpsc::Receiver<String> {
 pub fn llm_provider_label(config: &AutoNameConfig) -> &'static str {
     match config.provider {
         AutoNameProvider::Claude => "claude",
+        AutoNameProvider::Grok => "grok",
         AutoNameProvider::Codex => "codex",
         AutoNameProvider::Opencode => "opencode",
     }
@@ -179,6 +203,28 @@ mod tests {
         assert!(args.contains(&DEFAULT_CLAUDE_MODEL.to_string()));
         assert!(args.contains(&"low".to_string()));
         assert_eq!(args.last().unwrap(), "user");
+    }
+
+    #[test]
+    fn grok_auto_name_argv_passes_the_prompt_as_a_value_and_appends_the_system_prompt() {
+        let args = build_llm_args(
+            &config(AutoNameProvider::Grok, None),
+            "be terse",
+            "name this branch",
+        );
+        assert_eq!(args[0], "grok");
+        // `grok -p` REQUIRES a value; unlike claude it does not read the prompt from stdin.
+        let p = args.iter().position(|a| a == "-p").expect("-p present");
+        assert_eq!(args[p + 1], "name this branch");
+        // --rules appends; --system-prompt-override would replace grok's own system prompt.
+        let r = args.iter().position(|a| a == "--rules").expect("--rules");
+        assert_eq!(args[r + 1], "be terse");
+        assert!(!args.iter().any(|a| a == "--system-prompt-override"));
+        assert!(args.contains(&DEFAULT_GROK_MODEL.to_string()));
+        assert_eq!(
+            llm_provider_label(&config(AutoNameProvider::Grok, None)),
+            "grok"
+        );
     }
 
     #[test]

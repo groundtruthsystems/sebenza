@@ -19,7 +19,7 @@ export const EnabledResponseSchema = z.object({
   enabled: z.boolean(),
 });
 
-export const BuiltInAgentIdSchema = z.enum(["claude", "codex", "opencode"]);
+export const BuiltInAgentIdSchema = z.enum(["claude", "grok", "codex", "opencode"]);
 export const AgentIdSchema = z.string().trim().min(1);
 export const AgentKindSchema = BuiltInAgentIdSchema;
 export const WorktreeCreateModeSchema = z.enum(["new", "existing"]);
@@ -223,7 +223,7 @@ export const PrEntrySchema = z.object({
   comments: z.array(PrCommentSchema),
 });
 
-export const AutoNameProviderSchema = z.enum(["claude", "codex"]);
+export const AutoNameProviderSchema = z.enum(["claude", "grok", "codex", "opencode"]);
 
 export const AutoNameConfigResponseSchema = z.object({
   autoName: z.object({
@@ -326,7 +326,16 @@ export const ProjectSnapshotSchema = z.object({
   notifications: z.array(AppNotificationSchema),
 });
 
-export const WorktreeConversationProviderSchema = z.enum(["codexAppServer", "claudeCode"]);
+// Mirrors the Rust `WorktreeConversationProvider`. `codexAppServer`/`claudeCode` name a
+// transport, from when more than one existed per agent; `grok` and `opencode` need no such
+// distinction, so they use the bare agent id. opencode was missing here even though the
+// server has emitted it since that agent shipped.
+export const WorktreeConversationProviderSchema = z.enum([
+  "codexAppServer",
+  "claudeCode",
+  "grok",
+  "opencode",
+]);
 
 export const CodexWorktreeConversationRefSchema = z.object({
   provider: z.literal("codexAppServer"),
@@ -344,9 +353,27 @@ export const ClaudeWorktreeConversationRefSchema = z.object({
   sessionId: z.string(),
 });
 
+export const GrokWorktreeConversationRefSchema = z.object({
+  provider: z.literal("grok"),
+  conversationId: z.string(),
+  cwd: z.string(),
+  lastSeenAt: z.string(),
+  sessionId: z.string(),
+});
+
+export const OpencodeWorktreeConversationRefSchema = z.object({
+  provider: z.literal("opencode"),
+  conversationId: z.string(),
+  cwd: z.string(),
+  lastSeenAt: z.string(),
+  sessionId: z.string(),
+});
+
 export const WorktreeConversationRefSchema = z.discriminatedUnion("provider", [
   CodexWorktreeConversationRefSchema,
   ClaudeWorktreeConversationRefSchema,
+  GrokWorktreeConversationRefSchema,
+  OpencodeWorktreeConversationRefSchema,
 ]);
 
 export const AgentsUiWorktreeSummarySchema = z.object({

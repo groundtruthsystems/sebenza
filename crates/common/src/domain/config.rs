@@ -191,6 +191,7 @@ pub struct LifecycleHooksConfig {
 #[serde(rename_all = "camelCase")]
 pub enum AutoNameProvider {
     Claude,
+    Grok,
     Codex,
     Opencode,
 }

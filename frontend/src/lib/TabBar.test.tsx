@@ -36,11 +36,15 @@ function agent(id: string, label: string, kind: "builtin" | "custom"): AgentSumm
   };
 }
 
+// Server order, which the TabBar renders as-is: claude, grok, codex, opencode (all
+// built-in), then customs sorted by label. goose is genuinely custom; opencode is not, and
+// was mislabelled here.
 const ALL_AGENTS = [
   agent("claude", "Claude", "builtin"),
+  agent("grok", "Grok", "builtin"),
   agent("codex", "Codex", "builtin"),
+  agent("opencode", "OpenCode", "builtin"),
   agent("goose", "Goose", "custom"),
-  agent("opencode", "OpenCode", "custom"),
 ];
 
 function baseProps() {
@@ -92,7 +96,7 @@ describe("TabBar", () => {
     // Nested list is collapsed until asked for.
     expect(screen.queryByRole("button", { name: "Goose" })).toBeNull();
     await user.click(screen.getByRole("button", { name: /New session/ }));
-    for (const label of ["Claude", "Codex", "Goose", "OpenCode"]) {
+    for (const label of ["Claude", "Grok", "Codex", "OpenCode", "Goose"]) {
       expect(screen.getByRole("button", { name: label })).toBeTruthy();
     }
   });
