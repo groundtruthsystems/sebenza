@@ -11,11 +11,12 @@ workspace:
   worktreeRoot: __worktrees
 
   # Default agent if the UI caller does not choose one.
-  # Allowed values: claude, codex, or any custom agent id from `agents:` below.
+  # Allowed values: claude, grok, codex, opencode, or any custom agent id from
+  # `agents:` below.
   defaultAgent: claude
 
-# Extra coding agents beyond the built-in `claude` and `codex`. Each entry is a
-# custom agent that runs in a tmux terminal pane. Built-in agents also get
+# Extra coding agents beyond the built-ins (`claude`, `grok`, `codex`, `opencode`). Each
+# entry is a custom agent that runs in a tmux terminal pane. Built-in agents also get
 # in-app web chat, conversation history, and fork-tabs; custom agents are
 # terminal-only (plus resume, if you provide `resumeCommand`). The pane's cwd is
 # the worktree, so most CLIs need no path argument. Command template vars,
@@ -37,6 +38,11 @@ agents:
   # offered automatically, with chat, history, resume and fork. If you keep a custom
   # `opencode:` entry it will be ignored in favour of the built-in, and Sebenza will say
   # so on startup — rename the key (e.g. `opencode-custom:`) to keep a divergent command.
+  #
+  # The same applies to grok, which is also built in: a custom `grok:` entry is ignored
+  # in favour of the built-in. grok additionally needs its repo to be a trusted folder -
+  # run `grok` once in the repo and accept the prompt, or Sebenza's hooks are skipped
+  # silently and the worktree's status never updates.
   #
   # goose is NOT built in yet (see TODO.md); its entry above still applies.
 
@@ -94,8 +100,10 @@ profiles:
     runtime: host
 
     # Enables permissive agent flags:
-    # Claude => --dangerously-skip-permissions
-    # Codex => --yolo
+    # Claude   => --dangerously-skip-permissions
+    # Grok     => --always-approve
+    # Codex    => --yolo
+    # OpenCode => --auto
     yolo: false
 
     # Host env vars forwarded to the agent process.

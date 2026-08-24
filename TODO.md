@@ -105,12 +105,80 @@ opencode **cannot** be extended to goose. Any goose track must decide whether to
 - Does goose honour XDG on macOS, or use `~/Library/Application Support`?
 - Root cause of the `message_count` drift (interrupt handling? retries?).
 
-**What the completed opencode track leaves ready:** the `BuiltinAgentId` enum and capability model,
-the unified builtin registry, registry-resolved dispatch, capability-driven frontend gating,
-git-exclusion as a path list, `0600` env files, the untrusted-plugin scan (data-driven path
-set), and the docker mount pattern. Adding goose should be an adapter, not a fork. Note
-goose's `.ai/sebenza.example.yaml` custom-agent entry was **intentionally left in place**,
-so it keeps working as a terminal-only custom agent until then.
+**What the completed opencode and grok tracks leave ready:** the `BuiltinAgentId` enum and
+capability model, the unified builtin registry, registry-resolved dispatch, capability-driven
+frontend gating, git-exclusion as a path list, `0600` env files, the untrusted-plugin scan
+(a data-driven path set, now also covering `.grok/hooks` and `.grok/plugins`), and the
+sandbox mount pattern. The grok track additionally left: session-id pinning driven by the
+`pinnable_session_id` capability rather than a per-agent literal; a shared
+`run_messages_stream_agent` for any agent speaking the Messages `stream-json` format;
+per-provider turn/message id namespacing; a cross-provider test that every generated hook
+invokes a subcommand `sebenza-agentctl` actually declares; and `forkable_builtin_labels`,
+which derives the fork-refusal message from the gate instead of a literal.
+
+Adding goose should be an adapter, not a fork. Note goose's `.ai/sebenza.example.yaml`
+custom-agent entry was **intentionally left in place**, so it keeps working as a
+terminal-only custom agent until then.
+
+goose's blocking caveat above — observe-only hooks that cannot deny — is worth contrasting
+with grok, whose `PreToolUse` genuinely can. See the grok permission-interception section
+below.
+
+## grok — permission interception (deferred, primitives verified)
+
+grok is the **first built-in that could genuinely claim `permission_interception`**, and it
+was deliberately left `false` when grok shipped as a built-in. Everything needed to start is
+below; verified by direct observation against Grok Build 1.0.5, not from documentation.
+
+**What is already verified:**
+
+- **`PreToolUse` can deny.** Writing `{"decision":"deny","reason":"..."}` to stdout blocks
+  the call; `{"decision":"allow"}` permits it; exit 2 denies with the first stderr line as
+  the reason. It can also *rewrite* the call via
+  `{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{...}}}`. This is
+  strictly more than any other built-in: claude's and codex's hooks observe, and opencode's
+  `permission.ask` was never seen firing (see the opencode section above).
+- **A waiting human is already detectable.** `Notification` with matcher
+  `permission_prompt` fires only when a permission UI is actually waiting, and Sebenza
+  already hooks it — `grok-permission-prompt` reports the distinct `awaiting_permission`
+  lifecycle today. So the *status* half is done; only the *answering* half is missing.
+- **Hooks are fail-open**, so a broken or slow gate cannot wedge the agent: timeouts,
+  crashes and malformed output all allow the call. Only an explicit `deny` blocks.
+- **`PreToolUse` gates default to 30s** (600s for `Stop`/`SubagentStop`), which bounds how
+  long a dashboard round trip may take.
+
+**Why it was not claimed:** the flag is not the work. Answering a permission prompt from the
+dashboard needs a UI and a round trip — the hook must block while Sebenza asks the browser
+and waits — and `agent-capabilities.ts` deliberately omits `permissionInterception` for
+every agent so it resolves false. Claiming it without the UI would advertise an affordance
+that does nothing.
+
+**Still unverified:**
+
+- Does a `PreToolUse` gate that blocks for ~10s degrade grok's TUI responsiveness?
+- Does `updatedInput` survive the plan-mode gate intact, i.e. can Sebenza harden a command
+  rather than only allow/deny it?
+- Which tool names should be gated by default? The matcher tests grok's real names
+  (`run_terminal_command`, `search_replace`, …) though it also accepts Claude's aliases.
+
+## opencode — `fork: true` is advertised but refused (bug, found while adding grok)
+
+`builtin_capabilities` gives opencode `fork: true` and `pinnable_session_id: true`, but
+`discoverable_agent_kind` returns `None` for it, and `prepare_fork_slot` refuses to fork
+whenever that is `None`. So both capabilities are dead: the UI offers Fork for an opencode
+worktree and the request 409s.
+
+grok avoided this by returning `Some(DiscoverableAgentKind::Grok)` — honest, since its
+sessions are plain directories under `<grok-home>/sessions`. opencode cannot do the same,
+because its store is SQLite behind an internal schema and `session list` has no directory
+column, which is why it was excluded in the first place.
+
+The fix is to stop conflating the two concerns: gate `prepare_fork_slot` on
+`capabilities.fork` and keep `discoverable_agent_kind` for discovery only, then give the
+fork path an opencode branch that uses `--session <id> --fork` with the reported session id
+rather than a discovered one. That is a behaviour change for opencode, so it was left out of
+the grok track. `forkable_builtin_labels` currently derives the refusal message from the
+gate, so the message is at least honest about it today.
 
 ## Sebenza registry — write operations (not started)
 `/registry` reads `~/.ai/sebenza/registry.json` only; the plugin owns writes.

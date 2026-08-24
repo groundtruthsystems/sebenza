@@ -22,6 +22,15 @@ pub fn read_worktree_conversation(
         Some("claude") => {
             Some(crate::services::claude_conversation_service::read_worktree_conversation(worktree))
         }
+        // grok pins its session id with `-s` at launch and also reports it from its
+        // SessionStart hook, so the recorded id is authoritative - no scan for "the newest
+        // session", which is how the claude adapter can surface the wrong worktree's chat.
+        Some("grok") => Some(
+            crate::services::grok_conversation_service::read_worktree_conversation(
+                worktree,
+                worktree.reported_session_id.as_deref(),
+            ),
+        ),
         Some("codex") => {
             Some(crate::services::codex_conversation_service::read_worktree_conversation(worktree))
         }
@@ -40,7 +49,7 @@ pub fn read_worktree_conversation(
 /// Ids of the agents that have a conversation adapter, for building accurate
 /// "not supported for this agent" messages instead of hardcoding a list in each caller.
 pub fn conversation_capable_agent_ids() -> &'static [&'static str] {
-    &["claude", "codex", "opencode"]
+    &["claude", "grok", "codex", "opencode"]
 }
 
 /// The conversation id for `worktree`, resolved through its own agent's adapter.
@@ -119,6 +128,18 @@ mod tests {
         // worktree's transcript, which is the failure mode claude_cli's all-projects
         // fallback exhibits.
         assert_eq!(conv.conversation_id, "opencode-pending:/wt");
+        assert!(conv.messages.is_empty());
+    }
+
+    #[test]
+    fn grok_routes_to_its_own_adapter_and_pends_without_a_reported_id() {
+        let conv = read_worktree_conversation(&snapshot(Some("grok")))
+            .expect("grok has a conversation adapter")
+            .conversation;
+        assert_eq!(conv.provider, "grok");
+        // No recorded session id yet -> a pending placeholder. Critically NOT another
+        // worktree's transcript, the failure mode claude_cli's all-projects fallback has.
+        assert_eq!(conv.conversation_id, "grok-pending:/wt");
         assert!(conv.messages.is_empty());
     }
 

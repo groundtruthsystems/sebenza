@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.error
@@ -65,6 +66,15 @@ def build_parser():
     subparsers.add_parser("opencode-permission-asked")
     subparsers.add_parser("opencode-permission-replied")
     subparsers.add_parser("opencode-stop")
+    # grok: Claude-Code-shaped hook JSON, but a camelCase stdin envelope (sessionId,
+    # toolName, toolInput) and `toolResult` where Claude has `tool_response`. These
+    # subcommands normalise before reusing the shared primitives, so the claude-* handlers
+    # never see a grok payload.
+    subparsers.add_parser("grok-session-start")
+    subparsers.add_parser("grok-user-prompt-submit")
+    subparsers.add_parser("grok-post-tool-use")
+    subparsers.add_parser("grok-permission-prompt")
+    subparsers.add_parser("grok-stop")
 
     return parser
 
@@ -144,6 +154,59 @@ def maybe_send_pr_opened(hook_payload, control_env):
 
     pr_args = argparse.Namespace(url=find_pr_url(hook_payload.get("tool_response")))
     return send_payload(build_payload("pr-opened", pr_args, control_env), control_env)
+
+
+# grok's shell tool. `--help` documents `run_terminal_command`; the headless page also
+# spells it `run_terminal_cmd`, so accept both rather than betting on one.
+GROK_SHELL_TOOLS = ("run_terminal_command", "run_terminal_cmd", "Bash")
+
+# Reasons that mean a turn actually ended. `end_turn` is a completed turn; the rest are the
+# StopCancelled reasons, which must still report stopped - that is why StopCancelled is
+# hooked at all. Any other reason is the extra observe-only Stop grok fires at session end,
+# which would otherwise report a second spurious stop after the user already quit.
+GROK_TURN_END_REASONS = (
+    "end_turn",
+    "user_interrupt",
+    "permission_rejected",
+    "permission_cancelled",
+    "max_turns",
+    "no_progress",
+    "unknown",
+)
+
+
+def normalize_grok_hook_payload(hook_payload):
+    """Map grok's camelCase hook envelope onto the snake_case shape the shared helpers read.
+
+    Without this, maybe_send_pr_opened silently never fires for grok: it looks for
+    `tool_name`/`tool_input`/`tool_response`, and grok sends `toolName`/`toolInput`/
+    `toolResult`. The tool name is also grok's own, so it is mapped to `Bash` - the name the
+    shared PR check matches on.
+    """
+    if not isinstance(hook_payload, dict):
+        return {}
+
+    tool_name = hook_payload.get("toolName")
+    normalized = dict(hook_payload)
+    if tool_name in GROK_SHELL_TOOLS:
+        normalized["tool_name"] = "Bash"
+    elif isinstance(tool_name, str):
+        normalized["tool_name"] = tool_name
+    if isinstance(hook_payload.get("toolInput"), dict):
+        normalized["tool_input"] = hook_payload["toolInput"]
+    if "toolResult" in hook_payload:
+        normalized["tool_response"] = hook_payload["toolResult"]
+    return normalized
+
+
+def grok_is_subagent(hook_payload):
+    """True when this event came from a subagent's own session, not the main one.
+
+    grok sets `subagentType` only inside a subagent. A background subagent outlives the
+    parent turn, so without this filter its events would hold the worktree at "running"
+    after the main agent already went idle.
+    """
+    return bool(isinstance(hook_payload, dict) and hook_payload.get("subagentType"))
 
 
 def send_payload(payload, control_env):
@@ -264,6 +327,51 @@ def main():
     if parsed.command == "opencode-stop":
         send_payload(build_payload("agent-stopped", parsed, control_env), control_env)
         return 0
+
+    if parsed.command.startswith("grok-"):
+        hook_payload = read_hook_payload()
+        # A subagent's events describe the child, not this worktree.
+        if grok_is_subagent(hook_payload):
+            return 0
+
+        if parsed.command == "grok-session-start":
+            # grok pins its session id via `-s` at launch, so this is a cross-check rather
+            # than the only route (contrast opencode). GROK_SESSION_ID is injected into
+            # every hook process, so prefer it and fall back to the stdin envelope.
+            session_id = os.environ.get("GROK_SESSION_ID") or hook_payload.get("sessionId")
+            if session_id:
+                payload = build_payload("conversation-started", parsed, control_env)
+                payload["sessionId"] = session_id
+                send_payload(payload, control_env)
+            send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="idle"), control_env), control_env)
+            return 0
+
+        if parsed.command == "grok-user-prompt-submit":
+            send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="running"), control_env), control_env)
+            return 0
+
+        if parsed.command == "grok-permission-prompt":
+            # grok is blocked on a human decision in its own TUI. A distinct lifecycle from
+            # plain idle so the dashboard can say WHY the worktree wants attention: approve
+            # something already proposed, versus send the next prompt.
+            send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="awaiting_permission"), control_env), control_env)
+            return 0
+
+        if parsed.command == "grok-post-tool-use":
+            maybe_send_pr_opened(normalize_grok_hook_payload(hook_payload), control_env)
+            return 0
+
+        if parsed.command == "grok-stop":
+            # An extra observe-only Stop fires at session end, which would report a second
+            # spurious stop after the user has already quit. Genuine turn ends carry
+            # reason == "end_turn". StopCancelled has its own reasons (user_interrupt,
+            # permission_rejected, max_turns, ...) and must NOT be filtered out - that is
+            # the whole point of hooking it.
+            reason = hook_payload.get("reason")
+            if reason is not None and reason not in GROK_TURN_END_REASONS:
+                return 0
+            send_payload(build_payload("agent-stopped", parsed, control_env), control_env)
+            return 0
 
     if parsed.command == "codex-stop":
         send_payload(build_payload("agent-stopped", parsed, control_env), control_env)

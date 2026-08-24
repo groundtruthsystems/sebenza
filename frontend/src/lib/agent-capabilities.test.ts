@@ -59,6 +59,25 @@ describe("agentCan", () => {
     expect(agentCan(agents, undefined, "fork")).toBe(false);
   });
 
+  it("falls back to the built-in table for grok across every capability it has", () => {
+    // grok's flag surface matches claude's, so a stale server must not degrade it to
+    // all-false while claude falls back to something sensible.
+    const stale = agent("grok", "builtin");
+    for (const key of Object.keys(stale.capabilities)) {
+      delete (stale.capabilities as Record<string, unknown>)[key];
+    }
+    expect(agentCan([stale], "grok", "fork")).toBe(true);
+    expect(agentCan([stale], "grok", "inAppChat")).toBe(true);
+    expect(agentCan([stale], "grok", "conversationHistory")).toBe(true);
+    expect(agentCan([stale], "grok", "interrupt")).toBe(true);
+    expect(agentCan([stale], "grok", "resume")).toBe(true);
+    // `-s/--session-id <uuid>` pins a new session, so the id never needs polling for.
+    expect(agentCan([stale], "grok", "pinnableSessionId")).toBe(true);
+    // grok's PreToolUse CAN deny, but there is no UI to answer a prompt from the
+    // dashboard, so this must stay false until there is.
+    expect(agentCan([stale], "grok", "permissionInterception")).toBe(false);
+  });
+
   it("resolves inAppChat the same way, so chat and fork share one table", () => {
     const agents = [agent("codex", "builtin"), agent("opencode", "custom")];
     expect(agentCan(agents, "codex", "inAppChat")).toBe(true);

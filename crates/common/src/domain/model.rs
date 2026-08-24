@@ -23,6 +23,11 @@ pub enum WorktreeConversationProvider {
     CodexAppServer,
     #[serde(rename = "claudeCode")]
     ClaudeCode,
+    /// Bare `grok`, following `opencode`: the codex/claude names identify a *transport*
+    /// (an app server, a CLI protocol) where more than one existed. grok needs no such
+    /// distinction, so the agent id is the provider id.
+    #[serde(rename = "grok")]
+    Grok,
     #[serde(rename = "opencode")]
     Opencode,
 }
@@ -42,6 +47,18 @@ pub enum WorktreeConversationMeta {
     },
     #[serde(rename = "claudeCode")]
     Claude {
+        #[serde(rename = "conversationId")]
+        conversation_id: String,
+        cwd: String,
+        #[serde(rename = "lastSeenAt")]
+        last_seen_at: String,
+        #[serde(rename = "sessionId")]
+        session_id: String,
+    },
+    /// grok records the id Sebenza pinned with `-s` at launch, cross-checked against the id
+    /// its SessionStart hook reports.
+    #[serde(rename = "grok")]
+    Grok {
         #[serde(rename = "conversationId")]
         conversation_id: String,
         cwd: String,
@@ -70,6 +87,7 @@ impl WorktreeConversationMeta {
         match self {
             Self::Codex { thread_id, .. } => thread_id,
             Self::Claude { session_id, .. } => session_id,
+            Self::Grok { session_id, .. } => session_id,
             Self::Opencode { session_id, .. } => session_id,
         }
     }

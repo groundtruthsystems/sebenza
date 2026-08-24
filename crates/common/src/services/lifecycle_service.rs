@@ -239,11 +239,71 @@ fn warn_on_untrusted_agent_plugins(git_dir: &str, worktree_path: &str) {
     );
 }
 
-/// The built-in agent kind (`claude`/`codex`) whose sessions we can discover.
+/// Labels of the built-in agents whose tabs can actually be forked.
+///
+/// Derived from `discoverable_agent_kind`, the gate `prepare_fork_slot` uses - deliberately
+/// NOT from the registry's `fork` capability, which would over-promise: opencode advertises
+/// `fork: true` while that gate refuses it. Deriving it from the gate means the user-facing
+/// message cannot drift from the behaviour, which a hardcoded list already had (it named
+/// Claude and Codex after opencode existed).
+fn forkable_builtin_labels() -> Vec<&'static str> {
+    BuiltinAgentId::ALL
+        .iter()
+        .filter(|id| {
+            discoverable_agent_kind(&AgentDefinition {
+                id: id.as_str().to_string(),
+                label: id.label().to_string(),
+                kind: "builtin",
+                capabilities: crate::services::agent_registry::capabilities_for(**id),
+                implementation: AgentImplementation::Builtin(**id),
+            })
+            .is_some()
+        })
+        .map(|id| id.label())
+        .collect()
+}
+
+/// Warn when a grok worktree's repo is not a trusted folder.
+///
+/// grok skips project hooks in an untrusted folder **silently**, so
+/// `.grok/hooks/sebenza.json` is written, looks correct, and never fires - the worktree's
+/// status simply never updates, with no error anywhere to explain it. Sebenza deliberately
+/// does not pass `--trust` to grant it: that would let an unvetted repo run its own
+/// `.grok/hooks/` and load `.grok/plugins/` (see `scan_untrusted_agent_plugins`). So the
+/// honest thing is to name the condition and the one-time fix.
+fn warn_if_grok_project_untrusted(agent: &AgentDefinition, git_dir: &str, worktree_path: &str) {
+    if !matches!(
+        agent.implementation,
+        AgentImplementation::Builtin(BuiltinAgentId::Grok)
+    ) {
+        return;
+    }
+    // Trust resolves through the git common dir, so it is the MAIN checkout that must be
+    // trusted, not this worktree - a worktree inherits the parent repo's decision.
+    let repo_root = crate::adapters::agent_runtime::main_worktree_for(git_dir)
+        .unwrap_or_else(|| worktree_path.to_string());
+    if crate::adapters::grok_session_log::project_is_trusted(&repo_root) == Some(false) {
+        tracing::warn!(
+            "{worktree_path}: grok does not trust {repo_root}, so it will SILENTLY skip \
+             Sebenza's .grok/hooks/sebenza.json and this worktree's status will never \
+             update. Run `grok` once in {repo_root} and accept the trust prompt (or \
+             `/hooks-trust`) to fix it."
+        );
+    }
+}
+
+/// The built-in agent kind whose sessions we can discover on disk.
+///
+/// This gates more than discovery: `prepare_fork_slot` refuses to fork when it is `None`,
+/// so an agent that advertises `fork: true` must appear here or the capability is dead.
+/// (opencode is exactly that case today - `fork: true` in the registry, `None` here. See
+/// TODO.md.) grok's sessions are plain directories under `<grok-home>/sessions`, so unlike
+/// opencode's SQLite store they genuinely are discoverable.
 fn discoverable_agent_kind(agent: &AgentDefinition) -> Option<DiscoverableAgentKind> {
     match &agent.implementation {
         AgentImplementation::Builtin(id) => match id {
             BuiltinAgentId::Claude => Some(DiscoverableAgentKind::Claude),
+            BuiltinAgentId::Grok => Some(DiscoverableAgentKind::Grok),
             BuiltinAgentId::Codex => Some(DiscoverableAgentKind::Codex),
             BuiltinAgentId::Opencode => None,
         },
@@ -388,6 +448,7 @@ impl LifecycleService {
             &resolved.entry.path,
         ))?;
         warn_on_untrusted_agent_plugins(&resolved.git_dir, &resolved.entry.path);
+        warn_if_grok_project_untrusted(&agent, &resolved.git_dir, &resolved.entry.path);
         // NOTE: codex resume-conversation-id on open is still deferred.
         self.materialize_runtime_session(
             branch,
@@ -784,6 +845,7 @@ impl LifecycleService {
                 &worktree_path,
             ))?;
             warn_on_untrusted_agent_plugins(&initialized.paths.git_dir, &worktree_path);
+            warn_if_grok_project_untrusted(&agent, &initialized.paths.git_dir, &worktree_path);
             self.materialize_runtime_session(
                 branch,
                 &profile,
@@ -1101,9 +1163,15 @@ impl LifecycleService {
         // ensure_root_session_id may have persisted root.sessionId; re-read for a fresh base.
         let meta = self.read_meta_or_throw(&slot.resolved.git_dir)?;
         let seq = next_fork_seq(&meta);
-        // Claude can pin the forked child id (deterministic); Codex self-assigns.
-        let pin_session_id =
-            (agent_kind == DiscoverableAgentKind::Claude).then(crate::util::id::random_uuid);
+        // Pin the forked child id when the agent lets us choose it (claude `--session-id`,
+        // grok `-s`); Codex self-assigns and must be polled for instead. Driven by the
+        // registry capability rather than a per-agent literal, so a new pinnable agent does
+        // not have to be remembered here.
+        let pin_session_id = slot
+            .agent
+            .capabilities
+            .pinnable_session_id
+            .then(crate::util::id::random_uuid);
         let invocation = AgentInvocation {
             agent: &slot.agent,
             yolo: slot.profile.profile.yolo == Some(true),
@@ -1165,7 +1233,10 @@ impl LifecycleService {
             .system_prompt
             .as_deref()
             .map(|sp| expand_template(sp, &slot.initialized.runtime_env));
-        let pin_session_id = (discoverable == Some(DiscoverableAgentKind::Claude))
+        // See the fork path: pinning follows the registry capability, not an agent literal.
+        let pin_session_id = agent
+            .capabilities
+            .pinnable_session_id
             .then(crate::util::id::random_uuid);
 
         let invocation = AgentInvocation {
@@ -1370,8 +1441,12 @@ impl LifecycleService {
         let slot =
             self.prepare_tab_slot(branch, "Tabs are not supported for sandboxed worktrees")?;
         let agent_kind = discoverable_agent_kind(&slot.agent).ok_or_else(|| {
+            let forkable = forkable_builtin_labels();
             LifecycleError::new(
-                "Forking a tab is only available for the built-in Claude and Codex agents",
+                &format!(
+                    "Forking a tab is only available for these built-in agents: {}",
+                    forkable.join(", ")
+                ),
                 409,
             )
         })?;
@@ -1951,6 +2026,26 @@ fn normalize_worktree_label(label: Option<&str>) -> Result<Option<String>, Lifec
 
 #[cfg(test)]
 mod tests {
+
+    /// The fork-refusal message must name exactly what the gate allows. A hardcoded list
+    /// here had already drifted once (it said "Claude and Codex" after opencode shipped),
+    /// and the registry's `fork` capability would over-promise, since opencode advertises
+    /// `fork: true` while the gate refuses it.
+    #[test]
+    fn the_fork_refusal_message_names_exactly_the_agents_the_gate_allows() {
+        let forkable = super::forkable_builtin_labels();
+        assert!(forkable.contains(&"Claude"));
+        assert!(
+            forkable.contains(&"Grok"),
+            "grok forks via --resume <id> --fork-session"
+        );
+        assert!(forkable.contains(&"Codex"));
+        assert!(
+            !forkable.contains(&"OpenCode"),
+            "opencode advertises fork: true but discoverable_agent_kind refuses it, so \
+             offering it here would promise something that 409s"
+        );
+    }
     use super::*;
 
     fn existing_main_meta() -> WorktreeMeta {

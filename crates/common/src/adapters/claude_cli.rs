@@ -521,6 +521,67 @@ pub fn latest_session(cwd: &str) -> Option<ClaudeCliSession> {
 
 #[cfg(test)]
 mod tests {
+
+    /// grok's `--output-format streaming-messages-json` is documented as the Messages
+    /// `stream-json` wire format, and Sebenza's chat provider for grok depends on that being
+    /// literally true: `StreamProvider::Grok` feeds grok's stdout to THIS parser unchanged.
+    ///
+    /// The fixture is a real captured `grok -p ... --output-format streaming-messages-json
+    /// --include-partial-messages` run (grok 1.0.5), trimmed of repeated thinking deltas.
+    /// If grok's format ever drifts, this fails here rather than as an empty chat panel.
+    #[test]
+    fn groks_streaming_messages_json_is_parsed_by_the_claude_stream_parser() {
+        const GROK_STREAM: &str = include_str!("testdata/grok_stream_messages.ndjson");
+        let mut session_ids = 0;
+        let mut message_start = None;
+        let mut deltas = String::new();
+        let mut complete = None;
+        let mut blocks = 0;
+
+        for line in GROK_STREAM.lines().filter(|l| !l.trim().is_empty()) {
+            let parsed = parse_claude_stream_line(line)
+                .unwrap_or_else(|| panic!("grok emitted a line this parser rejects: {line}"));
+            assert!(parsed.error.is_none(), "unexpected error from: {line}");
+            if parsed.session_id.is_some() {
+                session_ids += 1;
+            }
+            if let Some(id) = parsed.message_start {
+                message_start = Some(id);
+            }
+            if let Some((text, _index)) = parsed.assistant_delta {
+                deltas.push_str(&text);
+            }
+            if let Some(id) = parsed.complete_session_id {
+                complete = Some(id);
+            }
+            blocks += parsed.blocks.len();
+        }
+
+        // grok spells it `session_id`, snake_case, exactly where this parser reads it - the
+        // single most load-bearing detail, since its hook payloads use `sessionId`.
+        assert!(
+            session_ids >= 3,
+            "session_id must be readable on the system/assistant/result lines"
+        );
+        assert_eq!(
+            message_start.as_deref(),
+            Some("msg_0"),
+            "message_start.message.id must resolve, or streaming ids are lost"
+        );
+        assert_eq!(
+            deltas.trim(),
+            "ok",
+            "text_delta content must reach assistant_delta"
+        );
+        assert!(
+            complete.is_some(),
+            "the terminal result line must yield the completed session id"
+        );
+        assert!(
+            blocks > 0,
+            "the assistant line's content blocks must parse into messages"
+        );
+    }
     use super::*;
 
     #[test]
