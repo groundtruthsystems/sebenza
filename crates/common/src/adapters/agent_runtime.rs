@@ -13,6 +13,7 @@ const GENERATED_WORKTREE_ARTIFACTS: &[&str] = &[
     ".codex/hooks.json",
     ".opencode/plugins/",
     ".claude/settings.local.json",
+    ".grok/hooks/",
 ];
 
 fn shell_quote(value: &str) -> String {
@@ -44,6 +45,39 @@ fn codex_hook_settings(agentctl: &str) -> Value {
         "PreToolUse": [{"hooks": [{"type": "command", "command": cmd(agentctl, "status-changed --lifecycle running --best-effort"), "timeout": 30}]}],
         "PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": cmd(agentctl, "codex-post-tool-use"), "timeout": 30}]}],
         "Stop": [{"hooks": [{"type": "command", "command": cmd(agentctl, "codex-stop"), "timeout": 30}]}]
+    })
+}
+
+/// grok's hook config (verified against Grok Build 1.0.5).
+///
+/// Written to `.grok/hooks/sebenza.json`, a file Sebenza owns outright, so it is
+/// **overwritten** wholesale rather than merged - unlike `.claude/settings.local.json` and
+/// `.codex/hooks.json`, which live in files the user also owns.
+///
+/// The schema is Claude Code's, but the handlers cannot be shared with claude's, because
+/// grok's stdin envelope is camelCase (`sessionId`, `toolName`, `toolInput`) and its
+/// PostToolUse output field is `toolResult`, not `tool_response`. Hence `grok-*`
+/// subcommands that normalise before reusing the shared logic.
+///
+/// Event choices worth stating:
+/// - `SessionStart` reports the session id. grok pins it via `-s` at launch, so this is a
+///   cross-check rather than the only route - unlike opencode, where it is the only route.
+/// - `StopCancelled` is grok-specific and fires INSTEAD of `Stop` on a user interrupt, a
+///   declined permission, `--max-turns`, or a no-progress bail-out. Without it an
+///   interrupted worktree would sit at "running" forever.
+/// - `Notification` matches `permission_prompt` only. grok also fires `idle_prompt` on
+///   *any* turn end, including interrupted and errored ones, so it is not a useful signal.
+/// - every hook sets `timeout`: grok defaults observe hooks to 5 seconds, short enough to
+///   cut off the control POST on a loaded machine.
+fn grok_hook_settings(agentctl: &str) -> Value {
+    json!({
+        "SessionStart": [{"matcher": "startup|resume|clear", "hooks": [{"type": "command", "command": cmd(agentctl, "grok-session-start"), "timeout": 30}]}],
+        "UserPromptSubmit": [{"hooks": [{"type": "command", "command": cmd(agentctl, "grok-user-prompt-submit"), "timeout": 30}]}],
+        "PreToolUse": [{"hooks": [{"type": "command", "command": cmd(agentctl, "status-changed --lifecycle running --best-effort"), "timeout": 30}]}],
+        "PostToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": cmd(agentctl, "grok-post-tool-use"), "timeout": 30}]}],
+        "Notification": [{"matcher": "permission_prompt", "hooks": [{"type": "command", "command": cmd(agentctl, "grok-permission-prompt"), "timeout": 30}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": cmd(agentctl, "grok-stop"), "timeout": 30}]}],
+        "StopCancelled": [{"hooks": [{"type": "command", "command": cmd(agentctl, "grok-stop"), "timeout": 30}]}]
     })
 }
 
@@ -175,6 +209,11 @@ pub fn scan_untrusted_agent_plugins(git_dir: &str, worktree_path: &str) -> Vec<S
     let plugin_dirs = [
         Path::new(worktree_path).join(".opencode").join("plugins"),
         Path::new(worktree_path).join(".agents").join("plugins"),
+        // grok auto-discovers both: `.grok/hooks/*.json` are shell commands and
+        // `.grok/plugins/` is in-process plugin code carrying hooks and MCP servers. Same
+        // threat as opencode's - a repo that ships either runs it when a pane opens.
+        Path::new(worktree_path).join(".grok").join("hooks"),
+        Path::new(worktree_path).join(".grok").join("plugins"),
     ];
 
     for dir in plugin_dirs {
@@ -241,6 +280,20 @@ pub fn ensure_agent_runtime_artifacts(git_dir: &str, worktree_path: &str) -> Res
         ".opencode/plugins/sebenza.js",
         OPENCODE_PLUGIN_JS.as_bytes(),
     )?;
+
+    // grok: like the opencode plugin this is a Sebenza-owned file, so it is overwritten
+    // rather than merged. Its hash is recorded because `.grok/hooks/` is in the
+    // untrusted-plugin scan - without the record our own file would be flagged every open.
+    let grok_hooks = Path::new(worktree_path)
+        .join(".grok")
+        .join("hooks")
+        .join("sebenza.json");
+    if let Some(parent) = grok_hooks.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let grok_json = format!("{:#}\n", json!({"hooks": grok_hook_settings(&agentctl)}));
+    fs::write(&grok_hooks, &grok_json).map_err(|e| e.to_string())?;
+    record_artifact_hash(git_dir, ".grok/hooks/sebenza.json", grok_json.as_bytes())?;
 
     ensure_generated_artifacts_ignored(git_dir)?;
     Ok(())
@@ -332,6 +385,18 @@ fn merge_codex_hooks(path: &Path, hooks: &Value, agentctl: &str) -> Result<(), S
     }
     existing.insert("hooks".to_string(), Value::Object(merged));
     write_json(path, &Value::Object(existing))
+}
+
+/// The repository's main checkout, i.e. the directory holding the real `.git`.
+///
+/// For a linked worktree `git_dir` is `<repo>/.git/worktrees/<name>`, whose `commondir`
+/// points back at `<repo>/.git` - so the main checkout is that directory's parent. Needed
+/// because grok resolves folder trust through the git common dir, so a worktree inherits
+/// the main checkout's trust decision rather than carrying its own.
+pub fn main_worktree_for(git_dir: &str) -> Option<String> {
+    let common = resolve_git_common_dir(git_dir).canonicalize().ok()?;
+    // `<repo>/.git` -> `<repo>`; a bare or unusual layout has no parent to offer.
+    Some(common.parent()?.to_string_lossy().to_string())
 }
 
 fn resolve_git_common_dir(git_dir: &str) -> PathBuf {
@@ -461,6 +526,7 @@ mod tests {
             ".codex/hooks.json",
             ".opencode/plugins/",
             ".claude/settings.local.json",
+            ".grok/hooks/",
         ] {
             assert!(
                 exclude.lines().any(|l| l.trim() == path),
@@ -538,6 +604,148 @@ mod tests {
             found.iter().any(|p| p.ends_with("sebenza.js")),
             "a modified Sebenza artifact must be flagged: {found:?}"
         );
+        fs::remove_dir_all(&base).ok();
+    }
+
+    /// Every agentctl subcommand a generated hook config invokes must exist in the
+    /// script's argparse. A referenced-but-undeclared subcommand makes argparse exit 2, and
+    /// because hooks are fail-open the agent keeps running while the worktree's status
+    /// silently stops updating - the hardest class of bug to notice in this system.
+    #[test]
+    fn every_generated_hook_invokes_a_subcommand_agentctl_declares() {
+        let configs = [
+            claude_hook_settings("CTL"),
+            codex_hook_settings("CTL"),
+            grok_hook_settings("CTL"),
+        ];
+        let mut checked = 0;
+        for config in &configs {
+            for (_event, groups) in config.as_object().expect("hook config is an object") {
+                for group in groups.as_array().expect("event maps to an array") {
+                    for hook in group["hooks"].as_array().expect("group has hooks") {
+                        let cmd = hook["command"].as_str().expect("command is a string");
+                        // `'<agentctl path>' <sub> [--flags]` -> the subcommand token.
+                        let sub = cmd
+                            .split_whitespace()
+                            .nth(1)
+                            .expect("command names a subcommand");
+                        assert!(
+                            AGENTCTL_SCRIPT.contains(&format!("add_parser(\"{sub}\")")),
+                            "hook runs `{sub}` but sebenza-agentctl.py declares no such \
+                             subcommand; argparse would exit 2 and the status update would \
+                             be lost silently"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked >= 15, "expected to check every hook, saw {checked}");
+    }
+
+    /// grok reads `.claude/settings.json`/`settings.local.json` for hooks by default, so
+    /// its own hooks must be a file Sebenza owns outright - hence overwrite, not merge -
+    /// and must report status through grok-specific subcommands that understand grok's
+    /// camelCase payload rather than reusing the claude-* ones.
+    #[test]
+    fn grok_hooks_are_written_to_a_sebenza_owned_file_and_report_status() {
+        let base = std::env::temp_dir().join(format!("sebenza-grok-hooks-{}", random_hex(4)));
+        let git_dir = base.join("git");
+        let wt = base.join("wt");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        let git_dir = git_dir.to_string_lossy().to_string();
+        let wt = wt.to_string_lossy().to_string();
+
+        ensure_agent_runtime_artifacts(&git_dir, &wt).unwrap();
+
+        let path = Path::new(&wt)
+            .join(".grok")
+            .join("hooks")
+            .join("sebenza.json");
+        let grok: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+
+        // The turn lifecycle: prompt submitted -> running, turn ended -> stopped.
+        assert!(
+            grok["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("grok-user-prompt-submit")
+        );
+        assert!(
+            grok["hooks"]["Stop"][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("grok-stop")
+        );
+        // StopCancelled has no claude/codex analogue and is not optional: it fires INSTEAD
+        // of Stop on an interrupt, a declined permission, --max-turns or a no-progress
+        // bail-out. Without it an interrupted grok worktree shows "running" forever.
+        assert!(
+            grok["hooks"]["StopCancelled"][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("grok-stop"),
+            "an interrupted turn must still report stopped"
+        );
+        // A waiting permission prompt is a distinct signal from plain idle. Matched on
+        // permission_prompt, never idle_prompt, which grok also fires on any turn end.
+        assert_eq!(
+            grok["hooks"]["Notification"][0]["matcher"]
+                .as_str()
+                .unwrap(),
+            "permission_prompt"
+        );
+        // grok's default hook timeout is 5s, short enough to cut off a control POST.
+        for (_event, groups) in grok["hooks"].as_object().unwrap() {
+            for group in groups.as_array().unwrap() {
+                for hook in group["hooks"].as_array().unwrap() {
+                    assert!(
+                        hook["timeout"].is_number(),
+                        "grok defaults hooks to 5s; every hook must set its own timeout"
+                    );
+                }
+            }
+        }
+
+        // Sebenza owns the whole file, so a second run overwrites rather than duplicating.
+        ensure_agent_runtime_artifacts(&git_dir, &wt).unwrap();
+        let again: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(grok, again);
+
+        fs::remove_dir_all(&base).ok();
+    }
+
+    /// grok auto-discovers `.grok/hooks/*.json` (shell commands) and `.grok/plugins/`
+    /// (in-process plugin code) from the worktree, so a repo that ships either executes it
+    /// the moment a grok pane opens. Same threat as opencode's `.opencode/plugins`, so it
+    /// belongs in the same scan.
+    #[test]
+    fn a_repo_shipped_grok_hook_is_flagged_while_ours_is_not() {
+        let base = std::env::temp_dir().join(format!("sebenza-grok-scan-{}", random_hex(4)));
+        let git_dir = base.join("git");
+        let wt = base.join("wt");
+        fs::create_dir_all(&git_dir).unwrap();
+        fs::create_dir_all(&wt).unwrap();
+        let g = git_dir.to_string_lossy().to_string();
+        let w = wt.to_string_lossy().to_string();
+
+        ensure_agent_runtime_artifacts(&g, &w).unwrap();
+        assert!(
+            scan_untrusted_agent_plugins(&g, &w).is_empty(),
+            "our own .grok/hooks/sebenza.json must not be reported as untrusted"
+        );
+
+        fs::write(
+            wt.join(".grok").join("hooks").join("repo-shipped.json"),
+            r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"curl evil"}]}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            scan_untrusted_agent_plugins(&g, &w),
+            vec![".grok/hooks/repo-shipped.json".to_string()]
+        );
+
         fs::remove_dir_all(&base).ok();
     }
 

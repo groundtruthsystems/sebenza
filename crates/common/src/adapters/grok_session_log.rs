@@ -15,18 +15,53 @@
 
 use std::path::{Path, PathBuf};
 
-/// `<grok-home>/sessions`. Honours `GROK_HOME`, which grok itself honours.
+/// grok's home directory. Honours `GROK_HOME`, which grok itself honours.
+fn grok_home() -> Option<PathBuf> {
+    match std::env::var_os("GROK_HOME") {
+        Some(h) if !h.is_empty() => Some(PathBuf::from(h)),
+        _ => Some(PathBuf::from(std::env::var_os("HOME")?).join(".grok")),
+    }
+}
+
+/// `<grok-home>/sessions`.
 fn sessions_root() -> Option<PathBuf> {
-    let home = match std::env::var_os("GROK_HOME") {
-        Some(h) if !h.is_empty() => PathBuf::from(h),
-        _ => PathBuf::from(std::env::var_os("HOME")?),
-    };
-    let root = if std::env::var_os("GROK_HOME").is_some_and(|h| !h.is_empty()) {
-        home
-    } else {
-        home.join(".grok")
-    };
-    Some(root.join("sessions"))
+    Some(grok_home()?.join("sessions"))
+}
+
+/// Whether grok considers `repo_root` a trusted folder.
+///
+/// This matters because grok **silently skips** project hooks in an untrusted folder - so
+/// Sebenza's `.grok/hooks/sebenza.json` is written, looks fine, and never fires, leaving the
+/// worktree's status frozen with no error anywhere. Verified against grok 1.0.5: with trust
+/// revoked, `grok inspect` reports `Hooks (0)` and no diagnostic.
+///
+/// Pass the repo's **main** checkout, not the worktree: trust resolves through the git
+/// common dir, so a worktree inherits the parent repo's decision even when it lives outside
+/// that directory (also verified).
+///
+/// `None` means the question could not be answered (no `trusted_folders.toml` yet, or it is
+/// unreadable) - treat that as "do not warn", since a first-run user has no store at all.
+pub fn project_is_trusted(repo_root: &str) -> Option<bool> {
+    let store = grok_home()?.join("trusted_folders.toml");
+    let text = std::fs::read_to_string(store).ok()?;
+    // The store is `[folders."<abs path>"]` sections with a `trusted = true|false` key.
+    // Parsed by hand rather than pulling in a TOML dependency for one lookup.
+    let header = format!("[folders.\"{repo_root}\"]");
+    let mut in_section = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with("[folders.") {
+            in_section = line == header;
+            continue;
+        }
+        if in_section
+            && let Some((key, value)) = line.split_once('=')
+            && key.trim() == "trusted"
+        {
+            return Some(value.trim() == "true");
+        }
+    }
+    Some(false)
 }
 
 /// Percent-encode `cwd` the way grok names its session group directories: every byte
@@ -172,6 +207,35 @@ mod tests {
             group_cwd(&dir).as_deref(),
             Some("/repo/worktrees/feature-x")
         );
+    }
+
+    #[test]
+    fn trust_is_read_per_folder_and_an_absent_store_is_not_a_denial() {
+        let base = std::env::temp_dir().join(format!("sebenza-grok-trust-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        // Isolated grok home so the developer's real trust store is never read or written.
+        let prev = std::env::var_os("GROK_HOME");
+        unsafe { std::env::set_var("GROK_HOME", &base) };
+
+        // No store yet: unanswerable, NOT a denial - a first-run user has no store at all,
+        // and warning them about "untrusted" would be wrong.
+        assert_eq!(project_is_trusted("/repo"), None);
+
+        std::fs::write(
+            base.join("trusted_folders.toml"),
+            "[folders.\"/repo\"]\ntrusted = true\ndecided_at = 1\n\n             [folders.\"/other\"]\ntrusted = false\ndecided_at = 2\n",
+        )
+        .unwrap();
+        assert_eq!(project_is_trusted("/repo"), Some(true));
+        assert_eq!(project_is_trusted("/other"), Some(false));
+        // Absent from a store that exists means no decision has been recorded -> untrusted.
+        assert_eq!(project_is_trusted("/never-seen"), Some(false));
+
+        match prev {
+            Some(v) => unsafe { std::env::set_var("GROK_HOME", v) },
+            None => unsafe { std::env::remove_var("GROK_HOME") },
+        }
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

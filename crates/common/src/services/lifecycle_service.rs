@@ -239,6 +239,35 @@ fn warn_on_untrusted_agent_plugins(git_dir: &str, worktree_path: &str) {
     );
 }
 
+/// Warn when a grok worktree's repo is not a trusted folder.
+///
+/// grok skips project hooks in an untrusted folder **silently**, so
+/// `.grok/hooks/sebenza.json` is written, looks correct, and never fires - the worktree's
+/// status simply never updates, with no error anywhere to explain it. Sebenza deliberately
+/// does not pass `--trust` to grant it: that would let an unvetted repo run its own
+/// `.grok/hooks/` and load `.grok/plugins/` (see `scan_untrusted_agent_plugins`). So the
+/// honest thing is to name the condition and the one-time fix.
+fn warn_if_grok_project_untrusted(agent: &AgentDefinition, git_dir: &str, worktree_path: &str) {
+    if !matches!(
+        agent.implementation,
+        AgentImplementation::Builtin(BuiltinAgentId::Grok)
+    ) {
+        return;
+    }
+    // Trust resolves through the git common dir, so it is the MAIN checkout that must be
+    // trusted, not this worktree - a worktree inherits the parent repo's decision.
+    let repo_root = crate::adapters::agent_runtime::main_worktree_for(git_dir)
+        .unwrap_or_else(|| worktree_path.to_string());
+    if crate::adapters::grok_session_log::project_is_trusted(&repo_root) == Some(false) {
+        tracing::warn!(
+            "{worktree_path}: grok does not trust {repo_root}, so it will SILENTLY skip \
+             Sebenza's .grok/hooks/sebenza.json and this worktree's status will never \
+             update. Run `grok` once in {repo_root} and accept the trust prompt (or \
+             `/hooks-trust`) to fix it."
+        );
+    }
+}
+
 /// The built-in agent kind whose sessions we can discover on disk.
 ///
 /// This gates more than discovery: `prepare_fork_slot` refuses to fork when it is `None`,
@@ -395,6 +424,7 @@ impl LifecycleService {
             &resolved.entry.path,
         ))?;
         warn_on_untrusted_agent_plugins(&resolved.git_dir, &resolved.entry.path);
+        warn_if_grok_project_untrusted(&agent, &resolved.git_dir, &resolved.entry.path);
         // NOTE: codex resume-conversation-id on open is still deferred.
         self.materialize_runtime_session(
             branch,
@@ -791,6 +821,7 @@ impl LifecycleService {
                 &worktree_path,
             ))?;
             warn_on_untrusted_agent_plugins(&initialized.paths.git_dir, &worktree_path);
+            warn_if_grok_project_untrusted(&agent, &initialized.paths.git_dir, &worktree_path);
             self.materialize_runtime_session(
                 branch,
                 &profile,
