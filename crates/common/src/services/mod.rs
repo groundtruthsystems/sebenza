@@ -8,6 +8,7 @@ pub mod claude_conversation_service;
 pub mod codex_conversation_service;
 pub mod config_view;
 pub mod conversation_router;
+pub mod grok_conversation_service;
 pub mod init_authoring;
 pub mod lifecycle_service;
 pub mod llm_spawn;

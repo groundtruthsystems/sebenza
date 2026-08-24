@@ -124,8 +124,9 @@ fn builtin_capabilities(id: BuiltinAgentId) -> AgentCapabilities {
             // format, so it reuses `parse_claude_stream_line` verbatim (verified against
             // grok 1.0.5), but the provider itself is not wired yet.
             in_app_chat: false,
-            // Needs the `~/.grok/sessions/<encoded-cwd>/<id>/updates.jsonl` adapter.
-            conversation_history: false,
+            // The updates.jsonl adapter plus the pinned `-s` id and the SessionStart hook
+            // round trip both landed.
+            conversation_history: true,
             // Comes with the streaming provider.
             interrupt: false,
             // `-r/--resume <id>`, or `-c/--continue` for the newest session in the cwd.
@@ -505,8 +506,8 @@ mod tests {
             "chat needs StreamProvider::Grok + run_grok, not yet landed"
         );
         assert!(
-            !grok.capabilities.conversation_history,
-            "history needs the updates.jsonl adapter, not yet landed"
+            grok.capabilities.conversation_history,
+            "the updates.jsonl adapter and the pinned session id both landed"
         );
         assert!(
             !grok.capabilities.interrupt,
