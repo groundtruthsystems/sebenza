@@ -10,8 +10,12 @@ one worker, which gives the item one LXC and starts agents. Done is a computed
 gate. A Headscale cluster lets a laptop worker pull work defined on a server.
 
 This spec refines `.ai/sebenza/tracks/platform_20260917/design.md`. Business
-rules BR1–BR16 apply. `inbox_20260914` conversion-to-worktrees is **not**
-implemented; that track's markdown/mermaid editor may be reused in phase 3.
+rules BR1–BR16 apply.
+
+**First ship:** `inbox_20260914` — draft + agent chat + convert to worktrees
+via today's lifecycle. Do not start this track's SQLite/`/board`/cluster
+phases until that inbox ships. Inbox convert is the v1 path onto projects;
+work-item Todo + per-item LXC remains later phases here.
 
 **Closed from design open questions**
 
@@ -111,8 +115,10 @@ implemented; that track's markdown/mermaid editor may be reused in phase 3.
     on the SPA. Planning-workspace sync is debounce + rev.
 27. Markdown / mermaid / shapes populate canvas layers when seeding; other
     kinds attach. Creating from files **copies** (BR1b).
-28. Do **not** implement `POST /api/inbox/:id/convert` from
-    `inbox_20260914`. Promote + staff + Todo is the only start signal.
+28. Inbox convert-to-worktrees (`inbox_20260914`) **is** the v1 start
+    signal onto projects. This track's later Todo → ItemRuntime path
+    must not replace that until it ships; do not implement a second
+    convert API here.
 
 ### Staffing, dispatch, LXC
 
