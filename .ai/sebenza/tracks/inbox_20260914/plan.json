@@ -12,15 +12,17 @@
           "id": "phase-1-task-1",
           "name": "Write tests for the InboxDraft model",
           "description": "Cover frontmatter round-trip, schema_version tolerance, status enum, and degradation on unparseable YAML.",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "70193f2"
         },
         {
           "id": "phase-1-task-2",
           "name": "Implement the InboxDraft domain model",
           "description": "Add InboxDraft, DraftStatus, ProjectRef and FileRevision to common::domain::model with serde_yaml frontmatter.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "70193f2"
         },
         {
           "id": "phase-1-task-3",
