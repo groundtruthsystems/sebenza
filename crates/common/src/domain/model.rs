@@ -474,6 +474,101 @@ pub struct NotificationView {
     pub timestamp: i64,
 }
 
+pub const INBOX_DRAFT_SCHEMA_VERSION: i32 = 1;
+
+/// Inbox draft status in on-disk YAML (`Draft` / `Promoted` / `Dropped`).
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+pub enum DraftStatus {
+    Draft,
+    Promoted,
+    Dropped,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct ProjectRef {
+    pub path: String,
+}
+
+/// Hash of the markdown body, used to detect concurrent edits. Not stored in
+/// frontmatter — computed from the body bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileRevision {
+    pub body_hash: String,
+}
+
+impl FileRevision {
+    pub fn of_body(body: &str) -> Self {
+        use sha1::{Digest, Sha1};
+        let digest = Sha1::digest(body.as_bytes());
+        Self {
+            body_hash: hex::encode(digest),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct InboxDraftFrontmatter {
+    pub schema_version: i32,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<ProjectRef>,
+    pub status: DraftStatus,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub conversions: Vec<serde_yaml::Value>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InboxDraft {
+    pub id: String,
+    pub frontmatter: InboxDraftFrontmatter,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InboxDraftView {
+    Parsed(InboxDraft),
+    Raw {
+        id: String,
+        raw_text: String,
+        error: String,
+    },
+}
+
+/// Split `---\nfrontmatter\n---\nbody`. Missing fences or invalid YAML become [`InboxDraftView::Raw`].
+pub fn parse_inbox_file(id: &str, text: &str) -> InboxDraftView {
+    let raw = |error: String| InboxDraftView::Raw {
+        id: id.to_string(),
+        raw_text: text.to_string(),
+        error,
+    };
+
+    let Some(rest) = text.strip_prefix("---\n") else {
+        return raw("missing opening frontmatter fence".into());
+    };
+    let Some((yaml, body)) = rest.split_once("\n---\n") else {
+        return raw("missing closing frontmatter fence".into());
+    };
+    match serde_yaml::from_str::<InboxDraftFrontmatter>(yaml) {
+        Ok(frontmatter) => InboxDraftView::Parsed(InboxDraft {
+            id: id.to_string(),
+            frontmatter,
+            body: body.to_string(),
+        }),
+        Err(err) => raw(err.to_string()),
+    }
+}
+
+pub fn render_inbox_file(draft: &InboxDraft) -> String {
+    let yaml = serde_yaml::to_string(&draft.frontmatter).unwrap_or_else(|_| String::new());
+    let yaml = yaml
+        .strip_prefix("---\n")
+        .unwrap_or(yaml.as_str())
+        .trim_end();
+    format!("---\n{yaml}\n---\n{}", draft.body)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,5 +621,93 @@ mod tests {
 
         assert_eq!(state.feedback_state, AgentFeedbackState::None);
         assert_eq!(state.lifecycle, AgentLifecycle::Idle);
+    }
+
+    const SAMPLE_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+    fn sample_source() -> String {
+        concat!(
+            "---\n",
+            "schema_version: 1\n",
+            "title: Design the inbox\n",
+            "status: Draft\n",
+            "project:\n",
+            "  path: /home/u/sebenza\n",
+            "created_at: \"2026-09-14T00:00:00Z\"\n",
+            "updated_at: \"2026-09-14T00:00:00Z\"\n",
+            "conversions: []\n",
+            "---\n",
+            "# Hello\n",
+            "\n",
+            "A paragraph.\n",
+        )
+        .to_string()
+    }
+
+    #[test]
+    fn inbox_draft_frontmatter_round_trips() {
+        let view = parse_inbox_file(SAMPLE_ID, &sample_source());
+        let InboxDraftView::Parsed(draft) = view else {
+            panic!("expected parsed draft, got {view:?}");
+        };
+        assert_eq!(draft.id, SAMPLE_ID);
+        assert_eq!(draft.frontmatter.schema_version, INBOX_DRAFT_SCHEMA_VERSION);
+        assert_eq!(draft.frontmatter.title, "Design the inbox");
+        assert_eq!(draft.frontmatter.status, DraftStatus::Draft);
+        assert_eq!(
+            draft.frontmatter.project.as_ref().map(|p| p.path.as_str()),
+            Some("/home/u/sebenza")
+        );
+        assert_eq!(draft.body, "# Hello\n\nA paragraph.\n");
+
+        let rendered = render_inbox_file(&draft);
+        let again = parse_inbox_file(SAMPLE_ID, &rendered);
+        let InboxDraftView::Parsed(round) = again else {
+            panic!("round-trip must parse");
+        };
+        assert_eq!(round.frontmatter.title, draft.frontmatter.title);
+        assert_eq!(round.frontmatter.status, draft.frontmatter.status);
+        assert_eq!(round.body, draft.body);
+        assert_eq!(
+            FileRevision::of_body(&round.body),
+            FileRevision::of_body(&draft.body)
+        );
+    }
+
+    #[test]
+    fn inbox_draft_status_enum_round_trips() {
+        for status in [DraftStatus::Draft, DraftStatus::Promoted, DraftStatus::Dropped] {
+            let yaml = serde_yaml::to_string(&status).expect("status yaml");
+            let back: DraftStatus = serde_yaml::from_str(&yaml).expect("status parse");
+            assert_eq!(back, status);
+        }
+        let parsed: DraftStatus = serde_yaml::from_str("Promoted").expect("Promoted");
+        assert_eq!(parsed, DraftStatus::Promoted);
+    }
+
+    #[test]
+    fn inbox_draft_tolerates_unknown_schema_version() {
+        let source = sample_source().replacen("schema_version: 1", "schema_version: 99", 1);
+        let view = parse_inbox_file(SAMPLE_ID, &source);
+        let InboxDraftView::Parsed(draft) = view else {
+            panic!("future schema_version must still parse known fields, got {view:?}");
+        };
+        assert_eq!(draft.frontmatter.schema_version, 99);
+        assert_eq!(draft.frontmatter.title, "Design the inbox");
+        assert_eq!(draft.body, "# Hello\n\nA paragraph.\n");
+    }
+
+    #[test]
+    fn inbox_draft_unparseable_yaml_degrades_to_raw() {
+        let source = "---\nstatus: [unterminated\n---\nbody\n";
+        let view = parse_inbox_file(SAMPLE_ID, source);
+        match view {
+            InboxDraftView::Raw { id, raw_text, error } => {
+                assert_eq!(id, SAMPLE_ID);
+                assert_eq!(raw_text, source);
+                assert!(!error.is_empty());
+            }
+            other => panic!("expected raw degradation, got {other:?}"),
+        }
     }
 }
