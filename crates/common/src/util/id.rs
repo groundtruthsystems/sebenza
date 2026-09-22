@@ -43,3 +43,55 @@ pub fn random_uuid() -> String {
         &h[20..32]
     )
 }
+
+/// Crockford Base32 (ULID alphabet). No I, L, O, U.
+const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// A 26-character ULID. Time-sortable, generated from `/dev/urandom` like
+/// [`random_uuid`] — no extra crate.
+pub fn random_ulid() -> String {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+        & 0x0000_FFFF_FFFF_FFFF;
+    let entropy = random_hex(10);
+    let mut n: u128 = (ms as u128) << 80;
+    for i in 0..10 {
+        let byte = u8::from_str_radix(&entropy[i * 2..i * 2 + 2], 16).unwrap_or(0);
+        n |= (byte as u128) << (8 * (9 - i));
+    }
+    let mut out = String::with_capacity(26);
+    for i in (0..26).rev() {
+        let idx = ((n >> (5 * i)) & 31) as usize;
+        out.push(CROCKFORD[idx] as char);
+    }
+    out
+}
+
+/// True iff `s` is a 26-character Crockford ULID (the only legal inbox draft id).
+pub fn is_ulid(s: &str) -> bool {
+    s.len() == 26
+        && s.bytes()
+            .all(|b| CROCKFORD.contains(&b.to_ascii_uppercase()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn random_ulid_is_crockford_26() {
+        let id = random_ulid();
+        assert!(is_ulid(&id), "{id}");
+        let again = random_ulid();
+        assert_ne!(id, again);
+    }
+
+    #[test]
+    fn is_ulid_rejects_path_and_wrong_length() {
+        assert!(!is_ulid("../secret"));
+        assert!(!is_ulid("short"));
+        assert!(is_ulid("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+    }
+}

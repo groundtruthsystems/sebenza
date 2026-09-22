@@ -14,6 +14,10 @@ Rust 1.85+ (2024 edition), Cargo workspace, three crates:
 binary), reqwest (rustls), `portable-pty`, serde / serde_json / serde_yaml, indexmap
 (order-preserving YAML), chrono, anyhow + thiserror, tracing + tracing-subscriber.
 
+**Identifiers.** UUIDv4 and ULID are generated in `common::util::id` from `/dev/urandom`
+(same posture as `random_uuid` — no `uuid` / `ulid` crate). Inbox draft ids are ULIDs
+so directory listing is time-sortable. Dated 2026-09-21 for the inbox store.
+
 ## Frontend
 
 React 19, Zustand 5, Vite 6, Tailwind 4, TypeScript 5.
