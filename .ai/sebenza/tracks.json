@@ -15,7 +15,7 @@
       "description": "Inbox: markdown/mermaid drafts designed with a builtin agent and converted into worktrees on one or more projects",
       "status": "doing",
       "created_at": "2026-09-14T00:00:00Z",
-      "updated_at": "2026-09-18T18:00:00Z",
+      "updated_at": "2026-09-21T00:00:00Z",
       "design_path": "./tracks/inbox_20260914/design.md",
       "spec_path": "./tracks/inbox_20260914/spec.md",
       "plan_path": "./tracks/inbox_20260914/plan.json",
@@ -30,8 +30,8 @@
       ],
       "progress": {
         "total_tasks": 49,
-        "completed_tasks": 2,
-        "percentage": 4
+        "completed_tasks": 4,
+        "percentage": 8
       }
     },
     {

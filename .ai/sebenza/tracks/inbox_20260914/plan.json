@@ -28,15 +28,17 @@
           "id": "phase-1-task-3",
           "name": "Write tests for inbox_store",
           "description": "Cover ULID naming, atomic temp+rename, body_hash conflict detection, key-scoped frontmatter merge, and directory listing.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "027c6aa"
         },
         {
           "id": "phase-1-task-4",
           "name": "Implement the inbox_store fs adapter",
           "description": "Add common::adapters::inbox_store with CRUD, atomic writes, body-hash gating and per-key merge.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "027c6aa"
         },
         {
           "id": "phase-1-task-5",
