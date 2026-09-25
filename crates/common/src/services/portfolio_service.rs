@@ -6,7 +6,7 @@
 //! sink the whole view, so every registry entry comes back with a `status` and
 //! the reader decides how to render it.
 
-use crate::adapters::fs::{TrackFileError, read_track_file_in};
+use crate::adapters::fs::{TrackFileError, annotate_test_plan_paths, read_track_file_in};
 use crate::adapters::sebenza_registry::{RegistryRead, SebenzaRegistry};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -108,7 +108,12 @@ fn resolve_project(entry: crate::adapters::sebenza_registry::RegistryProject) ->
         match std::fs::read_to_string(&tracks_path) {
             Err(e) => (ProjectStatus::MissingTracks, None, Some(e.to_string())),
             Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
-                Ok(value) => (ProjectStatus::Ok, Some(value), None),
+                Ok(mut value) => {
+                    if let Some(workspace) = tracks_path.parent() {
+                        annotate_test_plan_paths(workspace, &mut value);
+                    }
+                    (ProjectStatus::Ok, Some(value), None)
+                }
                 Err(e) => (ProjectStatus::InvalidTracks, None, Some(e.to_string())),
             },
         }
@@ -259,5 +264,39 @@ mod tests {
             error: None,
         };
         assert_eq!(workspace_dir(&project), PathBuf::from("/srv/p/.ai/sebenza"));
+    }
+
+    #[test]
+    fn portfolio_reports_a_test_plan_beside_the_track_docs() {
+        let root = temp_dir("test-plan");
+        let project = root.join("good");
+        let ws = project.join(".ai").join("sebenza");
+        let track_dir = ws.join("tracks").join("inbox_20260914");
+        fs::create_dir_all(&track_dir).unwrap();
+        fs::write(track_dir.join("test-plan.md"), "# Test plan\n").unwrap();
+        fs::write(
+            ws.join("tracks.json"),
+            r#"{"tracks":[{"track_id":"inbox_20260914","spec_path":"./tracks/inbox_20260914/spec.md"}]}"#,
+        )
+        .unwrap();
+
+        let registry_file = root.join("registry.json");
+        fs::write(
+            &registry_file,
+            format!(
+                r#"{{"version":"1.0","projects":[{{"name":"good","path":"{p}","tracks_file":"{t}"}}]}}"#,
+                p = project.display(),
+                t = ws.join("tracks.json").display(),
+            ),
+        )
+        .unwrap();
+
+        let portfolio = load_from(&SebenzaRegistry::with_file(registry_file));
+        assert_eq!(
+            portfolio.projects[0].tracks.as_ref().unwrap()["tracks"][0]["test_plan_path"],
+            "./tracks/inbox_20260914/test-plan.md"
+        );
+
+        fs::remove_dir_all(&root).ok();
     }
 }

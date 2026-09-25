@@ -169,7 +169,8 @@ export function fetchTracks(branch: string): Promise<Tracks | null> {
   return api.fetchTracks({ params: { name: branch } });
 }
 
-/** A single file under a worktree's `.ai/sebenza` dir (plan.json / spec.md / design.md). */
+/** A single file under a worktree's `.ai/sebenza` dir
+ *  (plan.json / spec.md / design.md / test-plan.md). */
 export function fetchTrackFile(branch: string, path: string): Promise<TrackFileResponse> {
   return api.fetchTrackFile({ params: { name: branch }, query: { path } });
 }

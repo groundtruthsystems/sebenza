@@ -3,7 +3,7 @@ import type { Track, TrackFileFetcher } from "./types";
 import BaseDialog from "./BaseDialog";
 import TrackMarkdown from "./TrackMarkdown";
 
-type DocsTab = "spec" | "design";
+type DocsTab = "spec" | "design" | "test-plan";
 
 function TabBtn({
   active,
@@ -32,8 +32,9 @@ function TabBtn({
   );
 }
 
-/** Track "docs" modal — the group's `spec.md` / `design.md` (markdown + mermaid).
- *  The plan is visualized by the board itself + the per-phase detail. */
+/** Track "docs" modal — the group's `spec.md`, `design.md`, and `test-plan.md`
+ *  (markdown + mermaid). The plan is visualized by the board itself + the
+ *  per-phase detail. */
 export default function TrackDetail({
   fetchFile,
   track,
@@ -45,7 +46,8 @@ export default function TrackDetail({
 }) {
   const hasSpec = !!track.spec_path;
   const hasDesign = !!track.design_path;
-  const [tab, setTab] = useState<DocsTab>(hasSpec ? "spec" : "design");
+  const hasTestPlan = !!track.test_plan_path;
+  const [tab, setTab] = useState<DocsTab>(hasSpec ? "spec" : hasDesign ? "design" : "test-plan");
 
   return (
     <BaseDialog onclose={onclose} wide maxWidth="90vw">
@@ -67,6 +69,13 @@ export default function TrackDetail({
         <TabBtn active={tab === "design"} disabled={!hasDesign} onClick={() => setTab("design")}>
           Design
         </TabBtn>
+        <TabBtn
+          active={tab === "test-plan"}
+          disabled={!hasTestPlan}
+          onClick={() => setTab("test-plan")}
+        >
+          Test plan
+        </TabBtn>
       </div>
 
       <div className="overflow-auto max-h-[70vh]">
@@ -74,11 +83,17 @@ export default function TrackDetail({
         {tab === "design" && hasDesign && (
           <TrackMarkdown fetchFile={fetchFile} path={track.design_path!} />
         )}
+        {tab === "test-plan" && hasTestPlan && (
+          <TrackMarkdown fetchFile={fetchFile} path={track.test_plan_path!} />
+        )}
         {tab === "spec" && !hasSpec && (
           <div className="text-sm text-muted py-8 text-center">No spec.md for this track.</div>
         )}
         {tab === "design" && !hasDesign && (
           <div className="text-sm text-muted py-8 text-center">No design.md for this track.</div>
+        )}
+        {tab === "test-plan" && !hasTestPlan && (
+          <div className="text-sm text-muted py-8 text-center">No test-plan.md for this track.</div>
         )}
       </div>
     </BaseDialog>

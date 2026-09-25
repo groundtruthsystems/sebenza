@@ -19,7 +19,7 @@ function loadMermaid() {
 // Unique id per rendered diagram (mermaid.render requires a unique DOM id).
 let mermaidSeq = 0;
 
-/** Renders a track markdown file (spec.md / design.md), rendering ```mermaid
+/** Renders a track markdown file (spec.md / design.md / test-plan.md), rendering ```mermaid
  *  fenced blocks to inline SVG. Mermaid is rendered to SVG *before* the HTML is
  *  set, so the diagram is part of the one-shot `dangerouslySetInnerHTML` and
  *  React never clobbers it on re-render. Content is the user's own local

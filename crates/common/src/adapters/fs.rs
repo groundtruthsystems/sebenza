@@ -200,15 +200,104 @@ pub fn resolve_tracks_dir(worktree_path: &str) -> Option<PathBuf> {
 
 /// Read `<worktree>/.ai/sebenza/tracks.json` (`sebenza-tracks-v1`) as parsed JSON.
 /// `None` when there is no workspace, the file is absent, or it doesn't parse.
+///
+/// A track whose directory contains `test-plan.md` (beside `spec.md` / `design.md`)
+/// gains a response-only `test_plan_path`. `tracks.json` on disk is not rewritten.
 pub fn read_tracks(worktree_path: &str) -> Option<serde_json::Value> {
     let dir = resolve_tracks_dir(worktree_path)?;
     let content = fs::read_to_string(dir.join("tracks.json")).ok()?;
-    serde_json::from_str(&content).ok()
+    let mut value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    annotate_test_plan_paths(&dir, &mut value);
+    Some(value)
+}
+
+/// When `test-plan.md` is readable beside a track's other docs, set
+/// `test_plan_path` on the in-memory track. A recorded path that does not
+/// resolve is dropped so the board does not offer a missing file. An explicit
+/// readable path wins; otherwise the sibling of `spec_path` / `design_path` /
+/// `plan_path`, then `./tracks/<track_id>/test-plan.md`.
+pub(crate) fn annotate_test_plan_paths(workspace: &Path, tracks: &mut serde_json::Value) {
+    let Some(list) = tracks.get_mut("tracks").and_then(|v| v.as_array_mut()) else {
+        return;
+    };
+    for track in list {
+        let Some(obj) = track.as_object_mut() else {
+            continue;
+        };
+        let candidate = test_plan_candidates(obj)
+            .into_iter()
+            .find(|path| track_file_is_file(workspace, path));
+        match candidate {
+            Some(path) => {
+                obj.insert(
+                    "test_plan_path".to_string(),
+                    serde_json::Value::String(path),
+                );
+            }
+            None => {
+                obj.remove("test_plan_path");
+            }
+        }
+    }
+}
+
+fn test_plan_candidates(track: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(path) = track.get("test_plan_path").and_then(|v| v.as_str()) {
+        push_test_plan(&mut out, path);
+    }
+    for key in ["spec_path", "design_path", "plan_path"] {
+        if let Some(anchor) = track.get(key).and_then(|v| v.as_str()) {
+            if let Some(sibling) = test_plan_sibling(anchor) {
+                push_test_plan(&mut out, &sibling);
+            }
+        }
+    }
+    if let Some(id) = track.get("track_id").and_then(|v| v.as_str()) {
+        if let Some(path) = conventional_test_plan(id) {
+            push_test_plan(&mut out, &path);
+        }
+    }
+    out
+}
+
+fn push_test_plan(out: &mut Vec<String>, path: &str) {
+    let path = path.trim();
+    if path.is_empty() || out.iter().any(|existing| existing == path) {
+        return;
+    }
+    out.push(path.to_string());
+}
+
+/// `./tracks/<id>/spec.md` → `./tracks/<id>/test-plan.md`, preserving the
+/// anchor's prefix. Rejects `..` so a hostile path field cannot escape.
+fn test_plan_sibling(anchor: &str) -> Option<String> {
+    let anchor = anchor.trim();
+    let slash = anchor.rfind('/')?;
+    if slash == 0 {
+        return None;
+    }
+    let parent = &anchor[..slash];
+    if parent.is_empty() || parent.split('/').any(|part| part == "..") {
+        return None;
+    }
+    Some(format!("{parent}/test-plan.md"))
+}
+
+fn conventional_test_plan(track_id: &str) -> Option<String> {
+    if track_id.is_empty()
+        || !track_id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+    {
+        return None;
+    }
+    Some(format!("./tracks/{track_id}/test-plan.md"))
 }
 
 /// Read a text file at `<workspace_dir>/<rel>` (e.g. `tracks/<id>/plan.json`) — the
-/// track `design_path` / `spec_path` / `plan_path` values are relative to the
-/// workspace root. Guards against path traversal: `rel` may not be absolute or
+/// track `design_path` / `spec_path` / `test_plan_path` / `plan_path` values are
+/// relative to the workspace root. Guards against path traversal: `rel` may not be absolute or
 /// contain `..`, and the canonicalized target must stay within the workspace dir
 /// (defends against symlink escapes).
 pub fn read_track_file(worktree_path: &str, rel: &str) -> Result<String, TrackFileError> {
@@ -220,6 +309,12 @@ pub fn read_track_file(worktree_path: &str, rel: &str) -> Result<String, TrackFi
 /// Sebenza workspace. Split out so the registry portfolio can reuse the guard for
 /// projects that aren't worktrees of the active project.
 pub fn read_track_file_in(dir: &Path, rel: &str) -> Result<String, TrackFileError> {
+    let target = resolve_track_file(dir, rel)?;
+    fs::read_to_string(&target).map_err(|_| TrackFileError::NotFound)
+}
+
+/// Canonical path of `<dir>/<rel>` when it stays inside the workspace.
+fn resolve_track_file(dir: &Path, rel: &str) -> Result<PathBuf, TrackFileError> {
     let rel_path = Path::new(rel.trim_start_matches("./"));
     if rel_path.is_absolute()
         || rel_path
@@ -230,12 +325,16 @@ pub fn read_track_file_in(dir: &Path, rel: &str) -> Result<String, TrackFileErro
     }
     let canon_dir = fs::canonicalize(dir).map_err(|_| TrackFileError::NotFound)?;
     match fs::canonicalize(dir.join(rel_path)) {
-        Ok(target) if target.starts_with(&canon_dir) => {
-            fs::read_to_string(&target).map_err(|_| TrackFileError::NotFound)
-        }
+        Ok(target) if target.starts_with(&canon_dir) => Ok(target),
         Ok(_) => Err(TrackFileError::Traversal),
         Err(_) => Err(TrackFileError::NotFound),
     }
+}
+
+fn track_file_is_file(dir: &Path, rel: &str) -> bool {
+    resolve_track_file(dir, rel)
+        .ok()
+        .is_some_and(|path| path.is_file())
 }
 
 fn project_archive_state_path(git_dir: &str) -> String {
@@ -452,6 +551,79 @@ mod tests {
         fs::write(dir.join("tracks.json"), r#"{"tracks":[{"track_id":"x"}]}"#).unwrap();
         let tracks = read_tracks(&wt_str).unwrap();
         assert_eq!(tracks["tracks"][0]["track_id"], "x");
+
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
+    fn read_tracks_reports_test_plan_beside_the_other_docs() {
+        let wt = temp_worktree();
+        let wt_str = wt.to_string_lossy().to_string();
+        let dir = wt.join(".ai").join("sebenza");
+        let track_dir = dir.join("tracks").join("inbox_20260914");
+        fs::create_dir_all(&track_dir).unwrap();
+        fs::write(track_dir.join("spec.md"), "# Spec\n").unwrap();
+        fs::write(track_dir.join("design.md"), "# Design\n").unwrap();
+        fs::write(track_dir.join("test-plan.md"), "# Test plan\n").unwrap();
+        let raw = r#"{"tracks":[{
+            "track_id":"inbox_20260914",
+            "spec_path":"./tracks/inbox_20260914/spec.md",
+            "design_path":"./tracks/inbox_20260914/design.md"
+        }]}"#;
+        fs::write(dir.join("tracks.json"), raw).unwrap();
+
+        let tracks = read_tracks(&wt_str).unwrap();
+        assert_eq!(
+            tracks["tracks"][0]["test_plan_path"],
+            "./tracks/inbox_20260914/test-plan.md"
+        );
+        // The plugin's file is unchanged — the path is response-only.
+        assert_eq!(fs::read_to_string(dir.join("tracks.json")).unwrap(), raw);
+
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
+    fn read_tracks_omits_test_plan_when_the_file_is_absent() {
+        let wt = temp_worktree();
+        let wt_str = wt.to_string_lossy().to_string();
+        let dir = wt.join(".ai").join("sebenza");
+        fs::create_dir_all(dir.join("tracks").join("inbox_20260914")).unwrap();
+        fs::write(
+            dir.join("tracks.json"),
+            r#"{"tracks":[{
+                "track_id":"inbox_20260914",
+                "spec_path":"./tracks/inbox_20260914/spec.md",
+                "test_plan_path":"./tracks/inbox_20260914/missing.md"
+            }]}"#,
+        )
+        .unwrap();
+
+        let tracks = read_tracks(&wt_str).unwrap();
+        assert!(tracks["tracks"][0].get("test_plan_path").is_none());
+
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
+    fn read_tracks_finds_test_plan_from_the_track_id_alone() {
+        let wt = temp_worktree();
+        let wt_str = wt.to_string_lossy().to_string();
+        let dir = wt.join(".ai").join("sebenza");
+        let track_dir = dir.join("tracks").join("inbox_20260914");
+        fs::create_dir_all(&track_dir).unwrap();
+        fs::write(track_dir.join("test-plan.md"), "# Test plan\n").unwrap();
+        fs::write(
+            dir.join("tracks.json"),
+            r#"{"tracks":[{"track_id":"inbox_20260914","test_plan_path":"../secret.md"}]}"#,
+        )
+        .unwrap();
+
+        let tracks = read_tracks(&wt_str).unwrap();
+        assert_eq!(
+            tracks["tracks"][0]["test_plan_path"],
+            "./tracks/inbox_20260914/test-plan.md"
+        );
 
         fs::remove_dir_all(&wt).ok();
     }
