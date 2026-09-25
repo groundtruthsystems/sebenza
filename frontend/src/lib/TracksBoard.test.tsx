@@ -61,6 +61,26 @@ describe("TracksBoard", () => {
     expect(screen.getByRole("button", { name: "View" })).toBeInTheDocument();
   });
 
+  it("offers View when a track only has a test plan", async () => {
+    vi.mocked(fetchTracks).mockResolvedValue({
+      tracks: [
+        {
+          track_id: "inbox_20260914",
+          description: "Markdown inbox",
+          status: "backlog",
+          test_plan_path: "./tracks/inbox_20260914/test-plan.md",
+          phases_summary: [],
+          progress: { total_tasks: 0, completed_tasks: 0, percentage: 0 },
+        },
+      ],
+    } as unknown as Tracks);
+
+    render(<TracksBoard worktree={worktree} />);
+
+    await waitFor(() => expect(screen.getByText("Markdown inbox")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "View" })).toBeInTheDocument();
+  });
+
   it("shows the empty state when there is no Sebenza workspace", async () => {
     vi.mocked(fetchTracks).mockResolvedValue(null);
 

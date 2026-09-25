@@ -536,6 +536,9 @@ export const TrackSchema = z
     updated_at: z.string().optional(),
     design_path: z.string().optional(),
     spec_path: z.string().optional(),
+    /// `test-plan.md`, from tracks.json `test_plan_path`. The server also fills
+    /// this in when the file sits beside spec.md / design.md and the field was omitted.
+    test_plan_path: z.string().optional(),
     plan_path: z.string().optional(),
     phases_summary: z.array(PhaseSummarySchema).default([]),
     progress: TrackProgressSchema,

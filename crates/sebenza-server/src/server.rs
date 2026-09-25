@@ -1242,7 +1242,7 @@ struct TrackFileQuery {
     path: String,
 }
 
-/// A single file under a worktree's `.ai/sebenza` dir (plan.json / spec.md / design.md),
+/// A single file under a worktree's `.ai/sebenza` dir (plan.json / spec.md / design.md / test-plan.md),
 /// returned as `{ path, content }`. 400 on path traversal, 404 when absent.
 async fn fetch_track_file(
     State(state): State<AppState>,
@@ -1888,7 +1888,7 @@ struct RegistryFileQuery {
     path: String,
 }
 
-/// A track artifact (plan.json / spec.md / design.md) belonging to a registered
+/// A track artifact (plan.json / spec.md / design.md / test-plan.md) belonging to a registered
 /// project, for portfolio drill-down.
 async fn fetch_registry_file(
     Query(query): Query<RegistryFileQuery>,
