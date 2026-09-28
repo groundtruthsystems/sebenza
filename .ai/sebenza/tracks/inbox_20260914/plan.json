@@ -54,7 +54,7 @@
     {
       "id": "phase-2",
       "name": "Service, guarded routes and CLI",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -117,10 +117,12 @@
           "id": "phase-2-task-8",
           "name": "Phase verification & checkpoint",
           "description": "Run the phase verification and checkpointing protocol per workflow.md.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "da310d9"
         }
-      ]
+      ],
+      "checkpoint_sha": "da310d9"
     },
     {
       "id": "phase-3",

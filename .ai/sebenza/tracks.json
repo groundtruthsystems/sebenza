@@ -29,7 +29,7 @@
         {
           "id": "phase-2",
           "name": "Service, guarded routes and CLI",
-          "status": "doing",
+          "status": "done",
           "blocked_reason": null
         },
         {
@@ -59,8 +59,8 @@
       ],
       "progress": {
         "total_tasks": 42,
-        "completed_tasks": 12,
-        "percentage": 29
+        "completed_tasks": 13,
+        "percentage": 31
       }
     },
     {
