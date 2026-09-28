@@ -75,7 +75,7 @@ describe("InboxView", () => {
     });
     render(<InboxView />);
     expect(await screen.findByText("acme")).toBeInTheDocument();
-    expect(await screen.findByText("unresolved")).toBeInTheDocument();
+    expect(await screen.findByText("unresolved project")).toBeInTheDocument();
   });
 
   it("labels an unparseable draft rather than showing a blank row", async () => {

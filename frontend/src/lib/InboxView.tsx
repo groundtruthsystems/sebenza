@@ -12,6 +12,8 @@ import MDEditor from "@uiw/react-md-editor";
 import NavRail from "./NavRail";
 import NewDraftDialog from "./NewDraftDialog";
 import ConfirmDialog from "./ConfirmDialog";
+import Btn from "./Btn";
+import Toggle from "./Toggle";
 import { fetchProjects } from "./api";
 import { renderDraftMarkdown } from "./inboxMarkdown";
 import { createDebouncer, saveDraftBody, type DraftLike } from "./inbox-editor";
@@ -231,7 +233,7 @@ export default function InboxView() {
   };
 
   return (
-    <div className="nav-shell">
+    <div className="flex h-dvh bg-surface text-primary">
       <NavRail active="inbox" projectBase={projectBase} />
       {showNewDialog && (
         <NewDraftDialog
@@ -255,116 +257,170 @@ export default function InboxView() {
           oncancel={() => setConfirmDelete(false)}
         />
       )}
-      <div className="inbox" data-testid="inbox">
-      <aside className="inbox-list">
-        <div className="inbox-list-head">
-          <input
-            aria-label="Search drafts"
-            placeholder="Search drafts"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
-          <button
-            type="button"
-            onClick={() => {
-              setCreateError("");
-              setShowNewDialog(true);
-            }}
-          >
-            New
-          </button>
+
+      <aside className="bg-sidebar border-r border-edge flex flex-col overflow-hidden shrink-0 w-[260px]">
+        <div className="p-4 border-b border-edge">
+          <div className="flex items-center justify-between">
+            <h1 className="text-base font-semibold truncate">Inbox</h1>
+            <button
+              className="h-8 px-2 gap-1.5 rounded-md border border-edge bg-surface text-accent text-xs flex items-center justify-center cursor-pointer hover:bg-hover"
+              onClick={() => {
+                setCreateError("");
+                setShowNewDialog(true);
+              }}
+              title="New draft"
+            >
+              <span className="text-lg leading-none">+</span> New
+            </button>
+          </div>
+          <div className="mt-3 flex flex-col gap-2">
+            <div className="relative">
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.currentTarget.value)}
+                className="w-full h-7 rounded-md border border-edge bg-surface px-2 pr-6 text-xs text-primary placeholder:text-muted focus:outline-none focus:border-accent"
+                placeholder="Search drafts"
+                aria-label="Search drafts"
+              />
+            </div>
+          </div>
+          <div className="mt-2 flex items-center gap-2 text-[11px] text-muted">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <Toggle
+                checked={includeDropped}
+                size="sm"
+                aria-label="Show dropped drafts"
+                onToggle={setIncludeDropped}
+              />
+              <span>Show dropped</span>
+            </label>
+          </div>
         </div>
-        <label className="inbox-filter">
-          <input
-            type="checkbox"
-            checked={includeDropped}
-            onChange={(e) => setIncludeDropped(e.target.checked)}
-          />
-          Show dropped
-        </label>
-        <ul>
-          {drafts.map((d) => (
-            <li key={d.id}>
-              <button
-                type="button"
-                className={d.id === selectedId ? "selected" : ""}
-                onClick={() => void open(d.id)}
-              >
-                <span className="inbox-title">
-                  {d.isRaw ? "(unparseable)" : d.title || "(untitled)"}
-                </span>
-                {d.status !== "Draft" && (
-                  <span className="inbox-badge">{d.status}</span>
-                )}
-                {d.project && (
-                  <span
-                    className={
-                      d.project.resolved ? "inbox-project" : "inbox-project unresolved"
-                    }
-                  >
-                    {d.project.resolved ? d.project.name : "unresolved"}
-                  </span>
-                )}
-              </button>
+
+        <ul className="list-none overflow-y-auto flex-1 min-h-0 p-2">
+          {drafts.length === 0 && (
+            <li className="px-3 py-4 text-xs text-muted text-center">
+              No drafts yet.
             </li>
-          ))}
-          {drafts.length === 0 && <li className="inbox-empty">No drafts yet.</li>}
+          )}
+          {drafts.map((d) => {
+            const isActive = d.id === selectedId;
+            return (
+              <li key={d.id} className="mb-0.5">
+                <button
+                  type="button"
+                  onClick={() => void open(d.id)}
+                  className={`w-full px-3 py-2.5 rounded-md border cursor-pointer flex flex-col gap-1 text-left text-sm bg-transparent hover:bg-hover ${
+                    isActive ? "bg-active border-accent" : "border-transparent"
+                  } ${d.status === "Dropped" ? "opacity-60" : ""}`}
+                >
+                  <span className="font-medium truncate">
+                    {d.isRaw ? "(unparseable)" : d.title || "(untitled)"}
+                  </span>
+                  <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px] text-muted">
+                    {d.status !== "Draft" && (
+                      <span className="shrink-0 px-1.5 py-0.5 rounded border border-edge">
+                        {d.status}
+                      </span>
+                    )}
+                    {d.project && (
+                      <span
+                        className={`shrink-0 px-1.5 py-0.5 rounded border ${
+                          d.project.resolved
+                            ? "border-edge"
+                            : "border-danger text-danger"
+                        }`}
+                      >
+                        {d.project.resolved ? d.project.name : "unresolved project"}
+                      </span>
+                    )}
+                    {d.isRaw && (
+                      <span className="shrink-0 text-danger">does not parse</span>
+                    )}
+                  </span>
+                </button>
+              </li>
+            );
+          })}
         </ul>
       </aside>
 
-      <section className="inbox-editor">
-        {/* Shown outside the editor header too: a failure to open or list a
-            draft has no header to report itself in, and silence is the one
-            outcome a user cannot act on. */}
+      <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
+        <div className="bg-topbar border-b border-edge flex items-center justify-between gap-3 px-4 min-h-12">
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="text-sm font-semibold truncate">
+              {draft ? draft.title : "Inbox"}
+            </h2>
+            {draft && draft.status !== "Draft" && (
+              <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-edge text-muted">
+                {draft.status}
+              </span>
+            )}
+          </div>
+          {draft && !draft.raw && (
+            <div className="flex items-center gap-2 shrink-0">
+              {status && <span className="text-[11px] text-muted">{status}</span>}
+              <Btn onClick={() => void onDrop()}>Drop</Btn>
+              <Btn
+                variant="danger-outline"
+                onClick={() => {
+                  setDeleteError("");
+                  setConfirmDelete(true);
+                }}
+              >
+                Delete
+              </Btn>
+            </div>
+          )}
+        </div>
+
         {!draft && status && (
-          <p className="inbox-error" role="alert">
+          <p
+            className="px-4 py-3 text-xs text-danger bg-danger/10 border-b border-danger"
+            role="alert"
+          >
             {status}
           </p>
         )}
-        {!draft && <p className="inbox-empty">Select a draft, or create one.</p>}
-        {draft?.raw && (
-          <div className="inbox-raw">
-            <p>This draft does not parse: {draft.raw.error}</p>
-            <pre>{draft.raw.text}</pre>
+
+        {!draft && (
+          <div className="flex-1 flex items-center justify-center text-xs text-muted">
+            Select a draft, or create one.
           </div>
         )}
+
+        {draft?.raw && (
+          <div className="p-4 overflow-auto">
+            <p className="text-xs text-danger mb-2">
+              This draft does not parse: {draft.raw.error}
+            </p>
+            <pre className="text-[11px] text-muted whitespace-pre-wrap font-mono">
+              {draft.raw.text}
+            </pre>
+          </div>
+        )}
+
         {draft && !draft.raw && (
           <>
-            <header className="inbox-editor-head">
-              <h2>{draft.title}</h2>
-              <div className="inbox-actions">
-                <span className="inbox-status">{status}</span>
-                <button type="button" onClick={() => void onDrop()}>
-                  Drop
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDeleteError("");
-                    setConfirmDelete(true);
-                  }}
-                >
-                  Delete
-                </button>
-              </div>
-            </header>
-
             {conflict && (
-              <div className="inbox-conflict" role="alert">
-                <p>
+              <div
+                className="flex items-center gap-3 px-4 py-2 text-xs bg-warning/10 border-b border-warning"
+                role="alert"
+              >
+                <p className="flex-1 m-0">
                   This draft changed on disk while you were editing. Keep your
                   version, or load theirs?
                 </p>
-                <button type="button" onClick={takeTheirs}>
+                <Btn small onClick={takeTheirs}>
                   Load theirs
-                </button>
-                <button type="button" onClick={() => void keepMine()}>
+                </Btn>
+                <Btn small variant="accent-outline" onClick={() => void keepMine()}>
                   Keep mine
-                </button>
+                </Btn>
               </div>
             )}
-
-            <div className="inbox-split" data-color-mode="dark">
+            <div className="flex-1 min-h-0 flex" data-color-mode="dark">
               <MDEditor
                 value={body}
                 onChange={(next) => onBodyChange(next ?? "")}
@@ -389,8 +445,7 @@ export default function InboxView() {
             </div>
           </>
         )}
-      </section>
-      </div>
+      </main>
     </div>
   );
 }
