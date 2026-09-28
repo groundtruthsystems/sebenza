@@ -231,15 +231,17 @@
           "id": "phase-4-task-5",
           "name": "Write tests for outcomes and partial failure",
           "description": "Cover per-target merge into conversions[], one failure not aborting others, and Promoted requiring one Created.",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "b3ea193"
         },
         {
           "id": "phase-4-task-6",
           "name": "Implement outcome recording and status transitions",
           "description": "Merge each outcome as it completes, gate Promoted, and record the draft id in the worktree meta.json.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "b3ea193"
         },
         {
           "id": "phase-4-task-7",
