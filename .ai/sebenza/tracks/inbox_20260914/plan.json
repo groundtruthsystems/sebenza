@@ -93,7 +93,7 @@
           "id": "phase-2-task-5",
           "name": "Write tests for path canonicalization",
           "description": "Cover traversal, absolute paths, symlink escape, null bytes and non-.md extensions on every derived path.",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {

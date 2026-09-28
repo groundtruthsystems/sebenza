@@ -299,8 +299,82 @@ pub fn guard_inbox_request(
     }
 }
 
+/// True when `path` is safe to store as an inbox project link and later hand
+/// to git as a worktree location.
+///
+/// Deliberately strict: the value survives into `conversions[]` and is used to
+/// build filesystem paths during conversion, so it must be absolute, free of
+/// `..` and of the NUL and control bytes that truncate a C string or smuggle a
+/// newline into a log line.
+pub fn is_safe_project_path(path: &str) -> bool {
+    if path.trim().is_empty() {
+        return false;
+    }
+    if path.chars().any(|c| c == '\0' || c.is_control()) {
+        return false;
+    }
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return false;
+    }
+    // `..` only as a whole component: `/home/dev/..acme` is an ordinary name.
+    !p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_project_path_must_be_absolute() {
+        assert!(is_safe_project_path("/home/dev/acme"));
+        assert!(!is_safe_project_path("relative/path"));
+        assert!(!is_safe_project_path(""));
+        assert!(!is_safe_project_path("   "));
+    }
+
+    #[test]
+    fn a_project_path_rejects_traversal_and_control_bytes() {
+        assert!(!is_safe_project_path("/home/dev/../../etc"));
+        assert!(!is_safe_project_path("/home/dev/acme/.."));
+        assert!(
+            !is_safe_project_path("/home/dev/\0acme"),
+            "NUL truncates a C string"
+        );
+        assert!(
+            !is_safe_project_path("/home/dev/acme\nrm -rf"),
+            "newline forges a log line"
+        );
+        assert!(!is_safe_project_path("/home/dev/acme\t"));
+    }
+
+    #[test]
+    fn a_dotfile_directory_is_not_traversal() {
+        // `..` only matters as a whole component; a name that merely starts
+        // with a dot is ordinary.
+        assert!(is_safe_project_path("/home/dev/.config/acme"));
+        assert!(is_safe_project_path("/home/dev/..acme"));
+    }
+
+    #[test]
+    fn an_inbox_id_is_the_only_thing_that_reaches_a_filename() {
+        // The store builds `<id>.md`, so the id is the entire attack surface
+        // for the draft path. Restated here because it is a security property,
+        // not an incidental detail of ULID formatting.
+        assert!(crate::util::id::is_ulid("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+        for bad in [
+            "../../etc/passwd",
+            "/etc/passwd",
+            "01ARZ3NDEKTSV4RRFFQ69G5FA/",
+            "01ARZ3NDEKTSV4RRFFQ69G5FA.",
+            "",
+        ] {
+            assert!(
+                !crate::util::id::is_ulid(bad),
+                "{bad} must not be a valid id"
+            );
+        }
+    }
 
     const TOKEN: &str = "s3cret-control-token";
     const SELF: &str = "http://127.0.0.1:5111";
