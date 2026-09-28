@@ -127,7 +127,7 @@
     {
       "id": "phase-3",
       "name": "Editor and sanitized preview",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -168,7 +168,7 @@
           "description": "Cover search, the Dropped filter, project linking, and that a project named inbox cannot shadow the route.",
           "status": "done",
           "blocked_reason": null,
-          "commit_sha": "e8f63c4"
+          "commit_sha": "3ea8aed"
         },
         {
           "id": "phase-3-task-6",
@@ -182,10 +182,12 @@
           "id": "phase-3-task-7",
           "name": "Phase verification & checkpoint",
           "description": "Run the phase verification and checkpointing protocol per workflow.md.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "3ea8aed"
         }
-      ]
+      ],
+      "checkpoint_sha": "3ea8aed"
     },
     {
       "id": "phase-4",
