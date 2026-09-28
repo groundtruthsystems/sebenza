@@ -54,14 +54,14 @@
     {
       "id": "phase-2",
       "name": "Service, guarded routes and CLI",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for inbox_service CRUD",
           "description": "Cover create, read, update, rename, project link and unlink, drop, delete, and the unresolved-project path.",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
