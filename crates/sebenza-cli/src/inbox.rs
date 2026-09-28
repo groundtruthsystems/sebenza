@@ -13,14 +13,29 @@ use serde_json::{Value, json};
 use crate::http::Http;
 
 enum InboxCommand {
-    Ls { search: Option<String>, all: bool },
+    Ls {
+        search: Option<String>,
+        all: bool,
+    },
     Show(String),
     New(String),
     Edit(String),
-    Link { id: String, path: String },
+    Link {
+        id: String,
+        path: String,
+    },
     Unlink(String),
     Drop(String),
-    Rm { id: String, yes: bool },
+    Rm {
+        id: String,
+        yes: bool,
+    },
+    Convert {
+        id: String,
+        specs: Vec<String>,
+        watch: bool,
+    },
+    Job(String),
 }
 
 fn usage() -> String {
@@ -34,6 +49,12 @@ fn usage() -> String {
         "  sebenza-cli inbox unlink <id>                  Remove the project link",
         "  sebenza-cli inbox drop <id>                    Mark a draft dropped",
         "  sebenza-cli inbox rm <id> [--yes]              Delete a draft",
+        "  sebenza-cli inbox convert <id> <target>...      Turn a draft into worktrees",
+        "  sebenza-cli inbox job <job-id>                 Show a conversion's progress",
+        "",
+        "A convert target is project:branch:prompt, for example:",
+        "  sebenza-cli inbox convert 01ARZ... ~/code/acme:fix-scorer:'rewrite the scorer'",
+        "Pass --watch to poll until the fan-out finishes.",
         "",
         "Drafts are markdown files under ~/.ai/sebenza/inbox/, global across every",
         "project. A draft that has been converted into worktrees needs --yes to",
@@ -100,6 +121,19 @@ fn parse(args: &[String]) -> Result<Option<InboxCommand>> {
         })),
         "unlink" => Ok(Some(InboxCommand::Unlink(need(0, "draft id")?))),
         "drop" => Ok(Some(InboxCommand::Drop(need(0, "draft id")?))),
+        "convert" => {
+            let id = need(0, "draft id")?;
+            let specs: Vec<String> = pos.into_iter().skip(1).collect();
+            if specs.is_empty() {
+                return Err(anyhow!("Missing at least one project:branch:prompt target"));
+            }
+            Ok(Some(InboxCommand::Convert {
+                id,
+                specs,
+                watch: flag(args, "--watch"),
+            }))
+        }
+        "job" => Ok(Some(InboxCommand::Job(need(0, "job id")?))),
         "rm" | "remove" | "delete" => Ok(Some(InboxCommand::Rm {
             id: need(0, "draft id")?,
             yes: flag(args, "--yes") || flag(args, "-y"),
@@ -161,6 +195,62 @@ fn print_list(body: &Value) {
             })
             .unwrap_or_default();
         println!("{id}  {:<9} {title}{project}", status_of(&d));
+    }
+}
+
+/// Parse `project:branch:prompt`.
+///
+/// Split from the left twice only, so a prompt may contain colons — which
+/// prompts routinely do.
+fn parse_target(spec: &str) -> Result<Value> {
+    let (project, rest) = spec
+        .split_once(':')
+        .ok_or_else(|| anyhow!("target {spec:?} is not project:branch:prompt"))?;
+    let (branch, prompt) = rest
+        .split_once(':')
+        .ok_or_else(|| anyhow!("target {spec:?} is missing a prompt"))?;
+    if project.trim().is_empty() || branch.trim().is_empty() || prompt.trim().is_empty() {
+        return Err(anyhow!("target {spec:?} has an empty field"));
+    }
+    Ok(json!({
+        "projectPath": expand_home(project.trim()),
+        "branch": branch.trim(),
+        "prompt": prompt.trim(),
+    }))
+}
+
+fn print_job(job: &Value) {
+    let outcomes = job
+        .get("outcomes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let total = job.get("total").and_then(Value::as_u64).unwrap_or(0);
+    for o in &outcomes {
+        let branch = o.get("branch").and_then(Value::as_str).unwrap_or("");
+        let outcome = o.get("outcome").and_then(Value::as_str).unwrap_or("");
+        let detail = o
+            .get("worktreePath")
+            .or_else(|| o.get("error"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        println!("  {outcome:<8} {branch:<28} {detail}");
+    }
+    let created = outcomes
+        .iter()
+        .filter(|o| o.get("outcome").and_then(Value::as_str) == Some("created"))
+        .count();
+    if job
+        .get("finished")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        println!("{created}/{total} created.");
+        if let Some(err) = job.get("error").and_then(Value::as_str) {
+            eprintln!("job failed: {err}");
+        }
+    } else {
+        println!("{}/{total} done so far.", outcomes.len());
     }
 }
 
@@ -249,6 +339,35 @@ pub async fn run(args: &[String], port: u16) -> i32 {
                     .await?;
                 println!("Dropped {id}.");
             }
+            InboxCommand::Convert { id, specs, watch } => {
+                let targets: Result<Vec<Value>> = specs.iter().map(|s| parse_target(s)).collect();
+                let started = http.inbox_convert(&id, Value::Array(targets?)).await?;
+                let job_id = started
+                    .get("jobId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| anyhow!("server did not return a job id"))?
+                    .to_string();
+                println!("job {job_id}");
+                if !watch {
+                    println!("Follow it with: sebenza-cli inbox job {job_id}");
+                } else {
+                    // Poll rather than hold a socket: the CLI is an HTTP client
+                    // and the snapshot route is authoritative anyway.
+                    loop {
+                        let job = http.inbox_job(&job_id).await?;
+                        if job
+                            .get("finished")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                        {
+                            print_job(&job);
+                            break;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+                    }
+                }
+            }
+            InboxCommand::Job(job_id) => print_job(&http.inbox_job(&job_id).await?),
             InboxCommand::Rm { id, yes } => {
                 http.inbox_delete(&id, yes).await?;
                 println!("Deleted {id}.");
@@ -347,5 +466,49 @@ mod tests {
         unsafe { std::env::set_var("HOME", "/home/tester") };
         assert_eq!(expand_home("~/code/x"), "/home/tester/code/x");
         assert_eq!(expand_home("/already/absolute"), "/already/absolute");
+    }
+
+    #[test]
+    fn a_target_spec_splits_into_project_branch_and_prompt() {
+        let v = parse_target("/code/acme:fix-scorer:rewrite it").expect("parse");
+        assert_eq!(v["projectPath"], "/code/acme");
+        assert_eq!(v["branch"], "fix-scorer");
+        assert_eq!(v["prompt"], "rewrite it");
+    }
+
+    #[test]
+    fn a_prompt_may_contain_colons() {
+        // Prompts routinely do: "fix: the thing". Splitting from the left
+        // twice is what keeps that working.
+        let v = parse_target("/code/acme:b:fix: the thing, then: ship").expect("parse");
+        assert_eq!(v["branch"], "b");
+        assert_eq!(v["prompt"], "fix: the thing, then: ship");
+    }
+
+    #[test]
+    fn a_malformed_target_is_refused() {
+        assert!(parse_target("just-a-word").is_err());
+        assert!(parse_target("/code/acme:branch-only").is_err());
+        assert!(parse_target("/code/acme::no branch").is_err());
+        assert!(parse_target("/code/acme:b:   ").is_err());
+    }
+
+    #[test]
+    fn convert_needs_at_least_one_target() {
+        assert!(parse(&a(&["convert", "01ARZ3NDEKTSV4RRFFQ69G5FAV"])).is_err());
+        let cmd = parse(&a(&[
+            "convert",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "/code/acme:b:do it",
+        ]))
+        .expect("parse")
+        .expect("command");
+        match cmd {
+            InboxCommand::Convert { specs, watch, .. } => {
+                assert_eq!(specs.len(), 1);
+                assert!(!watch);
+            }
+            _ => panic!("expected Convert"),
+        }
     }
 }

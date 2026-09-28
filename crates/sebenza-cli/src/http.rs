@@ -668,6 +668,27 @@ impl Http {
     }
 }
 
+impl Http {
+    /// `POST /api/inbox/{id}/convert` — returns the job id.
+    pub async fn inbox_convert(&self, id: &str, targets: Value) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!("{}/api/inbox/{id}/convert", self.hub))
+            .bearer_auth(control_token()?)
+            .json(&serde_json::json!({ "targets": targets }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `GET /api/inbox/jobs/{id}` — the CLI polls rather than holding a socket.
+    pub async fn inbox_job(&self, job_id: &str) -> Result<Value> {
+        self.get(&format!("{}/api/inbox/jobs/{job_id}", self.hub))
+            .await
+    }
+}
+
 /// Minimal percent-encoding for a query value.
 fn urlencode(s: &str) -> String {
     s.bytes()

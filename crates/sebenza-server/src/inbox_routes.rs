@@ -11,13 +11,16 @@ use crate::domain::policies::{
 };
 use crate::inbox_runner::ServerConversionRunner;
 use crate::services::inbox_convert::{ConversionTarget, validate_targets};
-use crate::services::inbox_jobs::JobSnapshot;
+use crate::services::inbox_jobs::{JobEvent, JobSnapshot, JobSubscription};
 use crate::services::inbox_service::{
     DraftSummary, InboxService, InboxServiceError, ListQuery, ProjectLink,
 };
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
+use axum::http::StatusCode;
 use axum::response::Json;
+use axum::response::{IntoResponse, Response};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -468,4 +471,57 @@ pub async fn get_conversion_job(
         .snapshot(&id)
         .map(Json)
         .ok_or_else(|| ApiError::new(404, "Unknown conversion job".to_string()))
+}
+
+/// `GET /api/inbox/jobs/{id}/stream` — live per-target progress.
+///
+/// The server's first non-project-prefixed WebSocket, because a conversion is
+/// cross-project. An unknown id closes immediately: job ids are ULIDs, so that
+/// is the access check, and this channel carries project paths and prompt text.
+pub async fn ws_conversion_job(
+    ws: WebSocketUpgrade,
+    Path(id): Path<String>,
+    State(state): State<AppState>,
+) -> Response {
+    let Some(subscription) = state.inbox_jobs.subscribe(&id) else {
+        return (StatusCode::NOT_FOUND, "Unknown conversion job").into_response();
+    };
+    ws.on_upgrade(move |socket| conversion_job_socket(socket, subscription))
+}
+
+async fn conversion_job_socket(mut socket: WebSocket, subscription: JobSubscription) {
+    // Replay first: a client attaching after the first target finished would
+    // otherwise never learn of it.
+    let snapshot = subscription.snapshot;
+    let already_finished = snapshot.finished;
+    if let Ok(text) = serde_json::to_string(&serde_json::json!({
+        "type": "snapshot",
+        "snapshot": snapshot,
+    })) && socket.send(Message::Text(text.into())).await.is_err()
+    {
+        return;
+    }
+    if already_finished {
+        return;
+    }
+
+    let mut receiver = subscription.receiver;
+    loop {
+        match receiver.recv().await {
+            Ok(event) => {
+                let Ok(text) = serde_json::to_string(&event) else {
+                    continue;
+                };
+                if socket.send(Message::Text(text.into())).await.is_err() {
+                    return;
+                }
+                if matches!(event, JobEvent::Done { .. } | JobEvent::Failed { .. }) {
+                    return;
+                }
+            }
+            // Lagged: the snapshot route is authoritative, so drop rather than
+            // stream a gap the client would silently treat as complete.
+            Err(_) => return,
+        }
+    }
 }
