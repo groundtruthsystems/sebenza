@@ -134,15 +134,17 @@
           "id": "phase-3-task-1",
           "name": "Write tests for the sanitized renderer",
           "description": "Assert injected HTML is inert and a mermaid click directive cannot execute page script.",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "4433662"
         },
         {
           "id": "phase-3-task-2",
           "name": "Implement the sanitized markdown renderer",
           "description": "Add an Inbox renderer using DOMPurify and mermaid at securityLevel strict, separate from TrackMarkdown.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "4433662"
         },
         {
           "id": "phase-3-task-3",
