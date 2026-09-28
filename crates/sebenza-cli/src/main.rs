@@ -4,6 +4,7 @@
 mod completions;
 mod env_files;
 mod http;
+mod inbox;
 mod init;
 mod migrate;
 mod oneshot;
@@ -45,6 +46,7 @@ Usage:
   sebenza-cli tab          List, create, switch, or close agent tabs in a worktree
   sebenza-cli prune        Remove all closed (not open) worktrees in the current project
   sebenza-cli restore      Re-open all worktree sessions that were open before
+  sebenza-cli inbox        Draft notes before they become worktrees
   sebenza-cli project      List, add, or remove projects served by the dashboard
   sebenza-cli completion   Generate shell completion script (bash, zsh)
 
@@ -261,7 +263,9 @@ async fn main() {
         migrate::warn_if_other_instances(effective_port);
     }
 
-    let code = if command == "oneshot" {
+    let code = if command == "inbox" {
+        inbox::run(&parsed.command_args, effective_port).await
+    } else if command == "oneshot" {
         oneshot::run(&parsed.command_args, effective_port, &cwd).await
     } else if command == "project" {
         project::run(&parsed.command_args, effective_port).await
