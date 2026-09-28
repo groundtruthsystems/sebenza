@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { initContract } from "@ts-rest/core";
 import {
   AgentsSendMessageRequestSchema,
@@ -53,6 +54,11 @@ import {
   ProjectPrefixParamsSchema,
   MigrateProjectsRequestSchema,
   MigrateProjectsResponseSchema,
+  InboxDraftListSchema,
+  InboxDraftSchema,
+  CreateInboxDraftRequestSchema,
+  SaveInboxDraftBodyRequestSchema,
+  PatchInboxDraftRequestSchema,
 } from "./schemas";
 
 const c = initContract();
@@ -104,6 +110,12 @@ export const apiPaths = {
   migrateProjects: "/api/projects/migrate",
   removeProject: "/api/projects/:prefix",
   fetchActiveWorktrees: "/api/active-worktrees",
+  fetchInboxDrafts: "/api/inbox",
+  createInboxDraft: "/api/inbox",
+  fetchInboxDraft: "/api/inbox/:id",
+  patchInboxDraft: "/api/inbox/:id",
+  deleteInboxDraft: "/api/inbox/:id",
+  saveInboxDraftBody: "/api/inbox/:id/body",
   fetchRegistry: "/api/registry",
   fetchRegistryFile: "/api/registry/file",
 } as const;
@@ -490,6 +502,76 @@ export const apiContract = c.router({
     path: apiPaths.fetchInstances,
     responses: {
       200: InstancesResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  fetchInboxDrafts: {
+    method: "GET",
+    path: apiPaths.fetchInboxDrafts,
+    query: z.object({
+      search: z.string().optional(),
+      includeDropped: z.boolean().optional(),
+    }),
+    responses: { 200: InboxDraftListSchema, 500: ErrorResponseSchema },
+  },
+  createInboxDraft: {
+    method: "POST",
+    path: apiPaths.createInboxDraft,
+    body: CreateInboxDraftRequestSchema,
+    responses: {
+      200: InboxDraftSchema,
+      401: ErrorResponseSchema,
+      403: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  fetchInboxDraft: {
+    method: "GET",
+    path: apiPaths.fetchInboxDraft,
+    responses: {
+      200: InboxDraftSchema,
+      400: ErrorResponseSchema,
+      404: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  saveInboxDraftBody: {
+    method: "PUT",
+    path: apiPaths.saveInboxDraftBody,
+    body: SaveInboxDraftBodyRequestSchema,
+    responses: {
+      200: InboxDraftSchema,
+      401: ErrorResponseSchema,
+      403: ErrorResponseSchema,
+      404: ErrorResponseSchema,
+      409: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  patchInboxDraft: {
+    method: "PATCH",
+    path: apiPaths.patchInboxDraft,
+    body: PatchInboxDraftRequestSchema,
+    responses: {
+      200: InboxDraftSchema,
+      400: ErrorResponseSchema,
+      401: ErrorResponseSchema,
+      403: ErrorResponseSchema,
+      404: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  deleteInboxDraft: {
+    method: "DELETE",
+    path: apiPaths.deleteInboxDraft,
+    query: z.object({ confirmed: z.boolean().optional() }),
+    body: z.object({}).optional(),
+    responses: {
+      200: OkResponseSchema,
+      401: ErrorResponseSchema,
+      403: ErrorResponseSchema,
+      404: ErrorResponseSchema,
+      409: ErrorResponseSchema,
       500: ErrorResponseSchema,
     },
   },

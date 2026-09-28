@@ -288,14 +288,33 @@ pub fn guard_inbox_request(
         Some(token) if !expected_token.is_empty() && token == expected_token => {}
         _ => return InboxGuard::Deny(InboxGuardDenial::BadToken),
     }
+    if origin_is_acceptable(origin, referer, self_origin) {
+        InboxGuard::Allow
+    } else {
+        InboxGuard::Deny(InboxGuardDenial::CrossOrigin)
+    }
+}
+
+/// True when the request either names this origin or names none at all.
+///
+/// Absent is accepted because a non-browser client (`sebenza-cli`) sends no
+/// `Origin` — on a mutating route the token is what stops that being a hole.
+/// `Origin` wins over `Referer`; `Referer` is consulted only when `Origin` is
+/// missing, which a browser does for some same-origin requests.
+pub fn origin_is_acceptable(
+    origin: Option<&str>,
+    referer: Option<&str>,
+    self_origin: &str,
+) -> bool {
     let want = origin_of(self_origin);
     let claimed = origin
         .and_then(origin_of)
         .or_else(|| referer.and_then(origin_of));
     match (claimed, want) {
-        (Some(got), Some(want)) if got != want => InboxGuard::Deny(InboxGuardDenial::CrossOrigin),
-        (Some(_), None) => InboxGuard::Deny(InboxGuardDenial::CrossOrigin),
-        _ => InboxGuard::Allow,
+        (Some(got), Some(want)) => got == want,
+        // A claimed origin we cannot compare against is refused, not trusted.
+        (Some(_), None) => false,
+        (None, _) => true,
     }
 }
 

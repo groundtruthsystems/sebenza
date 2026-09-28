@@ -49,6 +49,9 @@ pub struct AppState {
     pub terminal: Arc<TerminalManager>,
     pub agent_stream: Arc<crate::services::agent_stream::AgentStreamManager>,
     pub project_inits: Arc<crate::services::project_init_service::ProjectInitTracker>,
+    /// Global inbox: drafts live outside every project, so this is server-wide
+    /// state rather than part of a `ProjectApp`.
+    pub inbox: Arc<crate::services::inbox_service::InboxService>,
     pub frontend_dist: Option<PathBuf>,
 }
 
@@ -187,13 +190,13 @@ pub fn spawn_background_loops(state: AppState) {
 
 /// A JSON error body `{ "error": "..." }` with an HTTP status (mirrors
 /// `ErrorResponseSchema`).
-struct ApiError {
-    status: StatusCode,
-    message: String,
+pub struct ApiError {
+    pub status: StatusCode,
+    pub message: String,
 }
 
 impl ApiError {
-    fn new(status: u16, message: String) -> Self {
+    pub fn new(status: u16, message: String) -> Self {
         ApiError {
             status: StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             message,
@@ -298,6 +301,25 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/registry", get(fetch_registry))
         .route("/api/registry/file", get(fetch_registry_file))
         .route("/api/runtime/events", post(runtime_event))
+        // Inbox (global; drafts precede any project).
+        .route(
+            "/api/inbox/session",
+            get(crate::inbox_routes::inbox_session),
+        )
+        .route(
+            "/api/inbox",
+            get(crate::inbox_routes::list_drafts).post(crate::inbox_routes::create_draft),
+        )
+        .route(
+            "/api/inbox/{id}",
+            get(crate::inbox_routes::get_draft)
+                .patch(crate::inbox_routes::patch_draft)
+                .delete(crate::inbox_routes::delete_draft),
+        )
+        .route(
+            "/api/inbox/{id}/body",
+            axum::routing::put(crate::inbox_routes::save_draft_body),
+        )
         // Per-project routes, scoped under `/<prefix>`.
         .route("/{prefix}/api/config", get(get_config))
         .route("/{prefix}/api/branches", get(get_branches))

@@ -402,3 +402,96 @@ export async function uploadFiles(worktree: string, files: File[]): Promise<File
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data as FileUploadResult;
 }
+
+// ---------------------------------------------------------------------------
+// Inbox — global drafts. These live on the hub client, not the per-project one:
+// a draft may exist before it belongs to any project.
+//
+// Mutating calls carry the control token, which the server requires alongside a
+// same-origin check. `window.__SEBENZA_CONTROL_TOKEN__` is injected into the
+// page at load; a cross-origin page cannot read it.
+// ---------------------------------------------------------------------------
+
+declare global {
+  interface Window {
+    __SEBENZA_CONTROL_TOKEN__?: string;
+  }
+}
+
+function inboxAuthHeaders(): Record<string, string> {
+  const token = window.__SEBENZA_CONTROL_TOKEN__;
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
+/** Fetch the control token once at startup and cache it on `window`.
+ *
+ *  Served over GET rather than injected into the HTML so it works the same in
+ *  dev (Vite proxy) and prod (SPA embedded in the binary). A cross-origin page
+ *  can issue this request but cannot read the response - the server mounts no
+ *  CORS layer, and the route additionally refuses a foreign `Origin`. */
+export async function loadInboxControlToken(): Promise<void> {
+  if (window.__SEBENZA_CONTROL_TOKEN__) return;
+  try {
+    const res = await fetch("/api/inbox/session", { credentials: "same-origin" });
+    if (!res.ok) return;
+    const data = (await res.json()) as { token?: string };
+    if (data.token) window.__SEBENZA_CONTROL_TOKEN__ = data.token;
+  } catch {
+    // Leave it unset: mutating inbox calls will 401 and the UI reports it,
+    // which is the honest failure rather than a silent half-working inbox.
+  }
+}
+
+export async function fetchInboxDrafts(params?: {
+  search?: string;
+  includeDropped?: boolean;
+}) {
+  return hubApi.fetchInboxDrafts({ query: params ?? {} });
+}
+
+export async function fetchInboxDraft(id: string) {
+  return hubApi.fetchInboxDraft({ params: { id } });
+}
+
+export async function createInboxDraft(title: string) {
+  return hubApi.createInboxDraft({
+    body: { title },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Save the body. `expectedHash` is the `bodyHash` last read; a stale one comes
+ *  back 409 and nothing is written. */
+export async function saveInboxDraftBody(
+  id: string,
+  expectedHash: string,
+  body: string,
+) {
+  return hubApi.saveInboxDraftBody({
+    params: { id },
+    body: { expectedHash, body },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Rename, link/unlink a project (`projectPath: null` unlinks), or drop. */
+export async function patchInboxDraft(
+  id: string,
+  patch: { title?: string; projectPath?: string | null; status?: "Dropped" },
+) {
+  return hubApi.patchInboxDraft({
+    params: { id },
+    body: patch,
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Delete. A promoted draft needs `confirmed`, else the server answers 409. */
+export async function deleteInboxDraft(id: string, confirmed = false) {
+  return hubApi.deleteInboxDraft({
+    params: { id },
+    query: { confirmed },
+    body: {},
+    extraHeaders: inboxAuthHeaders(),
+  });
+}

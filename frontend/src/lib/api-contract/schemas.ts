@@ -849,3 +849,55 @@ export type CiLogsResponse = z.infer<typeof CiLogsResponseSchema>;
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 export type OkResponse = z.infer<typeof OkResponseSchema>;
 export type EnabledResponse = z.infer<typeof EnabledResponseSchema>;
+
+/** A draft's project link. `resolved` is false when the stored path no longer
+ *  matches a registered project — the draft still works, the link just cannot
+ *  be followed. */
+export const InboxProjectLinkSchema = z.object({
+  path: z.string(),
+  name: z.string().nullable(),
+  resolved: z.boolean(),
+});
+
+export const DraftStatusSchema = z.enum(["Draft", "Promoted", "Dropped"]);
+
+export const InboxDraftSummarySchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: DraftStatusSchema,
+  updatedAt: z.string(),
+  project: InboxProjectLinkSchema.nullable(),
+  isRaw: z.boolean(),
+});
+
+export const InboxDraftListSchema = z.object({
+  drafts: z.array(InboxDraftSummarySchema),
+});
+
+/** `bodyHash` is what a save must echo back; it is the only thing that gates a
+ *  write, so a conversion job touching frontmatter cannot provoke a conflict. */
+export const InboxDraftSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: DraftStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  body: z.string(),
+  bodyHash: z.string(),
+  project: InboxProjectLinkSchema.nullable(),
+  raw: z.object({ text: z.string(), error: z.string() }).nullable(),
+});
+
+export const CreateInboxDraftRequestSchema = z.object({ title: z.string() });
+
+export const SaveInboxDraftBodyRequestSchema = z.object({
+  expectedHash: z.string(),
+  body: z.string(),
+});
+
+export const PatchInboxDraftRequestSchema = z.object({
+  title: z.string().optional(),
+  projectPath: z.string().nullable().optional(),
+  status: DraftStatusSchema.optional(),
+});
+

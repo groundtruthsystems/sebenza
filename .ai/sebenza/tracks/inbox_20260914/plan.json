@@ -101,7 +101,7 @@
           "id": "phase-2-task-6",
           "name": "Implement the inbox routes and contract",
           "description": "Add the guarded /api/inbox routes, reserve the inbox prefix, and extend contract.ts, schemas.ts and api.ts.",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
