@@ -13,6 +13,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+/// Every way a store operation can fail. `Conflict` carries both hashes so a
+/// caller can show the editor what it was racing.
 #[derive(Debug, Error)]
 pub enum InboxStoreError {
     #[error("draft {0} not found")]
@@ -35,26 +37,39 @@ pub enum InboxStoreError {
 /// `Promoted` which the job sets and which wins a race with `Dropped`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrontmatterAuthor {
+    /// Owns `title`, `project` and the `Draft -> Dropped` transition.
     Editor,
+    /// Owns `conversions[]` and the `Draft -> Promoted` transition.
     Job,
 }
 
+/// A sparse frontmatter edit. `None` leaves the key untouched; keys the
+/// `author` does not own are ignored rather than rejected.
 #[derive(Debug, Clone, Default)]
 pub struct FrontmatterPatch {
+    /// Rename the draft. The title never reaches the filename.
     pub title: Option<String>,
     /// `Some(None)` unlinks the project.
     pub project: Option<Option<ProjectRef>>,
+    /// Requested status transition; see [`FrontmatterAuthor`] for who may set which.
     pub status: Option<DraftStatus>,
+    /// Back-links appended by a conversion job, replacing the array wholesale.
     pub conversions: Option<Vec<serde_yaml::Value>>,
 }
 
+/// Reads and writes drafts in one directory. Holds no cache and no lock — the
+/// filesystem is the source of truth, so a second server or an external editor
+/// may write the same files concurrently.
 pub struct InboxStore {
     dir: PathBuf,
 }
 
 fn default_inbox_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    PathBuf::from(home).join(".ai").join("sebenza").join("inbox")
+    PathBuf::from(home)
+        .join(".ai")
+        .join("sebenza")
+        .join("inbox")
 }
 
 fn now_rfc3339() -> String {
@@ -62,16 +77,19 @@ fn now_rfc3339() -> String {
 }
 
 impl InboxStore {
+    /// A store over `~/.ai/sebenza/inbox/`, the global location.
     pub fn new() -> Self {
         Self {
             dir: default_inbox_dir(),
         }
     }
 
+    /// A store over an explicit directory. Used by tests.
     pub fn with_dir(dir: PathBuf) -> Self {
         Self { dir }
     }
 
+    /// The directory this store reads and writes.
     pub fn dir(&self) -> &Path {
         &self.dir
     }
@@ -121,6 +139,8 @@ impl InboxStore {
         }
     }
 
+    /// Create an empty draft under a fresh ULID. The title is frontmatter only,
+    /// so no user text reaches the path.
     pub fn create(&self, title: &str) -> Result<InboxDraft, InboxStoreError> {
         let id = random_ulid();
         let now = now_rfc3339();
@@ -141,10 +161,15 @@ impl InboxStore {
         Ok(draft)
     }
 
+    /// Read one draft. Unparseable frontmatter comes back as
+    /// [`InboxDraftView::Raw`] rather than an error.
     pub fn get(&self, id: &str) -> Result<InboxDraftView, InboxStoreError> {
         self.read_view(id)
     }
 
+    /// Every draft in the directory, newest ULID first. Non-`.md` files and
+    /// non-ULID names are skipped; one bad draft never hides the rest, and a
+    /// missing directory lists empty.
     pub fn list(&self) -> Result<Vec<InboxDraftView>, InboxStoreError> {
         let mut out = Vec::new();
         let entries = match fs::read_dir(&self.dir) {
@@ -203,6 +228,9 @@ impl InboxStore {
         Ok(draft)
     }
 
+    /// Apply `patch`, keeping only the keys `author` owns, then write the whole
+    /// file back. This is how a job appends a back-link without touching the
+    /// body and how the editor renames without dropping `conversions[]`.
     pub fn merge_frontmatter(
         &self,
         id: &str,
@@ -266,11 +294,8 @@ mod tests {
 
     fn store() -> InboxStore {
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "sebenza-inbox-store-{}-{}",
-            std::process::id(),
-            n
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("sebenza-inbox-store-{}-{}", std::process::id(), n));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("temp inbox dir");
         InboxStore::with_dir(dir)
@@ -289,7 +314,11 @@ mod tests {
         let draft = s.create("Hello").expect("create");
         assert!(is_ulid(&draft.id), "id should be a ULID, got {}", draft.id);
         let path = s.dir().join(format!("{}.md", draft.id));
-        assert!(path.is_file(), "draft file should exist at {}", path.display());
+        assert!(
+            path.is_file(),
+            "draft file should exist at {}",
+            path.display()
+        );
         assert_eq!(draft.frontmatter.title, "Hello");
         assert_eq!(draft.frontmatter.status, DraftStatus::Draft);
         assert!(draft.frontmatter.conversions.is_empty());
@@ -321,7 +350,11 @@ mod tests {
         assert!(ids.contains(&a.id));
         assert!(ids.iter().any(|id| id == "01ARZ3NDEKTSV4RRFFQ69G5FAV"));
         assert_eq!(listed.len(), 2);
-        assert!(listed.iter().any(|v| matches!(v, InboxDraftView::Raw { .. })));
+        assert!(
+            listed
+                .iter()
+                .any(|v| matches!(v, InboxDraftView::Raw { .. }))
+        );
     }
 
     #[test]

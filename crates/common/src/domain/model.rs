@@ -676,7 +676,11 @@ mod tests {
 
     #[test]
     fn inbox_draft_status_enum_round_trips() {
-        for status in [DraftStatus::Draft, DraftStatus::Promoted, DraftStatus::Dropped] {
+        for status in [
+            DraftStatus::Draft,
+            DraftStatus::Promoted,
+            DraftStatus::Dropped,
+        ] {
             let yaml = serde_yaml::to_string(&status).expect("status yaml");
             let back: DraftStatus = serde_yaml::from_str(&yaml).expect("status parse");
             assert_eq!(back, status);
@@ -702,7 +706,11 @@ mod tests {
         let source = "---\nstatus: [unterminated\n---\nbody\n";
         let view = parse_inbox_file(SAMPLE_ID, source);
         match view {
-            InboxDraftView::Raw { id, raw_text, error } => {
+            InboxDraftView::Raw {
+                id,
+                raw_text,
+                error,
+            } => {
                 assert_eq!(id, SAMPLE_ID);
                 assert_eq!(raw_text, source);
                 assert!(!error.is_empty());
