@@ -10,7 +10,9 @@ use crate::domain::policies::{
     InboxGuard, InboxGuardDenial, guard_inbox_request, is_safe_project_path, origin_is_acceptable,
 };
 use crate::inbox_runner::ServerConversionRunner;
-use crate::services::inbox_convert::{ConversionTarget, validate_targets};
+use crate::services::inbox_convert::{
+    Advisory, ConversionTarget, sandbox_advisory, scan_for_secrets, validate_targets,
+};
 use crate::services::inbox_jobs::{JobEvent, JobSnapshot, JobSubscription};
 use crate::services::inbox_service::{
     DraftSummary, InboxService, InboxServiceError, ListQuery, ProjectLink,
@@ -432,7 +434,35 @@ pub async fn convert_draft(
         return Err(ApiError::new(400, detail));
     }
     // A draft that does not parse has no body to copy into a worktree.
-    svc.get(&id)?;
+    let (view, _) = svc.get(&id)?;
+
+    // Advisory only — never a gate. A heuristic that can block work is a
+    // heuristic that gets switched off.
+    let mut advisories: Vec<Advisory> = Vec::new();
+    if let InboxDraftView::Parsed(ref d) = view {
+        advisories.extend(scan_for_secrets(&d.body));
+    }
+    for target in &body.targets {
+        let sandboxed = state
+            .manager
+            .list()
+            .iter()
+            .find(|a| a.path == target.project_path)
+            .map(|a| {
+                let config = a.config();
+                // The profile a converted worktree will actually launch under.
+                let profile = common::services::config_view::get_default_profile_name(&config);
+                config
+                    .profiles
+                    .get(&profile)
+                    .map(|p| common::domain::config::is_sandboxed(p.runtime))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false);
+        if let Some(warning) = sandbox_advisory(&target.branch, sandboxed) {
+            advisories.push(warning);
+        }
+    }
 
     let job_id = state.inbox_jobs.start(&id, body.targets.len());
     let runner = ServerConversionRunner::new(state.clone());
@@ -447,10 +477,18 @@ pub async fn convert_draft(
         let span = tracing::info_span!("inbox_convert", job_id = %job, draft_id = %draft_id, targets = targets.len());
         let _enter = span.enter();
         match svc.convert_streaming(&draft_id, &targets, &runner, |outcome| {
+            // The audit line: which draft produced which worktree, where, with
+            // which agent, and when. Structured so it can be grepped after the
+            // fact, which is the whole point of recording it.
             tracing::info!(
+                audit = "inbox.convert.target",
+                draft_id = %draft_id,
                 branch = %outcome.branch,
                 project = %outcome.project_path,
+                agent = outcome.agent_id.as_deref().unwrap_or("default"),
                 outcome = %outcome.outcome,
+                at = %outcome.at,
+                error = outcome.error.as_deref().unwrap_or(""),
                 "inbox conversion target finished"
             );
             jobs.push_outcome(&job, outcome.clone());
@@ -460,7 +498,9 @@ pub async fn convert_draft(
         }
     });
 
-    Ok(Json(serde_json::json!({ "jobId": job_id })))
+    Ok(Json(
+        serde_json::json!({ "jobId": job_id, "advisories": advisories }),
+    ))
 }
 
 /// `GET /api/inbox/jobs/{id}` — a job's state.

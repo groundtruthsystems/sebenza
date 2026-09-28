@@ -926,7 +926,17 @@ export const ConvertDraftRequestSchema = z.object({
   targets: z.array(ConversionTargetSchema),
 });
 
-export const ConvertDraftResponseSchema = z.object({ jobId: z.string() });
+export const AdvisorySchema = z.object({
+  kind: z.string(),
+  message: z.string(),
+});
+
+/** Advisories are warnings, never refusals — the fan-out has already started
+ *  by the time they are read. */
+export const ConvertDraftResponseSchema = z.object({
+  jobId: z.string(),
+  advisories: z.array(AdvisorySchema).default([]),
+});
 
 export const ConversionJobSchema = z.object({
   id: z.string(),

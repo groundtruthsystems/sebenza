@@ -338,14 +338,14 @@
     {
       "id": "phase-6",
       "name": "Sandbox preference, audit and docs",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-6-task-1",
           "name": "Write tests for sandbox preference",
           "description": "Assert a sandboxed runtime is used when present and conversion proceeds with a warning when absent.",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {

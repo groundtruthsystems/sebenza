@@ -76,6 +76,7 @@ export default function InboxView() {
   const [showConvert, setShowConvert] = useState(false);
   const [converting, setConverting] = useState(false);
   const [convertError, setConvertError] = useState("");
+  const [advisories, setAdvisories] = useState<string[]>([]);
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -249,7 +250,11 @@ export default function InboxView() {
     setConverting(true);
     setConvertError("");
     try {
-      const { jobId } = await convertInboxDraft(draft.id, targets);
+      const { jobId, advisories } = await convertInboxDraft(draft.id, targets);
+      // Advisories never block: the wave is already running. They are shown
+      // alongside the result so a pasted secret or an unsandboxed agent is at
+      // least noticed.
+      const warnings = advisories.map((a) => a.message);
       for (;;) {
         const job = await fetchConversionJob(jobId);
         if (job.finished) {
@@ -265,6 +270,7 @@ export default function InboxView() {
                   .map((f) => `${f.branch} (${f.error ?? "unknown"})`)
                   .join(", ")}`,
           );
+          setAdvisories(warnings);
           await refresh();
           await open(draft.id);
           return;
@@ -468,6 +474,27 @@ export default function InboxView() {
             </div>
           )}
         </div>
+
+        {advisories.length > 0 && (
+          <div
+            className="px-4 py-2 text-[11px] bg-warning/10 border-b border-warning flex items-start gap-3"
+            role="status"
+          >
+            <ul className="flex-1 m-0 list-none flex flex-col gap-1">
+              {advisories.map((a) => (
+                <li key={a}>{a}</li>
+              ))}
+            </ul>
+            <button
+              type="button"
+              className="shrink-0 text-muted hover:text-primary cursor-pointer"
+              onClick={() => setAdvisories([])}
+              aria-label="Dismiss warnings"
+            >
+              &times;
+            </button>
+          </div>
+        )}
 
         {!draft && status && (
           <p

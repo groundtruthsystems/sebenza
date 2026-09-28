@@ -20,6 +20,10 @@ URL prefixes — and everything the dashboard does is also available from the
   Git worktrees, each on its own branch, from the UI or CLI.
 - **AI agents in the browser** — launch `claude`, `grok`, `codex`, `opencode`, or a custom agent in a
   worktree; interact through an embedded terminal or the in-app **web chat**.
+- **Inbox** — take notes before you know which repo they belong to. Drafts are plain
+  markdown with mermaid, edited in the dashboard with a live preview, and converted
+  into worktrees when you are ready — one draft can fan out to several worktrees
+  across different projects, each with its own branch, agent, and prompt.
 - **Tracks board** — a per-worktree Kanban view of a project's Sebenza tracks
   (`.ai/sebenza/tracks.json`, written by the `sebenza` Claude Code plugin):
   phases as cards grouped by track, drill-down into tasks/subtasks, and `spec.md` /
@@ -192,6 +196,7 @@ export PATH="$PWD/target/release:$PATH"   # sebenza-cli, sebenza-server
 | `tab` | List/create/switch/close agent tabs in a worktree. |
 | `prune` / `restore` | Remove closed worktrees / re-open previously-open sessions. |
 | `oneshot` | Run a worktree start-to-finish, streaming to stdout. |
+| `inbox` | `ls` / `show` / `new` / `edit` / `link` / `drop` / `rm` drafts, plus `convert` and `job`. |
 | `project` | `ls` / `add` / `rm` / `migrate` the served projects. |
 | `service` | Install/uninstall the systemd/launchd service. |
 | `completion` | Print a bash/zsh completion script. |
@@ -206,8 +211,64 @@ Without `--port`, CLI commands target the live server for the current project
 | Project config | `<repo>/.ai/sebenza.yaml` (+ `.ai/sebenza.local.yaml` for local overrides) |
 | Machine-wide launchers | `~/.ai/sebenza.yaml` |
 | Server state (project registry, instances) | `~/.ai/sebenza/` |
+| Inbox drafts | `~/.ai/sebenza/inbox/<ulid>.md` — global, outside every repo |
 | Control token | `~/.config/sebenza/control-token` |
 | Environment | `PORT` (server port, default `5111`); `SEBENZA_HOST` (bind host, default `127.0.0.1`); `SEBENZA_FRONTEND_DIST` (optional — serve the SPA from disk instead of the embedded bundle) |
+
+## Inbox
+
+An idea rarely arrives knowing which repository it belongs to. The inbox is where it
+waits: a global store of markdown drafts at `~/.ai/sebenza/inbox/`, reachable at
+`/inbox` or from the icon rail, and usable before any project is registered.
+
+Each draft is one self-contained `.md` file — YAML frontmatter, then the body — named
+by an opaque id rather than its title, so renaming never moves the file. They are
+ordinary files: edit them in the dashboard or in your own editor, and the dashboard
+notices an external change rather than overwriting it.
+
+### Converting a draft
+
+**Convert** turns one draft into worktrees. Add a row per worktree, each with its own
+project, branch and prompt (up to ten per conversion). Every created worktree gets the
+target's prompt *and* a copy of the whole draft at `.ai/sebenza/inbox-note.md`, so the
+agent can re-read the notes and diagrams after its first turn.
+
+From the CLI, a target is `project:branch:prompt`:
+
+```bash
+sebenza-cli inbox new "Rework the claims scorer"
+sebenza-cli inbox convert <draft-id> \
+  ~/code/acme:fix-scorer:'rewrite the scorer' \
+  ~/code/beta:add-metrics:'add the metrics endpoint' --watch
+```
+
+Targets are validated as a set before anything runs, so a bad branch name or an
+unregistered project fails the whole request rather than leaving half a fan-out
+behind. Once it starts, targets are independent: one failure does not touch the
+others, and each outcome — success or not — is recorded in the draft as it happens.
+
+The draft survives conversion, marked promoted, carrying back-links to everything it
+produced. Converting again pre-fills from the previous wave.
+
+### What conversion writes, and what it does not
+
+The draft copy and its origin marker are added to the worktree's
+`$GIT_DIR/info/exclude`, not to `.gitignore` — `.gitignore` is tracked, so editing it
+would dirty every worktree it touched. Your notes therefore never show up in
+`git status` and cannot be committed by accident.
+
+### Warnings
+
+Before a fan-out, Sebenza flags two things and then gets out of the way — both are
+advisory, neither blocks:
+
+- **Credential-shaped text** in the draft. It is about to be copied into a real
+  checkout and sent to whichever model provider the agent uses. The scan is narrow on
+  purpose and will miss things; the inbox is not a secrets vault.
+- **An unsandboxed target.** A draft is likelier than a typed prompt to contain text
+  pasted from elsewhere, and an unsandboxed agent acts on it with shell access.
+  Install `lxc` (Linux) or Apple `container` (macOS) and set a sandboxed profile to
+  avoid this.
 
 ### Network exposure
 

@@ -724,6 +724,57 @@ mod tests {
         assert_eq!(seen, vec!["one:created", "two:failed", "three:created"]);
     }
 
+    // --- advisories -------------------------------------------------------
+
+    #[test]
+    fn a_clean_draft_raises_nothing() {
+        assert!(scan_for_secrets("# Notes\n\nJust a plan, nothing secret.").is_empty());
+    }
+
+    #[test]
+    fn credential_shaped_text_is_flagged() {
+        for sample in [
+            "key AKIAIOSFODNN7EXAMPLE here",
+            "token ghp_16CharsOfNonsense",
+            "github_pat_11ABC",
+            "xoxb-123-456",
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "sk-proj-abc123",
+        ] {
+            assert!(
+                !scan_for_secrets(sample).is_empty(),
+                "{sample:?} should raise an advisory"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeated_pattern_is_reported_once() {
+        // Twelve copies of the same warning buries it rather than sharpening
+        // it; the point is to prompt one look.
+        let hits = scan_for_secrets("ghp_one ghp_two ghp_three");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].kind, "secret");
+    }
+
+    #[test]
+    fn distinct_patterns_are_reported_separately() {
+        let hits = scan_for_secrets("ghp_abc and AKIAXYZ");
+        assert_eq!(hits.len(), 2);
+    }
+
+    #[test]
+    fn an_unsandboxed_target_warns_and_a_sandboxed_one_does_not() {
+        assert!(sandbox_advisory("fix-x", true).is_none());
+        let warning = sandbox_advisory("fix-x", false).expect("advisory");
+        assert_eq!(warning.kind, "sandbox");
+        assert!(warning.message.contains("fix-x"));
+        assert!(
+            warning.message.contains("shell access"),
+            "the warning should say what is actually at risk"
+        );
+    }
+
     #[test]
     fn everything_conversion_writes_is_in_the_excluded_set() {
         // Git reports an untracked directory whole, so one un-excluded sibling
@@ -740,4 +791,68 @@ mod tests {
             assert!(!path.starts_with('/'), "{path} must be worktree-relative");
         }
     }
+}
+
+// --- Advisories -----------------------------------------------------------
+
+/// A warning shown before a fan-out. Advisory by design: these are heuristics,
+/// and a false positive must never be able to block work.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Advisory {
+    /// `"secret"` or `"sandbox"`.
+    pub kind: String,
+    pub message: String,
+}
+
+/// Patterns worth a second look before a draft is copied into a checkout and
+/// handed to an agent that may transmit it to a model provider.
+///
+/// Deliberately few and shaped: a scanner that cries wolf gets ignored, and
+/// being ignored is worse than being narrow. It will miss things — the design
+/// says so plainly, and this is defence in depth, not a control.
+const SECRET_PATTERNS: [(&str, &str); 6] = [
+    ("AWS access key", "AKIA"),
+    ("GitHub token", "ghp_"),
+    ("GitHub fine-grained token", "github_pat_"),
+    ("Slack token", "xox"),
+    ("private key block", "-----BEGIN"),
+    ("OpenAI-style key", "sk-"),
+];
+
+/// Scan draft text for things that look like credentials.
+///
+/// Returns one advisory per distinct pattern, not per occurrence: the point is
+/// to prompt a look, and twelve copies of the same warning only buries it.
+pub fn scan_for_secrets(text: &str) -> Vec<Advisory> {
+    let mut out = Vec::new();
+    for (label, needle) in SECRET_PATTERNS {
+        if text.contains(needle) {
+            out.push(Advisory {
+                kind: "secret".to_string(),
+                message: format!(
+                    "This draft looks like it contains {label} text. It will be copied into every worktree and sent to the agent."
+                ),
+            });
+        }
+    }
+    out
+}
+
+/// Warn when a target's worktree will not be sandboxed.
+///
+/// A draft is likelier than a hand-typed prompt to carry text pasted from
+/// somewhere else, and an unsandboxed agent acts on it with shell access. The
+/// design chose warn-and-proceed over refusing, so the inbox stays usable on
+/// hosts without `lxc` or Apple `container`.
+pub fn sandbox_advisory(branch: &str, sandboxed: bool) -> Option<Advisory> {
+    if sandboxed {
+        return None;
+    }
+    Some(Advisory {
+        kind: "sandbox".to_string(),
+        message: format!(
+            "{branch} will run unsandboxed, so anything pasted into this draft reaches an agent with shell access."
+        ),
+    })
 }
