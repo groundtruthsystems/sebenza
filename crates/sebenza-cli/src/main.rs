@@ -66,6 +66,7 @@ Environment:
 
 const ROOT_COMMANDS: &[&str] = &[
     "serve",
+    "inbox",
     "init",
     "service",
     "update",
@@ -283,4 +284,56 @@ async fn main() {
     };
 
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every command the dispatcher handles must also be in `ROOT_COMMANDS`,
+    /// or the root parser rejects it before dispatch ever runs.
+    ///
+    /// `inbox` shipped broken exactly this way: its own parser was covered by
+    /// unit tests, so nothing caught that the command was unreachable.
+    #[test]
+    fn every_dispatched_command_is_a_known_root_command() {
+        let dispatched = [
+            "serve",
+            "completion",
+            "init",
+            "service",
+            "update",
+            "inbox",
+            "oneshot",
+            "project",
+        ];
+        for cmd in dispatched {
+            assert!(
+                ROOT_COMMANDS.contains(&cmd),
+                "`{cmd}` is dispatched but missing from ROOT_COMMANDS, so the \
+                 root parser rejects it as unknown"
+            );
+        }
+        for cmd in WORKTREE_COMMANDS {
+            assert!(
+                ROOT_COMMANDS.contains(cmd),
+                "worktree command `{cmd}` is missing from ROOT_COMMANDS"
+            );
+        }
+    }
+
+    /// The usage text should name every root command, so `--help` does not
+    /// hide a working feature.
+    #[test]
+    fn usage_mentions_every_root_command() {
+        // `usage()` writes straight to stdout, so assert against this file's
+        // own source instead of capturing it.
+        let help = include_str!("main.rs");
+        for cmd in ROOT_COMMANDS {
+            assert!(
+                help.contains(&format!("sebenza-cli {cmd}")),
+                "`{cmd}` is a root command but never appears in the usage text"
+            );
+        }
+    }
 }
