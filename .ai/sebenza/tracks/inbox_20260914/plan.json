@@ -109,8 +109,9 @@
           "id": "phase-2-task-7",
           "name": "Implement sebenza-cli inbox CRUD",
           "description": "Add list, show, new, edit, link, drop and delete subcommands reading the control token.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "4d1334f"
         },
         {
           "id": "phase-2-task-8",
