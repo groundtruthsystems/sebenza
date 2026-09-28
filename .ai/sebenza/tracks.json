@@ -41,7 +41,7 @@
         {
           "id": "phase-4",
           "name": "Conversion fan-out",
-          "status": "doing",
+          "status": "done",
           "blocked_reason": null
         },
         {
@@ -59,8 +59,8 @@
       ],
       "progress": {
         "total_tasks": 42,
-        "completed_tasks": 26,
-        "percentage": 62
+        "completed_tasks": 27,
+        "percentage": 64
       }
     },
     {

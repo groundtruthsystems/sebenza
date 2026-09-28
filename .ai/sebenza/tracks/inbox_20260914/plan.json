@@ -192,7 +192,7 @@
     {
       "id": "phase-4",
       "name": "Conversion fan-out",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -247,10 +247,12 @@
           "id": "phase-4-task-7",
           "name": "Phase verification & checkpoint",
           "description": "Run the phase verification and checkpointing protocol per workflow.md.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "b1a8d54"
         }
-      ]
+      ],
+      "checkpoint_sha": "b1a8d54"
     },
     {
       "id": "phase-5",
