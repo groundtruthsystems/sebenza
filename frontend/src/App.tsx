@@ -21,6 +21,7 @@ import TabBar from "./lib/TabBar";
 import { agentCan } from "./lib/agent-capabilities";
 import DiffDialog from "./lib/DiffDialog";
 import TracksBoard from "./lib/TracksBoard";
+import NavRail from "./lib/NavRail";
 import type {
   ActiveProjectWorktrees,
   AvailableBranch,
@@ -121,7 +122,13 @@ export default function App() {
   const [pendingCreateCount, setPendingCreateCount] = useState(0);
   const [pendingCreateBranchHint, setPendingCreateBranchHint] = useState<string | null>(null);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
-  const [viewMode, setViewMode] = useState<"terminal" | "tracks">("terminal");
+  const [viewMode, setViewMode] = useState<"terminal" | "tracks">(() =>
+    // The rail links here as `?view=tracks` from pages that cannot flip this
+    // state directly (the inbox, the registry).
+    new URLSearchParams(window.location.search).get("view") === "tracks"
+      ? "tracks"
+      : "terminal",
+  );
   // Land on the terminal when switching worktrees.
   useEffect(() => {
     setViewMode("terminal");
@@ -1109,6 +1116,14 @@ export default function App() {
         <ActiveWorktreeTicker items={tickerItems} onselect={handleSelectTickerItem} />
 
         <div className="flex min-h-0 flex-1">
+        {/* Icon rail: the one place every top-level destination is reachable,
+            whether it flips view state here or navigates to its own page. */}
+        {!isMobile && (
+          <NavRail
+            active={viewMode === "tracks" ? "tracks" : "worktrees"}
+            onSelectView={setViewMode}
+          />
+        )}
         {/* Sidebar: fixed overlay on mobile, static on desktop */}
         {(!isMobile || sidebarOpen) && (
           <>

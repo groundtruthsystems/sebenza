@@ -286,19 +286,14 @@ dialog textarea:focus {
 
 .inbox-conflict p { margin: 0; flex: 1; }
 
-.inbox-split { display: grid; grid-template-columns: 1fr 1fr; flex: 1; min-height: 0; }
-
-.inbox-split textarea {
-  background: var(--surface, #0a0a0f);
-  color: inherit;
-  border: none;
-  border-right: 1px solid var(--edge, #20375a);
-  padding: 12px;
+/* MDEditor owns the split; it needs a sized flex child to fill the pane. */
+.inbox-split { flex: 1; min-height: 0; display: flex; }
+.inbox-split .w-md-editor { flex: 1; min-height: 0; border-radius: 0; }
+.inbox-split .w-md-editor-content { min-height: 0; }
+.inbox-split .w-md-editor-text {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12.5px;
   line-height: 1.55;
-  resize: none;
-  outline: none;
 }
 
 .inbox-preview { padding: 12px; overflow-y: auto; }
@@ -319,4 +314,48 @@ dialog textarea:focus {
   background: rgba(255, 82, 82, 0.08);
   border-bottom: 1px solid var(--danger, #ff5252);
   font-size: 12px;
+}
+.inbox-preview .task-box { color: var(--muted, #b0bec5); margin-right: 4px; }
+.inbox-preview .task-box.task-done { color: var(--success, #00e676); }
+.inbox-preview ul:has(.task-box) { list-style: none; padding-left: 0.5em; }
+
+/* --- Icon nav rail ------------------------------------------------------ */
+
+.nav-shell { display: flex; height: 100vh; min-height: 0; }
+.nav-shell > .inbox { flex: 1; min-width: 0; height: auto; }
+
+.nav-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 48px;
+  flex: 0 0 48px;
+  padding: 8px 0;
+  background: var(--sidebar, #0d1626);
+  border-right: 1px solid var(--edge, #20375a);
+}
+
+.nav-rail-spacer { flex: 1; }
+
+.nav-rail-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted, #b0bec5);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.nav-rail-btn:hover { background: var(--hover, #17294a); color: var(--primary, #fff); }
+
+.nav-rail-active {
+  background: var(--topbar, #101d33);
+  color: var(--accent, #00d4ff);
+  box-shadow: inset 2px 0 0 var(--accent, #00d4ff);
 }

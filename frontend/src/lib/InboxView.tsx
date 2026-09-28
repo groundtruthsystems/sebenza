@@ -8,6 +8,9 @@ import {
   patchInboxDraft,
   saveInboxDraftBody,
 } from "./api";
+import MDEditor from "@uiw/react-md-editor";
+import NavRail from "./NavRail";
+import { fetchProjects } from "./api";
 import { renderDraftMarkdown } from "./inboxMarkdown";
 import { createDebouncer, saveDraftBody, type DraftLike } from "./inbox-editor";
 
@@ -51,6 +54,10 @@ export default function InboxView() {
     null,
   );
 
+  // The rail's project-scoped destinations need a project to point at; with
+  // none registered they are hidden rather than linking nowhere.
+  const [projectBase, setProjectBase] = useState("");
+
   const loadedRef = useRef<DraftLike>({ body: "", bodyHash: "" });
   const debouncer = useMemo(() => createDebouncer(AUTOSAVE_MS), []);
 
@@ -69,6 +76,14 @@ export default function InboxView() {
   useEffect(() => {
     void loadInboxControlToken().then(refresh);
   }, [refresh]);
+
+  useEffect(() => {
+    void fetchProjects()
+      .then((projects) => {
+        if (projects[0]?.prefix) setProjectBase(`/${projects[0].prefix}`);
+      })
+      .catch(() => setProjectBase(""));
+  }, []);
 
   useEffect(() => () => debouncer.cancel(), [debouncer]);
 
@@ -203,7 +218,9 @@ export default function InboxView() {
   };
 
   return (
-    <div className="inbox" data-testid="inbox">
+    <div className="nav-shell">
+      <NavRail active="inbox" projectBase={projectBase} />
+      <div className="inbox" data-testid="inbox">
       <aside className="inbox-list">
         <div className="inbox-list-head">
           <input
@@ -300,24 +317,33 @@ export default function InboxView() {
               </div>
             )}
 
-            <div className="inbox-split">
-              <textarea
-                aria-label="Draft body"
+            <div className="inbox-split" data-color-mode="dark">
+              <MDEditor
                 value={body}
-                onChange={(e) => onBodyChange(e.target.value)}
-                spellCheck={false}
-              />
-              <div
-                className="inbox-preview md-body"
-                // Sanitized in renderDraftMarkdown: DOMPurify plus mermaid at
-                // securityLevel "strict". Drafts are pasted-in text, so this is
-                // deliberately not TrackMarkdown's trusted-file path.
-                dangerouslySetInnerHTML={{ __html: preview }}
+                onChange={(next) => onBodyChange(next ?? "")}
+                height="100%"
+                visibleDragbar={false}
+                textareaProps={{
+                  "aria-label": "Draft body",
+                  spellCheck: false,
+                }}
+                components={{
+                  // MDEditor's own preview renders markdown its own way, which
+                  // would bypass DOMPurify and mermaid's strict mode. Drafts are
+                  // pasted-in text, so the preview stays ours.
+                  preview: () => (
+                    <div
+                      className="inbox-preview md-body"
+                      dangerouslySetInnerHTML={{ __html: preview }}
+                    />
+                  ),
+                }}
               />
             </div>
           </>
         )}
       </section>
+      </div>
     </div>
   );
 }

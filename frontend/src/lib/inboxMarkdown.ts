@@ -124,7 +124,7 @@ export async function renderDraftMarkdown(source: string): Promise<string> {
 
   // Sanitize the prose first, while the diagrams are still inert placeholders.
   // Keeping SVG out of this pass is what lets it iterate safely.
-  let html = sanitize(marked.parse(withPlaceholders) as string);
+  let html = sanitize(taskBoxes(marked.parse(withPlaceholders) as string));
 
   if (diagrams.size > 0) {
     const mermaid = await loadMermaid();
@@ -152,6 +152,24 @@ export async function renderDraftMarkdown(source: string): Promise<string> {
   }
 
   return html;
+}
+
+/**
+ * Turn GFM task-list checkboxes into glyphs.
+ *
+ * DOMPurify strips `type` from `<input>` as a hardening measure, which would
+ * leave every task item as a stray text box. A glyph is also the more honest
+ * rendering: this is a preview, so a checkbox you cannot tick would only
+ * invite clicking. Editing happens in the markdown pane.
+ */
+function taskBoxes(html: string): string {
+  return html.replace(
+    /<input([^>]*?)type="checkbox"([^>]*?)>/g,
+    (match) =>
+      /checked/.test(match)
+        ? '<span class="task-box task-done">\u2611</span>'
+        : '<span class="task-box">\u2610</span>',
+  );
 }
 
 function escapeHtml(s: string): string {

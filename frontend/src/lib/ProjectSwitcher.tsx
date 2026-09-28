@@ -214,6 +214,15 @@ export default function ProjectSwitcher({ current }: { current: string }) {
           </div>
 
           <a
+            href="/inbox"
+            role="menuitem"
+            className="block px-3 py-2 text-[12px] border-t border-edge hover:bg-hover"
+          >
+            <div className="text-primary">Inbox</div>
+            <div className="text-muted text-[11px]">Drafts, before they become worktrees</div>
+          </a>
+
+          <a
             href="/registry"
             role="menuitem"
             className="block px-3 py-2 text-[12px] border-t border-edge hover:bg-hover"

@@ -32,6 +32,7 @@
   },
   "dependencies": {
     "@ts-rest/core": "^3.52.1",
+    "@uiw/react-md-editor": "^4.1.2",
     "diff2html": "^3.4.56",
     "dompurify": "^3.2.6",
     "marked": "^18.0.7",

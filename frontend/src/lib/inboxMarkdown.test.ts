@@ -93,6 +93,16 @@ describe("inbox markdown sanitizing", () => {
     expect(html).not.toContain("data-mermaid-slot");
   });
 
+  it("renders task list boxes as glyphs, not stray inputs", async () => {
+    const html = await renderDraftMarkdown("- [x] done\n- [ ] todo\n");
+    expect(html).toContain("task-box");
+    expect(html).toContain("\u2611");
+    expect(html).toContain("\u2610");
+    // DOMPurify strips `type` from inputs, so a surviving <input> would render
+    // as a text box rather than a checkbox.
+    expect(html).not.toContain("<input");
+  });
+
   it("sanitize() is not a pass-through", () => {
     // Guards the sanitizer itself: if DOMPurify were misconfigured or stubbed,
     // every test above could pass vacuously on input that never had a payload.

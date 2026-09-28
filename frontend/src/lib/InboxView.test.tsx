@@ -14,6 +14,7 @@ vi.mock("./api", () => ({
   deleteInboxDraft: vi.fn(),
   saveInboxDraftBody: vi.fn(),
   loadInboxControlToken: () => Promise.resolve(),
+  fetchProjects: () => Promise.resolve([{ prefix: "demo", name: "demo" }]),
 }));
 
 // Mermaid pulls a large async graph that has no place in a list-behaviour test.
