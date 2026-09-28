@@ -26,10 +26,13 @@ const MAX_RETAINED_JOBS: usize = 64;
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum JobEvent {
     /// One target finished, for better or worse.
+    ///
+    /// Boxed so the whole enum is not sized by its largest variant: every
+    /// broadcast clone would otherwise carry that much.
     Outcome {
         index: usize,
         total: usize,
-        outcome: ConversionOutcome,
+        outcome: Box<ConversionOutcome>,
     },
     /// The wave is over. `created` counts targets that actually produced a
     /// working worktree.
@@ -124,7 +127,7 @@ impl ConversionJobManager {
         let _ = job.tx.send(JobEvent::Outcome {
             index,
             total,
-            outcome,
+            outcome: Box::new(outcome),
         });
     }
 

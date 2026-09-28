@@ -1,6 +1,10 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+vi.mock("./api", () => ({
+  fetchBaseBranchesFor: () => Promise.resolve(["main", "develop"]),
+}));
+
 import ConvertDraftDialog, { MAX_TARGETS, rowError } from "./ConvertDraftDialog";
 import type { ProjectSummary } from "./types";
 
@@ -35,7 +39,13 @@ function setup(over: Partial<Parameters<typeof ConvertDraftDialog>[0]> = {}) {
 }
 
 describe("rowError", () => {
-  const base = { key: 1, projectPath: "/code/acme", branch: "x", prompt: "go" };
+  const base = {
+    key: 1,
+    projectPath: "/code/acme",
+    branch: "x",
+    baseBranch: "",
+    prompt: "go",
+  };
 
   it("accepts a complete row", () => {
     expect(rowError(base, [base])).toBeNull();
@@ -78,6 +88,8 @@ describe("ConvertDraftDialog", () => {
     expect(onconvert).toHaveBeenCalledWith([
       { projectPath: "/code/acme", branch: "fix-scorer", prompt: "rewrite it" },
     ]);
+    // No baseBranch key at all: absent means the project's default, and an
+    // empty string would be a different thing to validate server-side.
   });
 
   it("adds and removes targets, and never removes the last one", async () => {
@@ -124,5 +136,40 @@ describe("ConvertDraftDialog", () => {
     await user.type(screen.getByLabelText("Branch for target 1"), "keep-me");
     expect(screen.getByText(/no registered project/)).toBeInTheDocument();
     expect(screen.getByLabelText("Branch for target 1")).toHaveValue("keep-me");
+  });
+
+  it("sends a stated source branch and omits a blank one", async () => {
+    const user = userEvent.setup();
+    const { onconvert } = setup();
+    await user.type(screen.getByLabelText("Branch for target 1"), "hotfix");
+    await user.type(screen.getByLabelText("Prompt for target 1"), "patch it");
+    await user.type(screen.getByLabelText("Source branch for target 1"), "develop");
+    await user.click(screen.getByRole("button", { name: /Create 1 worktree/ }));
+    expect(onconvert).toHaveBeenCalledWith([
+      {
+        projectPath: "/code/acme",
+        branch: "hotfix",
+        baseBranch: "develop",
+        prompt: "patch it",
+      },
+    ]);
+  });
+
+  it("offers the project's branches as suggestions", async () => {
+    setup();
+    const field = screen.getByLabelText("Source branch for target 1");
+    expect(field).toHaveAttribute("list", "base-branches-/code/acme");
+    await screen.findByText("", { selector: 'option[value="develop"]' });
+  });
+
+  it("rejects a source branch with spaces", () => {
+    const base = {
+      key: 1,
+      projectPath: "/code/acme",
+      branch: "x",
+      baseBranch: "two words",
+      prompt: "go",
+    };
+    expect(rowError(base, [base])).toMatch(/source branch/i);
   });
 });

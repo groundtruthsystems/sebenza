@@ -523,3 +523,14 @@ export async function convertInboxDraft(
 export async function fetchConversionJob(jobId: string) {
   return hubApi.fetchConversionJob({ params: { id: jobId } });
 }
+
+/** Base branches for an arbitrary project, by URL prefix.
+ *
+ *  The conversion dialog is global but each row targets one project, so it
+ *  cannot use the page's own per-project client. This builds one per prefix
+ *  rather than adding a hub route that would duplicate an existing one. */
+export async function fetchBaseBranchesFor(prefix: string): Promise<string[]> {
+  const client = createApi(`/${prefix}`);
+  const { branches } = await client.fetchBaseBranches();
+  return branches.map((b) => b.name);
+}

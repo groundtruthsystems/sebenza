@@ -50,6 +50,7 @@ interface Draft extends DraftLike {
   conversions?: {
     projectPath: string;
     branch: string;
+    baseBranch?: string;
     prompt: string;
     outcome: string;
     error?: string;
@@ -296,7 +297,12 @@ export default function InboxView() {
       const key = `${c.projectPath}::${c.branch}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      out.push({ projectPath: c.projectPath, branch: c.branch, prompt: c.prompt });
+      out.push({
+        projectPath: c.projectPath,
+        branch: c.branch,
+        baseBranch: c.baseBranch,
+        prompt: c.prompt,
+      });
     }
     return out;
   };

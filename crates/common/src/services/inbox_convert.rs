@@ -50,6 +50,11 @@ pub enum TargetError {
         index: usize,
         branch: String,
     },
+    /// The branch to fork from is not a name git would accept.
+    InvalidBaseBranch {
+        index: usize,
+        base: String,
+    },
     /// Two targets in the same request want the same branch in the same
     /// project. Git would reject the second; better to say so now.
     DuplicateBranch {
@@ -76,6 +81,9 @@ impl std::fmt::Display for TargetError {
             }
             Self::InvalidBranch { index, branch } => {
                 write!(f, "target {index}: invalid branch name {branch:?}")
+            }
+            Self::InvalidBaseBranch { index, base } => {
+                write!(f, "target {index}: invalid source branch {base:?}")
             }
             Self::DuplicateBranch { index, branch } => {
                 write!(f, "target {index}: branch {branch:?} is used twice")
@@ -129,6 +137,18 @@ pub fn validate_targets(
             });
         }
 
+        // An absent base means "the project's default", which is resolved
+        // downstream; only a stated one is checked here.
+        if let Some(base) = target.base_branch.as_deref().map(str::trim)
+            && !base.is_empty()
+            && !is_valid_branch_name(base)
+        {
+            errors.push(TargetError::InvalidBaseBranch {
+                index,
+                base: base.to_string(),
+            });
+        }
+
         let key = (target.project_path.as_str(), target.branch.as_str());
         if seen.contains(&key) {
             errors.push(TargetError::DuplicateBranch {
@@ -152,6 +172,11 @@ pub fn validate_targets(
 pub struct ConversionOutcome {
     pub project_path: String,
     pub branch: String,
+    /// What it was forked from. Part of the record because "which branch did
+    /// this come off" is not recoverable afterwards, and a second wave
+    /// pre-fills from it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
     pub agent_id: Option<String>,
     pub prompt: String,
     /// `"created"` or `"failed"`.
@@ -168,6 +193,7 @@ impl ConversionOutcome {
         Self {
             project_path: target.project_path.clone(),
             branch: target.branch.clone(),
+            base_branch: target.base_branch.clone(),
             agent_id: target.agent_id.clone(),
             prompt: target.prompt.clone(),
             outcome: "created".to_string(),
@@ -181,6 +207,7 @@ impl ConversionOutcome {
         Self {
             project_path: target.project_path.clone(),
             branch: target.branch.clone(),
+            base_branch: target.base_branch.clone(),
             agent_id: target.agent_id.clone(),
             prompt: target.prompt.clone(),
             outcome: "failed".to_string(),
@@ -413,6 +440,41 @@ mod tests {
     }
 
     #[test]
+    fn a_stated_source_branch_is_validated() {
+        let mut t = target("/code/acme", "feature-x");
+        t.base_branch = Some("develop".into());
+        assert_eq!(validate_targets(std::slice::from_ref(&t), &known()), vec![]);
+
+        t.base_branch = Some("not a branch".into());
+        let errors = validate_targets(&[t], &known());
+        assert!(
+            errors
+                .iter()
+                .any(|e| matches!(e, TargetError::InvalidBaseBranch { .. })),
+            "got {errors:?}"
+        );
+    }
+
+    #[test]
+    fn an_absent_or_blank_source_branch_means_the_project_default() {
+        // Not an error: the project's own default is resolved downstream.
+        let mut t = target("/code/acme", "feature-x");
+        t.base_branch = None;
+        assert_eq!(validate_targets(std::slice::from_ref(&t), &known()), vec![]);
+        t.base_branch = Some("   ".into());
+        assert_eq!(validate_targets(&[t], &known()), vec![]);
+    }
+
+    #[test]
+    fn two_targets_may_fork_from_different_sources() {
+        let mut a = target("/code/acme", "from-main");
+        a.base_branch = Some("main".into());
+        let mut b = target("/code/acme", "from-develop");
+        b.base_branch = Some("develop".into());
+        assert_eq!(validate_targets(&[a, b], &known()), vec![]);
+    }
+
+    #[test]
     fn the_same_branch_twice_in_one_project_is_refused() {
         let targets = vec![target("/code/acme", "dup"), target("/code/acme", "dup")];
         let errors = validate_targets(&targets, &known());
@@ -485,6 +547,22 @@ mod tests {
         assert_eq!(
             status_after(DraftStatus::Dropped, &[bad]),
             DraftStatus::Dropped
+        );
+    }
+
+    #[test]
+    fn an_outcome_records_the_branch_it_forked_from() {
+        let mut t = target("/code/acme", "x");
+        t.base_branch = Some("develop".into());
+        let out = ConversionOutcome::created(&t, "/wt/x".into(), "now".into());
+        assert_eq!(out.base_branch.as_deref(), Some("develop"));
+
+        // Absent stays absent rather than becoming the resolved default: the
+        // record should say what was asked for, not what it turned into.
+        let t2 = target("/code/acme", "y");
+        assert_eq!(
+            ConversionOutcome::created(&t2, "/wt/y".into(), "now".into()).base_branch,
+            None
         );
     }
 

@@ -229,7 +229,9 @@ notices an external change rather than overwriting it.
 ### Converting a draft
 
 **Convert** turns one draft into worktrees. Add a row per worktree, each with its own
-project, branch and prompt (up to ten per conversion). Every created worktree gets the
+project, branch, source branch and prompt (up to ten per conversion). The source
+branch is what the new worktree forks from; leave it blank for the project's default,
+and the field suggests that project's branches as you type. Every created worktree gets the
 target's prompt *and* a copy of the whole draft at `.ai/sebenza/inbox-note.md`, so the
 agent can re-read the notes and diagrams after its first turn.
 
@@ -240,6 +242,16 @@ sebenza-cli inbox new "Rework the claims scorer"
 sebenza-cli inbox convert <draft-id> \
   ~/code/acme:fix-scorer:'rewrite the scorer' \
   ~/code/beta:add-metrics:'add the metrics endpoint' --watch
+```
+
+Each worktree forks from its project's default branch unless told otherwise.
+`--base` sets the source for every target; `branch@source` overrides it for one,
+which is what you want when targets span projects whose defaults differ:
+
+```bash
+sebenza-cli inbox convert <draft-id> --base develop \
+  ~/code/acme:fix-scorer:'rewrite it' \
+  ~/code/beta:hotfix@main:'patch it'
 ```
 
 Targets are validated as a set before anything runs, so a bad branch name or an

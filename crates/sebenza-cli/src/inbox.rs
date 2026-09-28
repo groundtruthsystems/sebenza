@@ -33,6 +33,7 @@ enum InboxCommand {
     Convert {
         id: String,
         specs: Vec<String>,
+        base: Option<String>,
         watch: bool,
     },
     Job(String),
@@ -49,11 +50,18 @@ fn usage() -> String {
         "  sebenza-cli inbox unlink <id>                  Remove the project link",
         "  sebenza-cli inbox drop <id>                    Mark a draft dropped",
         "  sebenza-cli inbox rm <id> [--yes]              Delete a draft",
-        "  sebenza-cli inbox convert <id> <target>...      Turn a draft into worktrees",
+        "  sebenza-cli inbox convert <id> <target>... [--base B]  Turn a draft into worktrees",
         "  sebenza-cli inbox job <job-id>                 Show a conversion's progress",
         "",
         "A convert target is project:branch:prompt, for example:",
         "  sebenza-cli inbox convert 01ARZ... ~/code/acme:fix-scorer:'rewrite the scorer'",
+        "",
+        "Each worktree forks from the project's default branch unless told otherwise.",
+        "--base sets the source branch for every target; branch@source overrides it for",
+        "one, which is what you want when targets span projects:",
+        "  sebenza-cli inbox convert 01ARZ... --base develop \\",
+        "    ~/code/acme:fix-scorer:'rewrite it' ~/code/beta:hotfix@main:'patch it'",
+        "",
         "Pass --watch to poll until the fan-out finishes.",
         "",
         "Drafts are markdown files under ~/.ai/sebenza/inbox/, global across every",
@@ -86,7 +94,7 @@ fn positional(args: &[String]) -> Vec<String> {
             skip_next = false;
             continue;
         }
-        if a == "--search" {
+        if a == "--search" || a == "--base" {
             skip_next = true;
             continue;
         }
@@ -130,6 +138,7 @@ fn parse(args: &[String]) -> Result<Option<InboxCommand>> {
             Ok(Some(InboxCommand::Convert {
                 id,
                 specs,
+                base: opt(args, "--base"),
                 watch: flag(args, "--watch"),
             }))
         }
@@ -202,21 +211,37 @@ fn print_list(body: &Value) {
 ///
 /// Split from the left twice only, so a prompt may contain colons — which
 /// prompts routinely do.
-fn parse_target(spec: &str) -> Result<Value> {
+fn parse_target(spec: &str, default_base: Option<&str>) -> Result<Value> {
     let (project, rest) = spec
         .split_once(':')
         .ok_or_else(|| anyhow!("target {spec:?} is not project:branch:prompt"))?;
-    let (branch, prompt) = rest
+    let (branch_spec, prompt) = rest
         .split_once(':')
         .ok_or_else(|| anyhow!("target {spec:?} is missing a prompt"))?;
+
+    // `branch@source` overrides --base for this target, which is what you want
+    // when targets span projects whose default branches differ.
+    let (branch, base) = match branch_spec.split_once('@') {
+        Some((b, s)) => (b, Some(s.trim().to_string())),
+        None => (branch_spec, default_base.map(str::to_string)),
+    };
+
     if project.trim().is_empty() || branch.trim().is_empty() || prompt.trim().is_empty() {
         return Err(anyhow!("target {spec:?} has an empty field"));
     }
-    Ok(json!({
+    if base.as_deref().map(str::trim) == Some("") {
+        return Err(anyhow!("target {spec:?} has an empty source branch"));
+    }
+
+    let mut out = json!({
         "projectPath": expand_home(project.trim()),
         "branch": branch.trim(),
         "prompt": prompt.trim(),
-    }))
+    });
+    if let Some(base) = base {
+        out["baseBranch"] = Value::String(base);
+    }
+    Ok(out)
 }
 
 fn print_job(job: &Value) {
@@ -339,8 +364,16 @@ pub async fn run(args: &[String], port: u16) -> i32 {
                     .await?;
                 println!("Dropped {id}.");
             }
-            InboxCommand::Convert { id, specs, watch } => {
-                let targets: Result<Vec<Value>> = specs.iter().map(|s| parse_target(s)).collect();
+            InboxCommand::Convert {
+                id,
+                specs,
+                base,
+                watch,
+            } => {
+                let targets: Result<Vec<Value>> = specs
+                    .iter()
+                    .map(|s| parse_target(s, base.as_deref()))
+                    .collect();
                 let started = http.inbox_convert(&id, Value::Array(targets?)).await?;
                 let job_id = started
                     .get("jobId")
@@ -470,7 +503,7 @@ mod tests {
 
     #[test]
     fn a_target_spec_splits_into_project_branch_and_prompt() {
-        let v = parse_target("/code/acme:fix-scorer:rewrite it").expect("parse");
+        let v = parse_target("/code/acme:fix-scorer:rewrite it", None).expect("parse");
         assert_eq!(v["projectPath"], "/code/acme");
         assert_eq!(v["branch"], "fix-scorer");
         assert_eq!(v["prompt"], "rewrite it");
@@ -480,17 +513,17 @@ mod tests {
     fn a_prompt_may_contain_colons() {
         // Prompts routinely do: "fix: the thing". Splitting from the left
         // twice is what keeps that working.
-        let v = parse_target("/code/acme:b:fix: the thing, then: ship").expect("parse");
+        let v = parse_target("/code/acme:b:fix: the thing, then: ship", None).expect("parse");
         assert_eq!(v["branch"], "b");
         assert_eq!(v["prompt"], "fix: the thing, then: ship");
     }
 
     #[test]
     fn a_malformed_target_is_refused() {
-        assert!(parse_target("just-a-word").is_err());
-        assert!(parse_target("/code/acme:branch-only").is_err());
-        assert!(parse_target("/code/acme::no branch").is_err());
-        assert!(parse_target("/code/acme:b:   ").is_err());
+        assert!(parse_target("just-a-word", None).is_err());
+        assert!(parse_target("/code/acme:branch-only", None).is_err());
+        assert!(parse_target("/code/acme::no branch", None).is_err());
+        assert!(parse_target("/code/acme:b:   ", None).is_err());
     }
 
     #[test]
@@ -507,6 +540,55 @@ mod tests {
             InboxCommand::Convert { specs, watch, .. } => {
                 assert_eq!(specs.len(), 1);
                 assert!(!watch);
+            }
+            _ => panic!("expected Convert"),
+        }
+    }
+
+    #[test]
+    fn no_source_branch_means_the_project_default() {
+        let v = parse_target("/code/acme:b:go", None).expect("parse");
+        assert!(
+            v.get("baseBranch").is_none(),
+            "an absent base must not be sent as empty"
+        );
+    }
+
+    #[test]
+    fn the_base_flag_applies_to_every_target() {
+        let v = parse_target("/code/acme:b:go", Some("develop")).expect("parse");
+        assert_eq!(v["baseBranch"], "develop");
+    }
+
+    #[test]
+    fn branch_at_source_overrides_the_base_flag() {
+        // Targets spanning projects rarely share a default branch.
+        let v = parse_target("/code/beta:hotfix@main:patch it", Some("develop")).expect("parse");
+        assert_eq!(v["branch"], "hotfix");
+        assert_eq!(v["baseBranch"], "main");
+        assert_eq!(v["prompt"], "patch it");
+    }
+
+    #[test]
+    fn an_empty_source_branch_is_refused() {
+        assert!(parse_target("/code/acme:b@:go", None).is_err());
+    }
+
+    #[test]
+    fn the_base_value_is_not_read_as_a_positional() {
+        let cmd = parse(&a(&[
+            "convert",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "--base",
+            "develop",
+            "/code/acme:b:go",
+        ]))
+        .expect("parse")
+        .expect("command");
+        match cmd {
+            InboxCommand::Convert { specs, base, .. } => {
+                assert_eq!(base.as_deref(), Some("develop"));
+                assert_eq!(specs, vec!["/code/acme:b:go".to_string()]);
             }
             _ => panic!("expected Convert"),
         }

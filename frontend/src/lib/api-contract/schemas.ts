@@ -877,6 +877,7 @@ export const InboxDraftListSchema = z.object({
 export const ConversionOutcomeSchema = z.object({
   projectPath: z.string(),
   branch: z.string(),
+  baseBranch: z.string().optional(),
   agentId: z.string().nullish(),
   prompt: z.string(),
   outcome: z.string(),

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { fetchBaseBranchesFor } from "./api";
 import BaseDialog from "./BaseDialog";
 import Btn from "./Btn";
 import type { ProjectSummary } from "./types";
@@ -8,12 +9,15 @@ export interface TargetDraft {
   key: number;
   projectPath: string;
   branch: string;
+  /** Empty means "the project's default", resolved server-side. */
+  baseBranch: string;
   prompt: string;
 }
 
 export interface ConvertTarget {
   projectPath: string;
   branch: string;
+  baseBranch?: string;
   prompt: string;
 }
 
@@ -23,7 +27,7 @@ export const MAX_TARGETS = 10;
 let nextKey = 1;
 
 function emptyTarget(projectPath: string): TargetDraft {
-  return { key: nextKey++, projectPath, branch: "", prompt: "" };
+  return { key: nextKey++, projectPath, branch: "", baseBranch: "", prompt: "" };
 }
 
 /**
@@ -38,6 +42,8 @@ export function rowError(
   if (!target.projectPath) return "Pick a project";
   if (!target.branch.trim()) return "Branch is required";
   if (/\s/.test(target.branch.trim())) return "Branch cannot contain spaces";
+  if (/\s/.test(target.baseBranch.trim()))
+    return "Source branch cannot contain spaces";
   if (!target.prompt.trim()) return "Prompt is required";
   const duplicate = all.some(
     (other) =>
@@ -73,9 +79,17 @@ export default function ConvertDraftDialog({
   const defaultProject = projects[0]?.path ?? "";
   const [targets, setTargets] = useState<TargetDraft[]>(() =>
     previousTargets && previousTargets.length > 0
-      ? previousTargets.map((t) => ({ ...t, key: nextKey++ }))
+      ? previousTargets.map((t) => ({
+          ...t,
+          baseBranch: t.baseBranch ?? "",
+          key: nextKey++,
+        }))
       : [emptyTarget(defaultProject)],
   );
+  /** Base branches per project path, fetched lazily as rows point at them. */
+  const [branchesByProject, setBranchesByProject] = useState<
+    Record<string, string[]>
+  >({});
   const firstBranch = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -83,6 +97,26 @@ export default function ConvertDraftDialog({
     if (!el) return;
     queueMicrotask(() => el.focus());
   }, []);
+
+  // Each row offers its own project's branches, because targets routinely
+  // span projects that share no branch names at all.
+  useEffect(() => {
+    const wanted = new Set(targets.map((t) => t.projectPath).filter(Boolean));
+    for (const path of wanted) {
+      if (branchesByProject[path]) continue;
+      const prefix = projects.find((p) => p.path === path)?.prefix;
+      if (!prefix) continue;
+      void fetchBaseBranchesFor(prefix)
+        .then((names) =>
+          setBranchesByProject((prev) => ({ ...prev, [path]: names })),
+        )
+        // A project whose branches cannot be listed still converts; the field
+        // just falls back to free text.
+        .catch(() =>
+          setBranchesByProject((prev) => ({ ...prev, [path]: [] })),
+        );
+    }
+  }, [targets, projects, branchesByProject]);
 
   const errors = targets.map((t) => rowError(t, targets));
   const canConvert =
@@ -100,9 +134,12 @@ export default function ConvertDraftDialog({
           event.preventDefault();
           if (!canConvert) return;
           onconvert(
-            targets.map(({ projectPath, branch, prompt }) => ({
+            targets.map(({ projectPath, branch, baseBranch, prompt }) => ({
               projectPath,
               branch: branch.trim(),
+              // Omitted rather than sent empty: absent means "the project's
+              // default", which the server resolves.
+              ...(baseBranch.trim() ? { baseBranch: baseBranch.trim() } : {}),
               prompt: prompt.trim(),
             })),
           );
@@ -152,6 +189,18 @@ export default function ConvertDraftDialog({
                   }
                   disabled={loading}
                 />
+                <input
+                  aria-label={`Source branch for target ${index + 1}`}
+                  list={`base-branches-${target.projectPath}`}
+                  placeholder="from (default)"
+                  title="Branch to fork from; blank uses the project's default"
+                  className="h-7 w-[150px] rounded-md border border-edge bg-surface px-2 text-xs text-primary placeholder:text-muted focus:outline-none focus:border-accent"
+                  value={target.baseBranch}
+                  onChange={(e) =>
+                    update(target.key, { baseBranch: e.currentTarget.value })
+                  }
+                  disabled={loading}
+                />
                 <button
                   type="button"
                   aria-label={`Remove target ${index + 1}`}
@@ -165,6 +214,11 @@ export default function ConvertDraftDialog({
                   &times;
                 </button>
               </div>
+              <datalist id={`base-branches-${target.projectPath}`}>
+                {(branchesByProject[target.projectPath] ?? []).map((b) => (
+                  <option key={b} value={b} />
+                ))}
+              </datalist>
               <textarea
                 aria-label={`Prompt for target ${index + 1}`}
                 placeholder="What should this worktree's agent do?"
