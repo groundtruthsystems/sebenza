@@ -813,11 +813,11 @@ mod tests {
     fn credential_shaped_text_is_flagged() {
         for sample in [
             "key AKIAIOSFODNN7EXAMPLE here",
-            "token ghp_16CharsOfNonsense",
-            "github_pat_11ABC",
-            "xoxb-123-456",
+            "token ghp_abcdefghijklmnopqrstuvwxyz",
+            "github_pat_11ABCDEFG0aBcDeFgHiJkLmNoP",
+            "xoxb-1234567890-abcdefg",
             "-----BEGIN RSA PRIVATE KEY-----",
-            "sk-proj-abc123",
+            "sk-proj-abcdefghijklmnopqrstuvwxyz",
         ] {
             assert!(
                 !scan_for_secrets(sample).is_empty(),
@@ -827,17 +827,47 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_prose_is_not_flagged() {
+        // The bug this guards: `sk-` as a bare substring matches "task-1",
+        // "risk-averse" and "disk-usage". Drafts are full of tasks, so that
+        // scanner fires on nearly everything and stops being read.
+        for sample in [
+            "phase-1-task-1 is done",
+            "a risk-averse plan",
+            "check disk-usage first",
+            "xoxo, signed off",
+            "the task-list needs work",
+            "# Notes\n\nJust a plan.",
+        ] {
+            assert!(
+                scan_for_secrets(sample).is_empty(),
+                "{sample:?} must not raise an advisory"
+            );
+        }
+    }
+
+    #[test]
+    fn a_prefix_needs_real_key_material_after_it() {
+        // Talking *about* a token is not the same as pasting one.
+        assert!(scan_for_secrets("rotate the ghp_ prefix").is_empty());
+        assert!(scan_for_secrets("our sk-style keys").is_empty());
+        assert!(!scan_for_secrets("ghp_abcdefghijklmnopqrstuv").is_empty());
+    }
+
+    #[test]
     fn a_repeated_pattern_is_reported_once() {
         // Twelve copies of the same warning buries it rather than sharpening
         // it; the point is to prompt one look.
-        let hits = scan_for_secrets("ghp_one ghp_two ghp_three");
+        let hits = scan_for_secrets(
+            "ghp_aaaaaaaaaaaaaaaaaaaa ghp_bbbbbbbbbbbbbbbbbbbb ghp_cccccccccccccccccccc",
+        );
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].kind, "secret");
     }
 
     #[test]
     fn distinct_patterns_are_reported_separately() {
-        let hits = scan_for_secrets("ghp_abc and AKIAXYZ");
+        let hits = scan_for_secrets("ghp_abcdefghijklmnopqrst and AKIAIOSFODNN7EXAMPLE");
         assert_eq!(hits.len(), 2);
     }
 
@@ -886,17 +916,46 @@ pub struct Advisory {
 /// Patterns worth a second look before a draft is copied into a checkout and
 /// handed to an agent that may transmit it to a model provider.
 ///
-/// Deliberately few and shaped: a scanner that cries wolf gets ignored, and
-/// being ignored is worse than being narrow. It will miss things — the design
-/// says so plainly, and this is defence in depth, not a control.
-const SECRET_PATTERNS: [(&str, &str); 6] = [
-    ("AWS access key", "AKIA"),
-    ("GitHub token", "ghp_"),
-    ("GitHub fine-grained token", "github_pat_"),
-    ("Slack token", "xox"),
-    ("private key block", "-----BEGIN"),
-    ("OpenAI-style key", "sk-"),
+/// Each is a prefix plus the length of key material that must follow it. The
+/// length is what makes them usable: a bare `sk-` substring matches "task-1",
+/// "risk-averse" and "disk-usage", and a scanner that fires on every draft
+/// mentioning a task is one nobody reads.
+///
+/// Deliberately few. It will miss things — the design says so plainly, and this
+/// is defence in depth, not a control.
+const SECRET_PATTERNS: [(&str, &str, usize); 6] = [
+    ("AWS access key", "AKIA", 16),
+    ("GitHub token", "ghp_", 20),
+    ("GitHub fine-grained token", "github_pat_", 20),
+    ("Slack token", "xoxb-", 10),
+    ("private key block", "-----BEGIN", 0),
+    ("OpenAI-style key", "sk-", 20),
 ];
+
+/// True when `prefix` appears at a word boundary with at least `min_tail`
+/// key-like characters after it.
+///
+/// The boundary check stops `sk-` matching inside "task-"; the tail length
+/// stops it matching a hyphenated phrase that merely starts that way.
+fn looks_like_key(text: &str, prefix: &str, min_tail: usize) -> bool {
+    let bytes = text.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = text[from..].find(prefix) {
+        let at = from + rel;
+        let boundary = at == 0 || !bytes[at - 1].is_ascii_alphanumeric();
+        if boundary {
+            let tail = text[at + prefix.len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                .count();
+            if tail >= min_tail {
+                return true;
+            }
+        }
+        from = at + prefix.len();
+    }
+    false
+}
 
 /// Scan draft text for things that look like credentials.
 ///
@@ -904,8 +963,8 @@ const SECRET_PATTERNS: [(&str, &str); 6] = [
 /// to prompt a look, and twelve copies of the same warning only buries it.
 pub fn scan_for_secrets(text: &str) -> Vec<Advisory> {
     let mut out = Vec::new();
-    for (label, needle) in SECRET_PATTERNS {
-        if text.contains(needle) {
+    for (label, prefix, min_tail) in SECRET_PATTERNS {
+        if looks_like_key(text, prefix, min_tail) {
             out.push(Advisory {
                 kind: "secret".to_string(),
                 message: format!(
