@@ -874,6 +874,17 @@ export const InboxDraftListSchema = z.object({
   drafts: z.array(InboxDraftSummarySchema),
 });
 
+export const ConversionOutcomeSchema = z.object({
+  projectPath: z.string(),
+  branch: z.string(),
+  agentId: z.string().nullish(),
+  prompt: z.string(),
+  outcome: z.string(),
+  worktreePath: z.string().optional(),
+  error: z.string().optional(),
+  at: z.string(),
+});
+
 /** `bodyHash` is what a save must echo back; it is the only thing that gates a
  *  write, so a conversion job touching frontmatter cannot provoke a conflict. */
 export const InboxDraftSchema = z.object({
@@ -885,6 +896,7 @@ export const InboxDraftSchema = z.object({
   body: z.string(),
   bodyHash: z.string(),
   project: InboxProjectLinkSchema.nullable(),
+  conversions: z.array(ConversionOutcomeSchema).default([]),
   raw: z.object({ text: z.string(), error: z.string() }).nullable(),
 });
 
@@ -901,3 +913,26 @@ export const PatchInboxDraftRequestSchema = z.object({
   status: DraftStatusSchema.optional(),
 });
 
+
+export const ConversionTargetSchema = z.object({
+  projectPath: z.string(),
+  branch: z.string(),
+  baseBranch: z.string().nullish(),
+  agentId: z.string().nullish(),
+  prompt: z.string(),
+});
+
+export const ConvertDraftRequestSchema = z.object({
+  targets: z.array(ConversionTargetSchema),
+});
+
+export const ConvertDraftResponseSchema = z.object({ jobId: z.string() });
+
+export const ConversionJobSchema = z.object({
+  id: z.string(),
+  draftId: z.string(),
+  total: z.number(),
+  outcomes: z.array(ConversionOutcomeSchema),
+  finished: z.boolean(),
+  error: z.string().optional(),
+});

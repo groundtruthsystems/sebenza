@@ -504,3 +504,22 @@ export async function deleteInboxDraft(id: string, confirmed = false) {
     extraHeaders: inboxAuthHeaders(),
   });
 }
+
+/** Start a fan-out. Returns a job id immediately; the wave runs in the
+ *  background because git plus tmux is multiple seconds per target. */
+export async function convertInboxDraft(
+  id: string,
+  targets: { projectPath: string; branch: string; prompt: string }[],
+) {
+  return hubApi.convertInboxDraft({
+    params: { id },
+    body: { targets },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Poll a conversion's progress. Unknown ids are a 404 — job ids are ULIDs,
+ *  so that is the access check. */
+export async function fetchConversionJob(jobId: string) {
+  return hubApi.fetchConversionJob({ params: { id: jobId } });
+}

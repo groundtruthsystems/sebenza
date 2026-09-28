@@ -257,7 +257,7 @@
     {
       "id": "phase-5",
       "name": "Jobs, progress and the convert dialog",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
@@ -310,7 +310,7 @@
           "id": "phase-5-task-7",
           "name": "Write tests for the convert dialog",
           "description": "Cover adding and removing targets, per-target prompts, the cap, and pre-fill from a previous wave.",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {

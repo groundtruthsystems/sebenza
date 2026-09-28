@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  convertInboxDraft,
+  fetchConversionJob,
   createInboxDraft,
   deleteInboxDraft,
   fetchInboxDraft,
@@ -14,9 +16,11 @@ import NewDraftDialog from "./NewDraftDialog";
 import ConfirmDialog from "./ConfirmDialog";
 import Btn from "./Btn";
 import Toggle from "./Toggle";
+import ConvertDraftDialog, { type ConvertTarget } from "./ConvertDraftDialog";
 import { fetchProjects } from "./api";
 import { renderDraftMarkdown } from "./inboxMarkdown";
 import { createDebouncer, saveDraftBody, type DraftLike } from "./inbox-editor";
+import type { ProjectSummary } from "./types";
 
 const AUTOSAVE_MS = 800;
 
@@ -43,6 +47,13 @@ interface Draft extends DraftLike {
   status: DraftStatus;
   project: ProjectLink | null;
   raw: { text: string; error: string } | null;
+  conversions?: {
+    projectPath: string;
+    branch: string;
+    prompt: string;
+    outcome: string;
+    error?: string;
+  }[];
 }
 
 export default function InboxView() {
@@ -61,6 +72,10 @@ export default function InboxView() {
   // The rail's project-scoped destinations need a project to point at; with
   // none registered they are hidden rather than linking nowhere.
   const [projectBase, setProjectBase] = useState("");
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [showConvert, setShowConvert] = useState(false);
+  const [converting, setConverting] = useState(false);
+  const [convertError, setConvertError] = useState("");
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -89,10 +104,14 @@ export default function InboxView() {
 
   useEffect(() => {
     void fetchProjects()
-      .then((projects) => {
-        if (projects[0]?.prefix) setProjectBase(`/${projects[0].prefix}`);
+      .then((list) => {
+        setProjects(list);
+        if (list[0]?.prefix) setProjectBase(`/${list[0].prefix}`);
       })
-      .catch(() => setProjectBase(""));
+      .catch(() => {
+        setProjects([]);
+        setProjectBase("");
+      });
   }, []);
 
   useEffect(() => () => debouncer.cancel(), [debouncer]);
@@ -221,6 +240,61 @@ export default function InboxView() {
     }
   };
 
+  /** Start a fan-out, then poll until it settles.
+   *
+   *  Polling rather than the WebSocket: the snapshot route is authoritative,
+   *  and a dialog that lives for a few seconds does not need a socket. */
+  const onConvert = async (targets: ConvertTarget[]) => {
+    if (!draft) return;
+    setConverting(true);
+    setConvertError("");
+    try {
+      const { jobId } = await convertInboxDraft(draft.id, targets);
+      for (;;) {
+        const job = await fetchConversionJob(jobId);
+        if (job.finished) {
+          const created = job.outcomes.filter(
+            (o) => o.outcome === "created",
+          ).length;
+          const failed = job.outcomes.filter((o) => o.outcome !== "created");
+          setShowConvert(false);
+          setStatus(
+            failed.length === 0
+              ? `Created ${created} worktree${created === 1 ? "" : "s"}.`
+              : `Created ${created} of ${job.total}. Failed: ${failed
+                  .map((f) => `${f.branch} (${f.error ?? "unknown"})`)
+                  .join(", ")}`,
+          );
+          await refresh();
+          await open(draft.id);
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 600));
+      }
+    } catch (err) {
+      // Stays open with the rows intact so the targets can be corrected.
+      setConvertError((err as Error).message);
+    } finally {
+      setConverting(false);
+    }
+  };
+
+  /** The previous wave, so a second conversion starts from what was done
+   *  before rather than a blank form. */
+  const previousTargets = (): ConvertTarget[] | undefined => {
+    const past = draft?.conversions;
+    if (!past || past.length === 0) return undefined;
+    const seen = new Set<string>();
+    const out: ConvertTarget[] = [];
+    for (const c of past) {
+      const key = `${c.projectPath}::${c.branch}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ projectPath: c.projectPath, branch: c.branch, prompt: c.prompt });
+    }
+    return out;
+  };
+
   const onDrop = async () => {
     if (!draft) return;
     try {
@@ -241,6 +315,17 @@ export default function InboxView() {
           error={createError}
           oncreate={(title) => void onCreate(title)}
           oncancel={() => setShowNewDialog(false)}
+        />
+      )}
+      {showConvert && draft && (
+        <ConvertDraftDialog
+          draftTitle={draft.title}
+          projects={projects}
+          previousTargets={previousTargets()}
+          loading={converting}
+          error={convertError}
+          onconvert={(targets) => void onConvert(targets)}
+          oncancel={() => setShowConvert(false)}
         />
       )}
       {confirmDelete && draft && (
@@ -361,6 +446,15 @@ export default function InboxView() {
           {draft && !draft.raw && (
             <div className="flex items-center gap-2 shrink-0">
               {status && <span className="text-[11px] text-muted">{status}</span>}
+              <Btn
+                variant="accent-outline"
+                onClick={() => {
+                  setConvertError("");
+                  setShowConvert(true);
+                }}
+              >
+                Convert
+              </Btn>
               <Btn onClick={() => void onDrop()}>Drop</Btn>
               <Btn
                 variant="danger-outline"

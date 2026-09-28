@@ -91,6 +91,9 @@ pub struct DraftWire {
     pub body: String,
     pub body_hash: String,
     pub project: Option<ProjectLinkWire>,
+    /// Every wave this draft has produced, so a second conversion can start
+    /// from the last one rather than a blank form.
+    pub conversions: Vec<serde_yaml::Value>,
     /// Present instead of the fields above when the file did not parse.
     pub raw: Option<RawWire>,
 }
@@ -113,6 +116,7 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
             updated_at: d.frontmatter.updated_at,
             body: d.body,
             project: link.map(Into::into),
+            conversions: d.frontmatter.conversions,
             raw: None,
         },
         InboxDraftView::Raw {
@@ -128,6 +132,7 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
             body: String::new(),
             body_hash: String::new(),
             project: None,
+            conversions: Vec::new(),
             raw: Some(RawWire {
                 text: raw_text,
                 error,
