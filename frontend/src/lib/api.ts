@@ -336,20 +336,29 @@ export async function removeProject(prefix: string): Promise<void> {
   await hubApi.removeProject({ params: { prefix } });
 }
 
-export type ProjectBootstrap = "ready" | "redirecting" | "no-projects" | "registry";
+export type ProjectBootstrap =
+  | "ready"
+  | "redirecting"
+  | "no-projects"
+  | "registry"
+  | "inbox";
 
 /** Decide what to mount before the app loads, based on the URL prefix and the
  *  known projects:
  *  - `registry`     — `/registry`, the user-scoped portfolio; not a project, so
  *                     it must short-circuit before the redirect below.
+ *  - `inbox`        — `/inbox`, the global draft store; likewise not a project,
+ *                     and reachable with no projects registered at all.
  *  - `ready`        — the URL points at a real project; mount the dashboard.
  *  - `redirecting`  — the URL has no/unknown prefix but projects exist; a
  *                     redirect to the first project is in flight, mount nothing.
  *  - `no-projects`  — nothing is registered; mount the empty state so the
  *                     dashboard doesn't boot into 404-ing per-project calls. */
 export async function ensureProjectPrefix(): Promise<ProjectBootstrap> {
-  // `registry` is a reserved prefix server-side, so it can never be a project.
+  // `registry` and `inbox` are reserved prefixes server-side, so neither can
+  // ever be a project.
   if (activePrefix === "registry") return "registry";
+  if (activePrefix === "inbox") return "inbox";
   const projects = await fetchProjects().catch((): ProjectSummary[] => []);
   if (projects.some((project) => project.prefix === activePrefix)) return "ready";
   const target = projects[0]?.prefix;

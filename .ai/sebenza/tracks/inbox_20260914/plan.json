@@ -150,7 +150,7 @@
           "id": "phase-3-task-3",
           "name": "Write tests for autosave and conflict handling",
           "description": "Cover debounced save, a body_hash conflict offering reload or force-write, and a frontmatter-only change raising none.",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
