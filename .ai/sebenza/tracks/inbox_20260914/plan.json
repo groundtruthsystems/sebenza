@@ -14,7 +14,7 @@
           "description": "Cover frontmatter round-trip, schema_version tolerance, status enum, and degradation on unparseable YAML.",
           "status": "done",
           "blocked_reason": null,
-          "commit_sha": "70193f2"
+          "commit_sha": "300cd75"
         },
         {
           "id": "phase-1-task-2",
@@ -22,7 +22,7 @@
           "description": "Add InboxDraft, DraftStatus, ProjectRef and FileRevision to common::domain::model with serde_yaml frontmatter.",
           "status": "done",
           "blocked_reason": null,
-          "commit_sha": "70193f2"
+          "commit_sha": "300cd75"
         },
         {
           "id": "phase-1-task-3",
@@ -30,7 +30,7 @@
           "description": "Cover ULID naming, atomic temp+rename, body_hash conflict detection, key-scoped frontmatter merge, and directory listing.",
           "status": "done",
           "blocked_reason": null,
-          "commit_sha": "027c6aa"
+          "commit_sha": "6412e31"
         },
         {
           "id": "phase-1-task-4",
@@ -38,7 +38,7 @@
           "description": "Add common::adapters::inbox_store with CRUD, atomic writes, body-hash gating and per-key merge.",
           "status": "done",
           "blocked_reason": null,
-          "commit_sha": "027c6aa"
+          "commit_sha": "6412e31"
         },
         {
           "id": "phase-1-task-5",
@@ -174,49 +174,49 @@
     },
     {
       "id": "phase-4",
-      "name": "Agent collaboration on a draft",
+      "name": "Conversion fan-out",
       "status": "backlog",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-4-task-1",
-          "name": "Write tests for draft-bound chat session",
-          "description": "Cover defaultAgent selection, in_app_chat capability gate, scratch cwd containing draft.md, and no SEBENZA_CONTROL_TOKEN in the spawned env.",
+          "name": "Write tests for target validation",
+          "description": "Cover the ten-target cap, git ref-name rules, unknown projects and duplicate branch names.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
           "id": "phase-4-task-2",
-          "name": "Implement draft chat runtime",
-          "description": "Bind AgentStreamManager to a per-draft scratch with draft.md. Do not use conversation_router or a worktree. Agent switch starts a new thread.",
+          "name": "Implement ProjectLookup and target validation",
+          "description": "Add the port over AppState::project in sebenza-server and validate every target before any side effect.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
           "id": "phase-4-task-3",
-          "name": "Write tests for agent writes syncing through inbox_store",
-          "description": "Cover draft.md write \u2192 body save, body_hash conflict vs human autosave, and no silent overwrite.",
+          "name": "Write tests for the per-target sequence",
+          "description": "Assert the worktree is created unprompted, the copy and .gitignore land, then the prompt is sent.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
           "id": "phase-4-task-4",
-          "name": "Implement scratch-to-draft sync",
-          "description": "Watch or harvest draft.md after a turn and save via inbox_store using the existing hash protocol.",
+          "name": "Implement the per-target conversion sequence",
+          "description": "Create the worktree, write inbox-note.md with its .gitignore entry, then send the prompt via the existing path.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
           "id": "phase-4-task-5",
-          "name": "Write tests for the inbox chat pane and CLI chat",
-          "description": "Cover the split editor+chat layout, agent switcher, and sebenza-cli inbox chat.",
+          "name": "Write tests for outcomes and partial failure",
+          "description": "Cover per-target merge into conversions[], one failure not aborting others, and Promoted requiring one Created.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
           "id": "phase-4-task-6",
-          "name": "Implement InboxChatPane and sebenza-cli inbox chat",
-          "description": "Add the pane to the draft screen and the CLI send path. Hide agents without in_app_chat.",
+          "name": "Implement outcome recording and status transitions",
+          "description": "Merge each outcome as it completes, gate Promoted, and record the draft id in the worktree meta.json.",
           "status": "backlog",
           "blocked_reason": null
         },
@@ -231,54 +231,68 @@
     },
     {
       "id": "phase-5",
-      "name": "Conversion fan-out",
+      "name": "Jobs, progress and the convert dialog",
       "status": "backlog",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-5-task-1",
-          "name": "Write tests for target validation",
-          "description": "Cover the ten-target cap, git ref-name rules, unknown projects and duplicate branch names.",
+          "name": "Write tests for the job manager",
+          "description": "Cover ULID job ids, per-job isolation, and that an unknown or guessed id cannot subscribe.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
           "id": "phase-5-task-2",
-          "name": "Implement ProjectLookup and target validation",
-          "description": "Add the port over AppState::project in sebenza-server and validate every target before any side effect.",
+          "name": "Implement the conversion job manager",
+          "description": "Add the job-id-keyed manager and run the fan-out as a background task.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
           "id": "phase-5-task-3",
-          "name": "Write tests for the per-target sequence",
-          "description": "Assert the worktree is created unprompted, the copy and .gitignore land, then the prompt is sent.",
+          "name": "Write tests for progress delivery",
+          "description": "Cover the per-job WebSocket stream and the job status route returning the same per-target state.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
           "id": "phase-5-task-4",
-          "name": "Implement the per-target conversion sequence",
-          "description": "Create the worktree, write inbox-note.md with its .gitignore entry, then send the prompt via the existing path.",
+          "name": "Implement progress delivery",
+          "description": "Add the non-project-prefixed WebSocket route, GET /api/inbox/jobs/:id, and CLI job polling.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
           "id": "phase-5-task-5",
-          "name": "Write tests for outcomes and partial failure",
-          "description": "Cover per-target merge into conversions[], one failure not aborting others, and Promoted requiring one Created.",
+          "name": "Write tests for restart resume",
+          "description": "Assert progress after a restart is read from frontmatter rather than memory.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
           "id": "phase-5-task-6",
-          "name": "Implement outcome recording and status transitions",
-          "description": "Merge each outcome as it completes, gate Promoted, and record the draft id in the worktree meta.json.",
+          "name": "Implement resume and tracing",
+          "description": "Resume job state from the draft and emit job-id-correlated spans carrying draft, project, branch and outcome.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
           "id": "phase-5-task-7",
+          "name": "Write tests for the convert dialog",
+          "description": "Cover adding and removing targets, per-target prompts, the cap, and pre-fill from a previous wave.",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-5-task-8",
+          "name": "Implement ConvertDraftDialog",
+          "description": "Build the multi-target dialog with live progress, reusing BranchSelector and the CreateWorktreeDialog patterns.",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-5-task-9",
           "name": "Phase verification & checkpoint",
           "description": "Run the phase verification and checkpointing protocol per workflow.md.",
           "status": "backlog",
@@ -288,118 +302,47 @@
     },
     {
       "id": "phase-6",
-      "name": "Jobs, progress and the convert dialog",
-      "status": "backlog",
-      "blocked_reason": null,
-      "tasks": [
-        {
-          "id": "phase-6-task-1",
-          "name": "Write tests for the job manager",
-          "description": "Cover ULID job ids, per-job isolation, and that an unknown or guessed id cannot subscribe.",
-          "status": "backlog",
-          "blocked_reason": null
-        },
-        {
-          "id": "phase-6-task-2",
-          "name": "Implement the conversion job manager",
-          "description": "Add the job-id-keyed manager and run the fan-out as a background task.",
-          "status": "backlog",
-          "blocked_reason": null
-        },
-        {
-          "id": "phase-6-task-3",
-          "name": "Write tests for progress delivery",
-          "description": "Cover the per-job WebSocket stream and the job status route returning the same per-target state.",
-          "status": "backlog",
-          "blocked_reason": null
-        },
-        {
-          "id": "phase-6-task-4",
-          "name": "Implement progress delivery",
-          "description": "Add the non-project-prefixed WebSocket route, GET /api/inbox/jobs/:id, and CLI job polling.",
-          "status": "backlog",
-          "blocked_reason": null
-        },
-        {
-          "id": "phase-6-task-5",
-          "name": "Write tests for restart resume",
-          "description": "Assert progress after a restart is read from frontmatter rather than memory.",
-          "status": "backlog",
-          "blocked_reason": null
-        },
-        {
-          "id": "phase-6-task-6",
-          "name": "Implement resume and tracing",
-          "description": "Resume job state from the draft and emit job-id-correlated spans carrying draft, project, branch and outcome.",
-          "status": "backlog",
-          "blocked_reason": null
-        },
-        {
-          "id": "phase-6-task-7",
-          "name": "Write tests for the convert dialog",
-          "description": "Cover adding and removing targets, per-target prompts, the cap, and pre-fill from a previous wave.",
-          "status": "backlog",
-          "blocked_reason": null
-        },
-        {
-          "id": "phase-6-task-8",
-          "name": "Implement ConvertDraftDialog",
-          "description": "Build the multi-target dialog with live progress, reusing BranchSelector and the CreateWorktreeDialog patterns.",
-          "status": "backlog",
-          "blocked_reason": null
-        },
-        {
-          "id": "phase-6-task-9",
-          "name": "Phase verification & checkpoint",
-          "description": "Run the phase verification and checkpointing protocol per workflow.md.",
-          "status": "backlog",
-          "blocked_reason": null
-        }
-      ]
-    },
-    {
-      "id": "phase-7",
       "name": "Sandbox preference, audit and docs",
       "status": "backlog",
       "blocked_reason": null,
       "tasks": [
         {
-          "id": "phase-7-task-1",
+          "id": "phase-6-task-1",
           "name": "Write tests for sandbox preference",
           "description": "Assert a sandboxed runtime is used when present and conversion proceeds with a warning when absent.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
-          "id": "phase-7-task-2",
+          "id": "phase-6-task-2",
           "name": "Implement sandbox preference and warning",
           "description": "Prefer lxc or Apple container for converted worktrees and surface the advisory warning.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
-          "id": "phase-7-task-3",
+          "id": "phase-6-task-3",
           "name": "Write tests for the advisory scan and audit line",
           "description": "Cover secret-pattern detection before conversion and the structured audit record per target.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
-          "id": "phase-7-task-4",
+          "id": "phase-6-task-4",
           "name": "Implement the advisory scan and audit logging",
           "description": "Warn on likely secrets before the copy and launch, and write the per-target audit line.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
-          "id": "phase-7-task-5",
+          "id": "phase-6-task-5",
           "name": "Document the Inbox",
           "description": "Cover the store location, backup implications of state outside git, and the CLI surface in the project docs.",
           "status": "backlog",
           "blocked_reason": null
         },
         {
-          "id": "phase-7-task-6",
+          "id": "phase-6-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Run the phase verification and checkpointing protocol per workflow.md.",
           "status": "backlog",

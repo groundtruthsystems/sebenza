@@ -40,33 +40,27 @@
         },
         {
           "id": "phase-4",
-          "name": "Agent collaboration on a draft",
-          "status": "backlog",
-          "blocked_reason": null
-        },
-        {
-          "id": "phase-5",
           "name": "Conversion fan-out",
           "status": "backlog",
           "blocked_reason": null
         },
         {
-          "id": "phase-6",
+          "id": "phase-5",
           "name": "Jobs, progress and the convert dialog",
           "status": "backlog",
           "blocked_reason": null
         },
         {
-          "id": "phase-7",
+          "id": "phase-6",
           "name": "Sandbox preference, audit and docs",
           "status": "backlog",
           "blocked_reason": null
         }
       ],
       "progress": {
-        "total_tasks": 49,
+        "total_tasks": 42,
         "completed_tasks": 5,
-        "percentage": 10
+        "percentage": 12
       }
     },
     {
