@@ -310,15 +310,17 @@
           "id": "phase-5-task-7",
           "name": "Write tests for the convert dialog",
           "description": "Cover adding and removing targets, per-target prompts, the cap, and pre-fill from a previous wave.",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "624506b"
         },
         {
           "id": "phase-5-task-8",
           "name": "Implement ConvertDraftDialog",
           "description": "Build the multi-target dialog with live progress, reusing BranchSelector and the CreateWorktreeDialog patterns.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "624506b"
         },
         {
           "id": "phase-5-task-9",
