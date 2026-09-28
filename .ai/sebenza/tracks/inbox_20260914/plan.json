@@ -77,15 +77,17 @@
           "id": "phase-2-task-3",
           "name": "Write tests for the origin and secret guard",
           "description": "Cover missing secret, wrong secret, absent Origin, same-origin, and cross-origin requests.",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "11e557e"
         },
         {
           "id": "phase-2-task-4",
           "name": "Implement the origin and secret guard",
           "description": "Add the axum layer requiring the control_token bearer secret and a same-origin-or-absent Origin on mutating routes.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "11e557e"
         },
         {
           "id": "phase-2-task-5",
