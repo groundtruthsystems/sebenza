@@ -41,7 +41,7 @@
         {
           "id": "phase-4",
           "name": "Conversion fan-out",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {

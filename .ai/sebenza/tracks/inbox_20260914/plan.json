@@ -192,14 +192,14 @@
     {
       "id": "phase-4",
       "name": "Conversion fan-out",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-4-task-1",
           "name": "Write tests for target validation",
           "description": "Cover the ten-target cap, git ref-name rules, unknown projects and duplicate branch names.",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
