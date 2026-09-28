@@ -176,7 +176,7 @@
           "description": "Build the list view and extend the reserved-prefix dispatch in api.ts and main.tsx.",
           "status": "done",
           "blocked_reason": null,
-          "commit_sha": "e8f63c4"
+          "commit_sha": "7333224"
         },
         {
           "id": "phase-3-task-7",

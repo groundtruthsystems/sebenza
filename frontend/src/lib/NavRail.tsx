@@ -1,22 +1,24 @@
 /**
  * The icon-only vertical rail down the left edge.
  *
- * Sebenza's top-level destinations are split between two mechanisms: worktrees
- * and tracks are view state inside a project, while the inbox and the registry
- * are their own pages outside any project prefix. The rail hides that seam —
- * every destination is one click, whether it flips state or navigates.
+ * The inbox leads: it is where work starts, before a worktree exists. Below it
+ * sits the project's worktrees, and the registry sits at the foot as the
+ * cross-project view.
+ *
+ * Tracks is deliberately absent — it is a view *of* a worktree, reached from
+ * the top bar's toggle, not a top-level destination.
  */
 
-export type NavDestination = "worktrees" | "tracks" | "inbox" | "registry";
+export type NavDestination = "inbox" | "worktrees" | "registry";
 
 interface NavRailProps {
   active: NavDestination;
   /** Where the project-scoped destinations live, e.g. `/my-app`. Empty when
    *  no project is open, which hides them rather than linking nowhere. */
   projectBase?: string;
-  /** Switch view in-place. Provided only by the project dashboard, which owns
-   *  that state; elsewhere the rail navigates instead. */
-  onSelectView?: (view: "terminal" | "tracks") => void;
+  /** Return to the terminal view in place. Provided only by the project
+   *  dashboard, which owns that state; elsewhere the rail navigates instead. */
+  onSelectView?: (view: "terminal") => void;
 }
 
 function Icon({ name }: { name: NavDestination }) {
@@ -39,14 +41,6 @@ function Icon({ name }: { name: NavDestination }) {
           <path d="M4.5 5.5 3 13v5a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-5l-1.5-7.5A1 1 0 0 0 18.5 5h-13a1 1 0 0 0-1 .5z" />
         </svg>
       );
-    case "tracks":
-      return (
-        <svg {...common}>
-          <rect x="3" y="4" width="5" height="12" rx="1" />
-          <rect x="9.5" y="4" width="5" height="16" rx="1" />
-          <rect x="16" y="4" width="5" height="8" rx="1" />
-        </svg>
-      );
     case "worktrees":
       return (
         <svg {...common}>
@@ -65,9 +59,8 @@ function Icon({ name }: { name: NavDestination }) {
 }
 
 const LABELS: Record<NavDestination, string> = {
-  worktrees: "Worktrees",
-  tracks: "Tracks",
   inbox: "Inbox",
+  worktrees: "Worktrees",
   registry: "Registry",
 };
 
@@ -84,42 +77,38 @@ export default function NavRail({
       .filter(Boolean)
       .join(" ");
 
-  // In the dashboard these flip view state; from another page they have to
-  // navigate into the project first.
-  const viewItem = (dest: "worktrees" | "tracks") => {
-    const view = dest === "tracks" ? "tracks" : "terminal";
+  // In the dashboard this returns to the terminal view; from another page it
+  // has to navigate into the project first.
+  const worktreesItem = () => {
     if (onSelectView) {
       return (
         <button
           type="button"
-          className={cls(dest)}
-          title={LABELS[dest]}
-          aria-label={LABELS[dest]}
-          aria-current={active === dest ? "page" : undefined}
-          onClick={() => onSelectView(view)}
+          className={cls("worktrees")}
+          title={LABELS.worktrees}
+          aria-label={LABELS.worktrees}
+          aria-current={active === "worktrees" ? "page" : undefined}
+          onClick={() => onSelectView("terminal")}
         >
-          <Icon name={dest} />
+          <Icon name="worktrees" />
         </button>
       );
     }
     if (!projectBase) return null;
     return (
       <a
-        href={`${projectBase}/?view=${view}`}
-        className={cls(dest)}
-        title={LABELS[dest]}
-        aria-label={LABELS[dest]}
+        href={`${projectBase}/`}
+        className={cls("worktrees")}
+        title={LABELS.worktrees}
+        aria-label={LABELS.worktrees}
       >
-        <Icon name={dest} />
+        <Icon name="worktrees" />
       </a>
     );
   };
 
   return (
     <nav className="nav-rail" aria-label="Sections">
-      {viewItem("worktrees")}
-      {viewItem("tracks")}
-      <div className="nav-rail-spacer" />
       <a
         href="/inbox"
         className={cls("inbox")}
@@ -129,6 +118,8 @@ export default function NavRail({
       >
         <Icon name="inbox" />
       </a>
+      {worktreesItem()}
+      <div className="nav-rail-spacer" />
       <a
         href="/registry"
         className={cls("registry")}
