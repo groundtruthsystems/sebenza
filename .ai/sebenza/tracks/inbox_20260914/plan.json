@@ -199,15 +199,17 @@
           "id": "phase-4-task-1",
           "name": "Write tests for target validation",
           "description": "Cover the ten-target cap, git ref-name rules, unknown projects and duplicate branch names.",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "0942bdb"
         },
         {
           "id": "phase-4-task-2",
           "name": "Implement ProjectLookup and target validation",
           "description": "Add the port over AppState::project in sebenza-server and validate every target before any side effect.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "0942bdb"
         },
         {
           "id": "phase-4-task-3",
