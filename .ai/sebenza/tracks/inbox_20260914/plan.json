@@ -231,7 +231,7 @@
           "id": "phase-4-task-5",
           "name": "Write tests for outcomes and partial failure",
           "description": "Cover per-target merge into conversions[], one failure not aborting others, and Promoted requiring one Created.",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {

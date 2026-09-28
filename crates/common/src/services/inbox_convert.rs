@@ -248,15 +248,29 @@ pub const NOTE_REL_PATH: &str = ".ai/sebenza/inbox-note.md";
 ///
 /// A target that fails is recorded and the wave continues; callers get one
 /// outcome per target, in order.
-pub fn run_conversion<R: ConversionRunner>(
+///
+/// `on_outcome` fires as each target finishes, before the next begins. That is
+/// what makes a wave crash-safe: the caller persists each result immediately,
+/// so a server killed midway leaves a draft that still knows what happened to
+/// the targets that completed.
+pub fn run_conversion<R, F>(
     runner: &R,
     draft_id: &str,
     body: &str,
     targets: &[ConversionTarget],
-) -> Vec<ConversionOutcome> {
+    mut on_outcome: F,
+) -> Vec<ConversionOutcome>
+where
+    R: ConversionRunner,
+    F: FnMut(&ConversionOutcome),
+{
     targets
         .iter()
-        .map(|target| run_one(runner, draft_id, body, target))
+        .map(|target| {
+            let outcome = run_one(runner, draft_id, body, target);
+            on_outcome(&outcome);
+            outcome
+        })
         .collect()
 }
 
@@ -547,7 +561,7 @@ mod tests {
         // its notes exist, and the note must never be visible to git.
         let runner = FakeRunner::default();
         let targets = vec![target("/code/acme", "x")];
-        run_conversion(&runner, "01DRAFT", "# notes", &targets);
+        run_conversion(&runner, "01DRAFT", "# notes", &targets, |_| {});
 
         assert_eq!(
             runner.log(),
@@ -565,7 +579,7 @@ mod tests {
     fn every_target_runs_and_reports_in_order() {
         let runner = FakeRunner::default();
         let targets = vec![target("/code/acme", "one"), target("/code/beta", "two")];
-        let outcomes = run_conversion(&runner, "01DRAFT", "b", &targets);
+        let outcomes = run_conversion(&runner, "01DRAFT", "b", &targets, |_| {});
         assert_eq!(outcomes.len(), 2);
         assert_eq!(outcomes[0].branch, "one");
         assert_eq!(outcomes[1].branch, "two");
@@ -583,7 +597,7 @@ mod tests {
             target("/code/acme", "two"),
             target("/code/beta", "three"),
         ];
-        let outcomes = run_conversion(&runner, "01DRAFT", "b", &targets);
+        let outcomes = run_conversion(&runner, "01DRAFT", "b", &targets, |_| {});
 
         assert_eq!(outcomes.len(), 3);
         assert!(outcomes[0].is_created());
@@ -599,7 +613,13 @@ mod tests {
             fail_create: vec!["x".into()],
             ..Default::default()
         };
-        run_conversion(&runner, "01DRAFT", "b", &[target("/code/acme", "x")]);
+        run_conversion(
+            &runner,
+            "01DRAFT",
+            "b",
+            &[target("/code/acme", "x")],
+            |_| {},
+        );
         assert_eq!(runner.log(), vec!["create:x"]);
     }
 
@@ -609,7 +629,13 @@ mod tests {
             fail_note: vec!["x".into()],
             ..Default::default()
         };
-        let outcomes = run_conversion(&runner, "01DRAFT", "b", &[target("/code/acme", "x")]);
+        let outcomes = run_conversion(
+            &runner,
+            "01DRAFT",
+            "b",
+            &[target("/code/acme", "x")],
+            |_| {},
+        );
         assert!(!runner.log().iter().any(|c| c.starts_with("prompt:")));
         assert!(!outcomes[0].is_created());
         assert_eq!(outcomes[0].error.as_deref(), Some("disk full"));
@@ -623,7 +649,13 @@ mod tests {
             fail_prompt: vec!["x".into()],
             ..Default::default()
         };
-        let outcomes = run_conversion(&runner, "01DRAFT", "b", &[target("/code/acme", "x")]);
+        let outcomes = run_conversion(
+            &runner,
+            "01DRAFT",
+            "b",
+            &[target("/code/acme", "x")],
+            |_| {},
+        );
         assert!(!outcomes[0].is_created());
         assert_eq!(outcomes[0].error.as_deref(), Some("agent did not start"));
     }
@@ -654,11 +686,31 @@ mod tests {
         }
         let spy = BodySpy(RefCell::new(Vec::new()));
         let targets = vec![target("/code/acme", "one"), target("/code/beta", "two")];
-        run_conversion(&spy, "01DRAFT", "# the whole draft", &targets);
+        run_conversion(&spy, "01DRAFT", "# the whole draft", &targets, |_| {});
         assert_eq!(
             spy.0.into_inner(),
             vec!["# the whole draft", "# the whole draft"],
             "each worktree gets the entire draft, not a slice"
         );
+    }
+
+    #[test]
+    fn each_outcome_is_handed_over_before_the_next_target_starts() {
+        // Crash-safety: the caller persists as it goes, so a server killed
+        // midway still knows what happened to the targets that finished.
+        let runner = FakeRunner {
+            fail_create: vec!["two".into()],
+            ..Default::default()
+        };
+        let targets = vec![
+            target("/code/acme", "one"),
+            target("/code/acme", "two"),
+            target("/code/beta", "three"),
+        ];
+        let mut seen: Vec<String> = Vec::new();
+        run_conversion(&runner, "01DRAFT", "b", &targets, |o| {
+            seen.push(format!("{}:{}", o.branch, o.outcome));
+        });
+        assert_eq!(seen, vec!["one:created", "two:failed", "three:created"]);
     }
 }

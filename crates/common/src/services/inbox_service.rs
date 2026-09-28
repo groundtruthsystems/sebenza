@@ -10,6 +10,10 @@ use crate::adapters::inbox_store::{
 };
 use crate::adapters::projects_registry::ProjectsRegistry;
 use crate::domain::model::{DraftStatus, InboxDraft, InboxDraftView, ProjectRef};
+use crate::services::inbox_convert::{
+    ConversionOutcome, ConversionRunner, ConversionTarget, TargetError, run_conversion,
+    status_after, validate_targets,
+};
 use thiserror::Error;
 
 /// Failures callers must distinguish. Everything else surfaces as the
@@ -20,6 +24,10 @@ pub enum InboxServiceError {
     /// `conversions[]` is the only record of the prompts that were sent.
     #[error("draft {0} is promoted; deleting it discards its conversion history")]
     ConfirmationRequired(String),
+    /// The request was refused before anything ran. Carries every problem, so
+    /// the caller can mark all the bad targets at once.
+    #[error("{} invalid target(s)", .0.len())]
+    InvalidTargets(Vec<TargetError>),
     #[error(transparent)]
     Store(#[from] InboxStoreError),
 }
@@ -218,6 +226,67 @@ impl InboxService {
             return Err(InboxServiceError::ConfirmationRequired(id.to_string()));
         }
         Ok(self.store.delete(id)?)
+    }
+
+    /// Convert a draft into worktrees.
+    ///
+    /// Validates the whole request first and runs nothing if any target is
+    /// bad. Then each target's outcome is merged into `conversions[]` as it
+    /// completes, so a crash midway leaves a draft that still knows what
+    /// happened. `Promoted` is set at the end, and only if something was
+    /// actually created.
+    pub fn convert<R: ConversionRunner>(
+        &self,
+        id: &str,
+        targets: &[ConversionTarget],
+        runner: &R,
+    ) -> Result<Vec<ConversionOutcome>, InboxServiceError> {
+        let draft = match self.store.get(id)? {
+            InboxDraftView::Parsed(d) => d,
+            InboxDraftView::Raw { id, error, .. } => {
+                return Err(InboxServiceError::Store(InboxStoreError::Unparsed {
+                    id,
+                    error,
+                }));
+            }
+        };
+
+        let known: Vec<String> = self.projects.list().into_iter().map(|p| p.path).collect();
+        let errors = validate_targets(targets, &known);
+        if !errors.is_empty() {
+            return Err(InboxServiceError::InvalidTargets(errors));
+        }
+
+        // Prior waves are kept: the draft is the ledger of everything it has
+        // ever produced, not just the most recent run.
+        let mut recorded = draft.frontmatter.conversions.clone();
+        let outcomes = run_conversion(runner, id, &draft.body, targets, |outcome| {
+            if let Ok(value) = serde_yaml::to_value(outcome) {
+                recorded.push(value);
+                // Flush immediately; losing a back-link to a worktree that
+                // exists is worse than an extra write.
+                let _ = self.store.merge_frontmatter(
+                    id,
+                    FrontmatterAuthor::Job,
+                    FrontmatterPatch {
+                        conversions: Some(recorded.clone()),
+                        ..Default::default()
+                    },
+                );
+            }
+        });
+
+        if status_after(draft.frontmatter.status, &outcomes) == DraftStatus::Promoted {
+            let _ = self.store.merge_frontmatter(
+                id,
+                FrontmatterAuthor::Job,
+                FrontmatterPatch {
+                    status: Some(DraftStatus::Promoted),
+                    ..Default::default()
+                },
+            );
+        }
+        Ok(outcomes)
     }
 
     /// Every editor-authored frontmatter change goes through here, so the
@@ -437,5 +506,277 @@ mod tests {
         assert_eq!(listed.len(), 2, "one bad draft must not hide the rest");
         assert!(listed.iter().any(|d| d.id == good.id && !d.is_raw));
         assert!(listed.iter().any(|d| d.is_raw));
+    }
+
+    // --- convert ----------------------------------------------------------
+
+    use crate::services::inbox_convert::{ConversionTarget, MAX_TARGETS};
+    use std::cell::RefCell;
+
+    struct StubRunner {
+        fail: Vec<String>,
+        created: RefCell<Vec<String>>,
+    }
+
+    impl StubRunner {
+        fn new(fail: &[&str]) -> Self {
+            Self {
+                fail: fail.iter().map(|s| s.to_string()).collect(),
+                created: RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl ConversionRunner for StubRunner {
+        fn create_worktree(&self, t: &ConversionTarget) -> Result<String, String> {
+            if self.fail.contains(&t.branch) {
+                return Err("nope".into());
+            }
+            self.created.borrow_mut().push(t.branch.clone());
+            Ok(format!("/wt/{}", t.branch))
+        }
+        fn write_note(&self, _p: &str, _b: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn exclude_note(&self, _p: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn record_origin(&self, _p: &str, _d: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn send_prompt(&self, _t: &ConversionTarget, _p: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn now(&self) -> String {
+            "2026-09-28T00:00:00Z".into()
+        }
+    }
+
+    fn convertible(s: &InboxService, branch: &str) -> (String, ConversionTarget) {
+        s.projects.add(ProjectEntry {
+            path: "/code/acme".into(),
+            name: "acme".into(),
+            added_at: 0,
+        });
+        let draft = s.create("Idea").expect("create");
+        (
+            draft.id,
+            ConversionTarget {
+                project_path: "/code/acme".into(),
+                branch: branch.into(),
+                base_branch: None,
+                agent_id: Some("claude".into()),
+                prompt: "build it".into(),
+            },
+        )
+    }
+
+    fn status_of(s: &InboxService, id: &str) -> DraftStatus {
+        match s.get(id).expect("get").0 {
+            InboxDraftView::Parsed(d) => d.frontmatter.status,
+            _ => panic!("unparsed"),
+        }
+    }
+
+    fn conversions_of(s: &InboxService, id: &str) -> Vec<serde_yaml::Value> {
+        match s.get(id).expect("get").0 {
+            InboxDraftView::Parsed(d) => d.frontmatter.conversions,
+            _ => panic!("unparsed"),
+        }
+    }
+
+    #[test]
+    fn a_successful_conversion_promotes_and_records() {
+        let s = service();
+        let (id, target) = convertible(&s, "feature-x");
+        let outcomes = s
+            .convert(&id, std::slice::from_ref(&target), &StubRunner::new(&[]))
+            .expect("convert");
+
+        assert_eq!(outcomes.len(), 1);
+        assert!(outcomes[0].is_created());
+        assert_eq!(status_of(&s, &id), DraftStatus::Promoted);
+        assert_eq!(conversions_of(&s, &id).len(), 1);
+    }
+
+    #[test]
+    fn an_invalid_request_runs_nothing_at_all() {
+        let s = service();
+        let (id, mut target) = convertible(&s, "feature-x");
+        target.project_path = "/code/not-registered".into();
+        let runner = StubRunner::new(&[]);
+
+        let err = s
+            .convert(&id, std::slice::from_ref(&target), &runner)
+            .expect_err("must refuse");
+        assert!(matches!(err, InboxServiceError::InvalidTargets(_)));
+        // The point of validating up front: no worktree was created.
+        assert!(runner.created.borrow().is_empty());
+        assert_eq!(status_of(&s, &id), DraftStatus::Draft);
+        assert!(conversions_of(&s, &id).is_empty());
+    }
+
+    #[test]
+    fn the_cap_is_enforced_before_anything_runs() {
+        let s = service();
+        let (id, base) = convertible(&s, "b0");
+        let targets: Vec<_> = (0..=MAX_TARGETS)
+            .map(|i| ConversionTarget {
+                branch: format!("b{i}"),
+                ..base.clone()
+            })
+            .collect();
+        let runner = StubRunner::new(&[]);
+        assert!(s.convert(&id, &targets, &runner).is_err());
+        assert!(runner.created.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_wave_where_every_target_failed_does_not_promote() {
+        let s = service();
+        let (id, target) = convertible(&s, "doomed");
+        let outcomes = s
+            .convert(
+                &id,
+                std::slice::from_ref(&target),
+                &StubRunner::new(&["doomed"]),
+            )
+            .expect("convert");
+
+        assert!(!outcomes[0].is_created());
+        assert_eq!(
+            status_of(&s, &id),
+            DraftStatus::Draft,
+            "nothing was created, so the draft is not promoted"
+        );
+        // The failure is still on record, with its reason.
+        assert_eq!(conversions_of(&s, &id).len(), 1);
+    }
+
+    #[test]
+    fn a_partial_wave_promotes_and_records_both_sides() {
+        let s = service();
+        let (id, base) = convertible(&s, "ok");
+        let targets = vec![
+            base.clone(),
+            ConversionTarget {
+                branch: "bad".into(),
+                ..base.clone()
+            },
+            ConversionTarget {
+                branch: "ok2".into(),
+                ..base
+            },
+        ];
+        let outcomes = s
+            .convert(&id, &targets, &StubRunner::new(&["bad"]))
+            .expect("convert");
+
+        assert_eq!(outcomes.len(), 3);
+        assert_eq!(outcomes.iter().filter(|o| o.is_created()).count(), 2);
+        assert_eq!(status_of(&s, &id), DraftStatus::Promoted);
+        assert_eq!(conversions_of(&s, &id).len(), 3);
+    }
+
+    #[test]
+    fn a_second_wave_appends_rather_than_replacing_the_first() {
+        // The draft is the ledger of everything it ever produced.
+        let s = service();
+        let (id, base) = convertible(&s, "wave1");
+        s.convert(&id, std::slice::from_ref(&base), &StubRunner::new(&[]))
+            .expect("first wave");
+        let second = ConversionTarget {
+            branch: "wave2".into(),
+            ..base
+        };
+        s.convert(&id, std::slice::from_ref(&second), &StubRunner::new(&[]))
+            .expect("second wave");
+
+        assert_eq!(conversions_of(&s, &id).len(), 2);
+    }
+
+    #[test]
+    fn outcomes_are_flushed_as_each_target_finishes() {
+        // Crash-safety: the back-link for target one must be on disk before
+        // target two is even attempted.
+        struct FlushSpy<'a> {
+            service: &'a InboxService,
+            id: String,
+            seen: RefCell<Vec<usize>>,
+        }
+        impl ConversionRunner for FlushSpy<'_> {
+            fn create_worktree(&self, t: &ConversionTarget) -> Result<String, String> {
+                // How many back-links are already persisted at this moment?
+                let n = match self.service.get(&self.id).expect("get").0 {
+                    InboxDraftView::Parsed(d) => d.frontmatter.conversions.len(),
+                    _ => 0,
+                };
+                self.seen.borrow_mut().push(n);
+                Ok(format!("/wt/{}", t.branch))
+            }
+            fn write_note(&self, _p: &str, _b: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn exclude_note(&self, _p: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn record_origin(&self, _p: &str, _d: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn send_prompt(&self, _t: &ConversionTarget, _p: &str) -> Result<(), String> {
+                Ok(())
+            }
+            fn now(&self) -> String {
+                "t".into()
+            }
+        }
+
+        let s = service();
+        let (id, base) = convertible(&s, "one");
+        let targets = vec![
+            base.clone(),
+            ConversionTarget {
+                branch: "two".into(),
+                ..base
+            },
+        ];
+        let spy = FlushSpy {
+            service: &s,
+            id: id.clone(),
+            seen: RefCell::new(Vec::new()),
+        };
+        s.convert(&id, &targets, &spy).expect("convert");
+
+        assert_eq!(
+            spy.seen.into_inner(),
+            vec![0, 1],
+            "target two should start with target one already recorded"
+        );
+    }
+
+    #[test]
+    fn an_unparseable_draft_cannot_be_converted() {
+        let s = service();
+        s.projects.add(ProjectEntry {
+            path: "/code/acme".into(),
+            name: "acme".into(),
+            added_at: 0,
+        });
+        let bad = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        std::fs::create_dir_all(s.store.dir()).expect("dir");
+        std::fs::write(
+            s.store.dir().join(format!("{bad}.md")),
+            "---\nstatus: [oops\n---\nbody\n",
+        )
+        .expect("write");
+
+        let target = ConversionTarget {
+            project_path: "/code/acme".into(),
+            branch: "x".into(),
+            base_branch: None,
+            agent_id: None,
+            prompt: "go".into(),
+        };
+        assert!(s.convert(bad, &[target], &StubRunner::new(&[])).is_err());
     }
 }
