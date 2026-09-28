@@ -2,6 +2,7 @@
 
 mod adapters;
 mod inbox_routes;
+mod inbox_runner;
 mod server;
 mod services;
 
@@ -122,6 +123,7 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         terminal,
         agent_stream: Arc::new(services::agent_stream::AgentStreamManager::new()),
         project_inits: Arc::new(services::project_init_service::ProjectInitTracker::new()),
+        inbox_jobs: Arc::new(services::inbox_jobs::ConversionJobManager::new()),
         inbox: Arc::new(services::inbox_service::InboxService::new(
             adapters::inbox_store::InboxStore::new(),
             adapters::projects_registry::ProjectsRegistry::new(),

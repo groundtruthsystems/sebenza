@@ -52,6 +52,8 @@ pub struct AppState {
     /// Global inbox: drafts live outside every project, so this is server-wide
     /// state rather than part of a `ProjectApp`.
     pub inbox: Arc<crate::services::inbox_service::InboxService>,
+    /// In-flight and recent conversion fan-outs. Server-wide, like the inbox.
+    pub inbox_jobs: Arc<crate::services::inbox_jobs::ConversionJobManager>,
     pub frontend_dist: Option<PathBuf>,
 }
 
@@ -319,6 +321,14 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/inbox/{id}/body",
             axum::routing::put(crate::inbox_routes::save_draft_body),
+        )
+        .route(
+            "/api/inbox/{id}/convert",
+            post(crate::inbox_routes::convert_draft),
+        )
+        .route(
+            "/api/inbox/jobs/{id}",
+            get(crate::inbox_routes::get_conversion_job),
         )
         // Per-project routes, scoped under `/<prefix>`.
         .route("/{prefix}/api/config", get(get_config))
@@ -1103,7 +1113,7 @@ struct SendPromptBody {
 }
 
 /// Terminal submit delay for the branch's agent: Codex needs 200ms, others 0.
-fn submit_delay_for_branch(app: &ProjectApp, branch: &str) -> u64 {
+pub fn submit_delay_for_branch(app: &ProjectApp, branch: &str) -> u64 {
     let Some(agent_name) = app
         .runtime
         .lock()
@@ -2253,15 +2263,16 @@ impl OutFrame {
     }
 }
 
-struct ResolvedTerminal {
-    worktree_id: String,
-    attach_target: TerminalAttachTarget,
+pub struct ResolvedTerminal {
+    #[allow(dead_code)]
+    pub worktree_id: String,
+    pub attach_target: TerminalAttachTarget,
 }
 
 /// Resolve the tmux window a branch's terminal attaches to. Reconciles once (to
 /// pick up a freshly-created session) if the runtime has no live session yet.
 /// Blocking — run via `spawn_blocking`.
-fn resolve_terminal_target(app: &ProjectApp, branch: &str) -> Result<ResolvedTerminal, String> {
+pub fn resolve_terminal_target(app: &ProjectApp, branch: &str) -> Result<ResolvedTerminal, String> {
     let mut runtime_state = app.runtime.lock().unwrap().get_worktree_by_branch(branch);
     let needs_reconcile = runtime_state
         .as_ref()

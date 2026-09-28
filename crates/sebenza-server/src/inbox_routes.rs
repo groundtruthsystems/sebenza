@@ -9,6 +9,9 @@ use crate::domain::model::{DraftStatus, FileRevision, InboxDraft, InboxDraftView
 use crate::domain::policies::{
     InboxGuard, InboxGuardDenial, guard_inbox_request, is_safe_project_path, origin_is_acceptable,
 };
+use crate::inbox_runner::ServerConversionRunner;
+use crate::services::inbox_convert::{ConversionTarget, validate_targets};
+use crate::services::inbox_jobs::JobSnapshot;
 use crate::services::inbox_service::{
     DraftSummary, InboxService, InboxServiceError, ListQuery, ProjectLink,
 };
@@ -378,4 +381,91 @@ pub async fn inbox_session(headers: HeaderMap) -> Result<Json<serde_json::Value>
     let token =
         crate::adapters::control_token::load_control_token().map_err(|e| ApiError::new(500, e))?;
     Ok(Json(serde_json::json!({ "token": token })))
+}
+
+// --- Conversion -----------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertBody {
+    pub targets: Vec<ConversionTarget>,
+}
+
+/// `POST /api/inbox/{id}/convert` — start a fan-out, return its job id.
+///
+/// Returns immediately: `git worktree add` plus a tmux launch is multiple
+/// seconds per target, far too long to hold a request open. Validation still
+/// happens synchronously, so a bad request is a 400 here rather than a job that
+/// fails a moment later.
+pub async fn convert_draft(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ConvertBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let svc = inbox(&state);
+
+    // Validate before promising a job id. `convert` re-validates inside the
+    // job, but a caller deserves the errors now, not by polling for them.
+    let known: Vec<String> = state
+        .manager
+        .list()
+        .iter()
+        .map(|a| a.path.clone())
+        .collect();
+    let errors = validate_targets(&body.targets, &known);
+    if !errors.is_empty() {
+        let detail = errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(ApiError::new(400, detail));
+    }
+    // A draft that does not parse has no body to copy into a worktree.
+    svc.get(&id)?;
+
+    let job_id = state.inbox_jobs.start(&id, body.targets.len());
+    let runner = ServerConversionRunner::new(state.clone());
+    let jobs = state.inbox_jobs.clone();
+    let targets = body.targets.clone();
+    let draft_id = id.clone();
+    let job = job_id.clone();
+
+    // The fan-out is blocking (git, tmux), so it owns a blocking thread rather
+    // than stalling the async runtime.
+    tokio::task::spawn_blocking(move || {
+        let span = tracing::info_span!("inbox_convert", job_id = %job, draft_id = %draft_id, targets = targets.len());
+        let _enter = span.enter();
+        match svc.convert_streaming(&draft_id, &targets, &runner, |outcome| {
+            tracing::info!(
+                branch = %outcome.branch,
+                project = %outcome.project_path,
+                outcome = %outcome.outcome,
+                "inbox conversion target finished"
+            );
+            jobs.push_outcome(&job, outcome.clone());
+        }) {
+            Ok(_) => jobs.finish(&job),
+            Err(e) => jobs.fail(&job, e.to_string()),
+        }
+    });
+
+    Ok(Json(serde_json::json!({ "jobId": job_id })))
+}
+
+/// `GET /api/inbox/jobs/{id}` — a job's state.
+///
+/// Exists for `sebenza-cli`, which is not a WebSocket client. An unknown id is
+/// a 404, and since job ids are ULIDs that is the whole access check.
+pub async fn get_conversion_job(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<JobSnapshot>, ApiError> {
+    state
+        .inbox_jobs
+        .snapshot(&id)
+        .map(Json)
+        .ok_or_else(|| ApiError::new(404, "Unknown conversion job".to_string()))
 }

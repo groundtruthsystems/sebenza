@@ -239,6 +239,16 @@ pub trait ConversionRunner {
 /// Where the draft copy lands inside a converted worktree.
 pub const NOTE_REL_PATH: &str = ".ai/sebenza/inbox-note.md";
 
+/// Where the back-reference to the originating draft lands.
+pub const ORIGIN_REL_PATH: &str = ".ai/sebenza/inbox-origin.json";
+
+/// Everything a conversion writes into a worktree, and therefore everything
+/// that must be excluded from git.
+///
+/// Excluding only the note is not enough: git reports an untracked *directory*
+/// whole, so one un-excluded sibling puts `.ai/` back in `git status`.
+pub const WRITTEN_REL_PATHS: [&str; 2] = [NOTE_REL_PATH, ORIGIN_REL_PATH];
+
 /// Run one wave of conversions.
 ///
 /// Per target, in order: create the worktree unprompted, write the note and
@@ -712,5 +722,22 @@ mod tests {
             seen.push(format!("{}:{}", o.branch, o.outcome));
         });
         assert_eq!(seen, vec!["one:created", "two:failed", "three:created"]);
+    }
+
+    #[test]
+    fn everything_conversion_writes_is_in_the_excluded_set() {
+        // Git reports an untracked directory whole, so one un-excluded sibling
+        // puts `.ai/` back in `git status` and the note stops being invisible.
+        // Anything added to a worktree by a conversion belongs in this list.
+        assert!(WRITTEN_REL_PATHS.contains(&NOTE_REL_PATH));
+        assert!(WRITTEN_REL_PATHS.contains(&ORIGIN_REL_PATH));
+        assert_eq!(WRITTEN_REL_PATHS.len(), 2);
+        for path in WRITTEN_REL_PATHS {
+            assert!(
+                path.starts_with(".ai/sebenza/"),
+                "{path} should live under the workspace dir"
+            );
+            assert!(!path.starts_with('/'), "{path} must be worktree-relative");
+        }
     }
 }

@@ -241,6 +241,18 @@ impl InboxService {
         targets: &[ConversionTarget],
         runner: &R,
     ) -> Result<Vec<ConversionOutcome>, InboxServiceError> {
+        self.convert_streaming(id, targets, runner, |_| {})
+    }
+
+    /// As [`Self::convert`], but `observe` is called with each outcome as it is
+    /// persisted — how a caller reports progress without waiting for the wave.
+    pub fn convert_streaming<R: ConversionRunner, F: FnMut(&ConversionOutcome)>(
+        &self,
+        id: &str,
+        targets: &[ConversionTarget],
+        runner: &R,
+        mut observe: F,
+    ) -> Result<Vec<ConversionOutcome>, InboxServiceError> {
         let draft = match self.store.get(id)? {
             InboxDraftView::Parsed(d) => d,
             InboxDraftView::Raw { id, error, .. } => {
@@ -274,6 +286,7 @@ impl InboxService {
                     },
                 );
             }
+            observe(outcome);
         });
 
         if status_after(draft.frontmatter.status, &outcomes) == DraftStatus::Promoted {
