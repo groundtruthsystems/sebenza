@@ -10,6 +10,7 @@ import {
 } from "./api";
 import MDEditor from "@uiw/react-md-editor";
 import NavRail from "./NavRail";
+import NewDraftDialog from "./NewDraftDialog";
 import { fetchProjects } from "./api";
 import { renderDraftMarkdown } from "./inboxMarkdown";
 import { createDebouncer, saveDraftBody, type DraftLike } from "./inbox-editor";
@@ -57,6 +58,9 @@ export default function InboxView() {
   // The rail's project-scoped destinations need a project to point at; with
   // none registered they are hidden rather than linking nowhere.
   const [projectBase, setProjectBase] = useState("");
+  const [showNewDialog, setShowNewDialog] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState("");
 
   const loadedRef = useRef<DraftLike>({ body: "", bodyHash: "" });
   const debouncer = useMemo(() => createDebouncer(AUTOSAVE_MS), []);
@@ -174,15 +178,19 @@ export default function InboxView() {
     await persist(body);
   };
 
-  const onCreate = async () => {
-    const title = window.prompt("Draft title");
-    if (!title) return;
+  const onCreate = async (title: string) => {
+    setCreating(true);
+    setCreateError("");
     try {
       const d = (await createInboxDraft(title)) as Draft;
+      setShowNewDialog(false);
       await refresh();
       await open(d.id);
     } catch (err) {
-      setStatus((err as Error).message);
+      // Reported in the dialog, which stays open so the title is not lost.
+      setCreateError((err as Error).message);
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -220,6 +228,14 @@ export default function InboxView() {
   return (
     <div className="nav-shell">
       <NavRail active="inbox" projectBase={projectBase} />
+      {showNewDialog && (
+        <NewDraftDialog
+          loading={creating}
+          error={createError}
+          oncreate={(title) => void onCreate(title)}
+          oncancel={() => setShowNewDialog(false)}
+        />
+      )}
       <div className="inbox" data-testid="inbox">
       <aside className="inbox-list">
         <div className="inbox-list-head">
@@ -229,7 +245,13 @@ export default function InboxView() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <button type="button" onClick={onCreate}>
+          <button
+            type="button"
+            onClick={() => {
+              setCreateError("");
+              setShowNewDialog(true);
+            }}
+          >
             New
           </button>
         </div>
