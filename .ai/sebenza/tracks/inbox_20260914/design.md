@@ -97,7 +97,7 @@ flowchart TD
     more -- yes --> add
     more -- no --> valid{"all targets valid?"}
     valid -- no --> errs["Show per-target errors"] --> add
-    valid -- yes --> run["Per target: create worktree (unprompted) -&gt;<br/>write copy + .gitignore -&gt;<br/>send that target's prompt"]
+    valid -- yes --> run["Per target: create worktree (unprompted) -&gt;<br/>write copy + info/exclude -&gt;<br/>send that target's prompt"]
     run --> flush["Merge this target's outcome into<br/>job-owned conversions[] (crash-safe)"]
     flush --> nextt{"more targets?"}
     nextt -- yes --> run
@@ -239,7 +239,7 @@ must live in `sebenza-server`: `project()` is private and calls `app.touch()`.
 
 A worktree cannot hold a file before it exists, and `create_worktrees()` launches *and* prompts the
 agent the instant it returns — so a target runs in three steps: create the worktree with **no** creation
-prompt, write the draft copy and its `.gitignore` entry, then send that target's prompt through the
+prompt, write the draft copy and its `info/exclude` entry, then send that target's prompt through the
 existing `send_worktree_prompt` path. Same mechanism, later in the sequence; the copy is ignored and
 present before the agent is ever prompted. Targets report independently; one failure rolls back nothing.
 
@@ -286,9 +286,9 @@ flowchart TD
 **Decisions**
 
 - A `ProjectLookup` port resolves each target's project; its impl stays in `sebenza-server`, where `project()` lives.
-- Seed via the existing `send_worktree_prompt` path, not `creation_prompt`, so the copy and `.gitignore` land first.
+- Seed via the existing `send_worktree_prompt` path, not `creation_prompt`, so the copy and its exclusion land first.
 - `/api/inbox/*` are global routes reusing the live `hubApi`/`api` dual-client and `registry` reserved-prefix precedents.
-- Create worktree unprompted → write copy + `.gitignore` → send prompt; no window with an un-ignored copy.
+- Exclude the copy via the worktree's own `$GIT_DIR/info/exclude`; `.gitignore` is tracked and editing it dirties the repo.
 - Conflict detection echoes `{mtime, body_hash}` from GET back on PUT; frontmatter is merged, never overwritten.
 
 **Risks**
@@ -490,7 +490,7 @@ flowchart TD
 | Tampering / EoP | XSS via the live preview: `marked` output injected unsanitized, mermaid `securityLevel: "loose"` permitting raw HTML and `click` directives that execute page JS | **High** | Do not reuse `TrackMarkdown.tsx` unmodified — sanitize (DOMPurify) before `dangerouslySetInnerHTML` and set mermaid `securityLevel: "strict"` on the Inbox path, accepting the loss of `click` diagrams |
 | Information disclosure | Secrets pasted into draft free text persist unencrypted in `$HOME`, are copied verbatim into a real git checkout where they can be committed and pushed, and are sent to a third-party model provider by the agent CLI | **High** | `0600`/`0700` on the store; an advisory pre-conversion secret-pattern scan that warns before the copy and the launch; document plainly that Inbox is not a secrets vault |
 | Elevation of privilege | Prompt injection: draft text pasted from an untrusted source becomes an agent's seed prompt, with the draft file on disk beside a real checkout and a shell-capable agent | **High** | Not solvable at this layer; bound the blast radius — prefer the existing sandboxed runtimes (`lxc` / Apple `container`), keep filesystem scope to the one worktree, and record draft provenance for a future review step |
-| Information disclosure | The draft copy lands in a real checkout; the likeliest leak is not an agent but an ordinary `git add -A` by the developer | Medium | The copy lands at `<worktree>/.ai/sebenza/inbox-note.md`, written together with its `.gitignore` entry after creation and before the agent is prompted — never un-ignored |
+| Information disclosure | The draft copy lands in a real checkout; the likeliest leak is not an agent but an ordinary `git add -A` by the developer | Medium | The copy lands at `<worktree>/.ai/sebenza/inbox-note.md` and is excluded via the worktree's own `$GIT_DIR/info/exclude` — **not** `.gitignore`, a tracked file whose edit would dirty every converted worktree. Both happen after creation and before the agent is prompted, so it is never un-ignored |
 | Repudiation | Nothing records which draft — and which pasted source — produced which worktree and agent launch | Medium | Conversion writes a structured audit line (draft id, target project, branch, agent, timestamp); frontmatter back-links and the worktree's `meta.json` carry the same |
 | Denial of service | A conversion request can be sized arbitrarily, multiplying `git worktree add` + agent launch | Low | Cap targets per request (≈10), enforced in the Zod request schema and re-checked server-side |
 

@@ -60,7 +60,7 @@ promoted, and can convert again.
 
 21. A convert request carries 1–10 targets — project path, branch, base branch, agent id, prompt — capped in the Zod schema and re-checked server-side.
 22. `POST /api/inbox/:id/convert` returns a ULID job id immediately and does not block on the fan-out.
-23. Per target, in order: create the worktree unprompted, write the draft copy and its `.gitignore` entry, then send that target's prompt via the existing prompt path.
+23. Per target, in order: create the worktree unprompted, write the draft copy and exclude it via the worktree's own `$GIT_DIR/info/exclude`, then send that target's prompt via the existing prompt path.
 24. The copy lands at `<worktree>/.ai/sebenza/inbox-note.md` and holds the whole draft body.
 25. Each target's outcome merges into `conversions[]` as that target completes.
 26. One target failing neither aborts nor rolls back the others; every outcome records its error.
