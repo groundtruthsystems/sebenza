@@ -312,3 +312,11 @@ dialog textarea:focus {
   white-space: pre-wrap;
   font-size: 12px;
 }
+.inbox-error {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--danger, #ff5252);
+  background: rgba(255, 82, 82, 0.08);
+  border-bottom: 1px solid var(--danger, #ff5252);
+  font-size: 12px;
+}

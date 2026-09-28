@@ -255,6 +255,14 @@ export default function InboxView() {
       </aside>
 
       <section className="inbox-editor">
+        {/* Shown outside the editor header too: a failure to open or list a
+            draft has no header to report itself in, and silence is the one
+            outcome a user cannot act on. */}
+        {!draft && status && (
+          <p className="inbox-error" role="alert">
+            {status}
+          </p>
+        )}
         {!draft && <p className="inbox-empty">Select a draft, or create one.</p>}
         {draft?.raw && (
           <div className="inbox-raw">

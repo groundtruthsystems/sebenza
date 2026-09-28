@@ -26,6 +26,12 @@ function loadMermaid() {
         theme: "dark",
         // strict: no raw HTML in diagrams, no click handlers.
         securityLevel: "strict",
+        // Render node labels as SVG <text> rather than HTML inside a
+        // <foreignObject>. The sanitizer strips foreignObject - it is a way to
+        // smuggle arbitrary HTML through an SVG - which would otherwise leave
+        // every node an empty box.
+        flowchart: { htmlLabels: false },
+        htmlLabels: false,
       });
       return m.default;
     });
