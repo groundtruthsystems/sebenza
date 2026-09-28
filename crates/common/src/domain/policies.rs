@@ -219,8 +219,211 @@ pub fn derive_project_prefix<'a>(
     format!("{base}-{}", crate::util::id::random_hex(4))
 }
 
+/// Why a request to a mutating inbox route was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboxGuardDenial {
+    /// No bearer token, or one that does not match the control token.
+    BadToken,
+    /// `Origin` or `Referer` names an origin that is not this server.
+    CrossOrigin,
+}
+
+/// The decision for one request to `/api/inbox`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboxGuard {
+    Allow,
+    Deny(InboxGuardDenial),
+}
+
+/// True for methods that change state, which are the ones the guard covers.
+/// Reads are left to the browser's same-origin policy: with no CORS layer on
+/// this server, a cross-origin page cannot read a response it provokes.
+pub fn is_mutating_method(method: &str) -> bool {
+    matches!(
+        method.to_ascii_uppercase().as_str(),
+        "POST" | "PUT" | "PATCH" | "DELETE"
+    )
+}
+
+/// Reduce a URL to scheme://host:port, the only part an origin comparison may
+/// consider. Returns `None` for anything that is not an absolute URL.
+fn origin_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme.is_empty() || rest.is_empty() {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        authority.to_ascii_lowercase()
+    ))
+}
+
+/// Gate a request to a mutating `/api/inbox` route.
+///
+/// Both controls apply and neither substitutes for the other: the bearer token
+/// is always required, and an `Origin`/`Referer` naming another origin is
+/// always refused. An absent `Origin` is *not* an exemption — it is the normal
+/// case for `sebenza-cli`, which still has to present the token.
+///
+/// `Origin` is preferred over `Referer`; `Referer` is only consulted when no
+/// `Origin` is present, since a browser omits `Origin` on some same-origin
+/// requests but sends `Referer`.
+pub fn guard_inbox_request(
+    method: &str,
+    bearer: Option<&str>,
+    origin: Option<&str>,
+    referer: Option<&str>,
+    expected_token: &str,
+    self_origin: &str,
+) -> InboxGuard {
+    if !is_mutating_method(method) {
+        return InboxGuard::Allow;
+    }
+    match bearer {
+        Some(token) if !expected_token.is_empty() && token == expected_token => {}
+        _ => return InboxGuard::Deny(InboxGuardDenial::BadToken),
+    }
+    let want = origin_of(self_origin);
+    let claimed = origin
+        .and_then(origin_of)
+        .or_else(|| referer.and_then(origin_of));
+    match (claimed, want) {
+        (Some(got), Some(want)) if got != want => InboxGuard::Deny(InboxGuardDenial::CrossOrigin),
+        (Some(_), None) => InboxGuard::Deny(InboxGuardDenial::CrossOrigin),
+        _ => InboxGuard::Allow,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    const TOKEN: &str = "s3cret-control-token";
+    const SELF: &str = "http://127.0.0.1:5111";
+
+    fn guard(method: &str, bearer: Option<&str>, origin: Option<&str>) -> InboxGuard {
+        guard_inbox_request(method, bearer, origin, None, TOKEN, SELF)
+    }
+
+    #[test]
+    fn reads_are_not_gated_by_this_guard() {
+        assert_eq!(guard("GET", None, None), InboxGuard::Allow);
+        assert_eq!(
+            guard("HEAD", None, Some("https://evil.test")),
+            InboxGuard::Allow
+        );
+    }
+
+    #[test]
+    fn mutations_require_the_token() {
+        for method in ["POST", "PUT", "PATCH", "DELETE", "post"] {
+            assert_eq!(
+                guard(method, None, None),
+                InboxGuard::Deny(InboxGuardDenial::BadToken),
+                "{method} without a token"
+            );
+            assert_eq!(
+                guard(method, Some("wrong"), None),
+                InboxGuard::Deny(InboxGuardDenial::BadToken),
+                "{method} with a wrong token"
+            );
+        }
+    }
+
+    #[test]
+    fn an_absent_origin_never_waives_the_token() {
+        // sebenza-cli sends no Origin. That must not become a way past the
+        // token - the whole point of requiring both.
+        assert_eq!(
+            guard("POST", None, None),
+            InboxGuard::Deny(InboxGuardDenial::BadToken)
+        );
+        assert_eq!(guard("POST", Some(TOKEN), None), InboxGuard::Allow);
+    }
+
+    #[test]
+    fn a_cross_origin_request_is_refused_even_with_a_valid_token() {
+        assert_eq!(
+            guard("POST", Some(TOKEN), Some("https://evil.test")),
+            InboxGuard::Deny(InboxGuardDenial::CrossOrigin)
+        );
+        assert_eq!(
+            guard("POST", Some(TOKEN), Some("http://127.0.0.1:9999")),
+            InboxGuard::Deny(InboxGuardDenial::CrossOrigin),
+            "same host, different port is a different origin"
+        );
+        assert_eq!(
+            guard("POST", Some(TOKEN), Some("https://127.0.0.1:5111")),
+            InboxGuard::Deny(InboxGuardDenial::CrossOrigin),
+            "same host and port, different scheme is a different origin"
+        );
+    }
+
+    #[test]
+    fn a_same_origin_request_with_a_token_is_allowed() {
+        assert_eq!(guard("POST", Some(TOKEN), Some(SELF)), InboxGuard::Allow);
+        assert_eq!(
+            guard("POST", Some(TOKEN), Some("http://127.0.0.1:5111/inbox")),
+            InboxGuard::Allow,
+            "Origin comparison ignores path"
+        );
+        assert_eq!(
+            guard("POST", Some(TOKEN), Some("HTTP://127.0.0.1:5111")),
+            InboxGuard::Allow,
+            "scheme and host compare case-insensitively"
+        );
+    }
+
+    #[test]
+    fn referer_is_consulted_only_when_origin_is_absent() {
+        assert_eq!(
+            guard_inbox_request(
+                "POST",
+                Some(TOKEN),
+                None,
+                Some("https://evil.test/x"),
+                TOKEN,
+                SELF
+            ),
+            InboxGuard::Deny(InboxGuardDenial::CrossOrigin)
+        );
+        assert_eq!(
+            guard_inbox_request(
+                "POST",
+                Some(TOKEN),
+                None,
+                Some("http://127.0.0.1:5111/x"),
+                TOKEN,
+                SELF
+            ),
+            InboxGuard::Allow
+        );
+        // A good Origin wins over a bad Referer: Origin is the stronger signal.
+        assert_eq!(
+            guard_inbox_request(
+                "POST",
+                Some(TOKEN),
+                Some(SELF),
+                Some("https://evil.test/x"),
+                TOKEN,
+                SELF
+            ),
+            InboxGuard::Allow
+        );
+    }
+
+    #[test]
+    fn an_empty_expected_token_never_authorizes() {
+        // A server that failed to load its control token must not fall open.
+        assert_eq!(
+            guard_inbox_request("POST", Some(""), None, None, "", SELF),
+            InboxGuard::Deny(InboxGuardDenial::BadToken)
+        );
+    }
     use super::*;
 
     #[test]
