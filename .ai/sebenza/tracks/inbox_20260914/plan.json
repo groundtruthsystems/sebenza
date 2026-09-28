@@ -127,14 +127,14 @@
     {
       "id": "phase-3",
       "name": "Editor and sanitized preview",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Write tests for the sanitized renderer",
           "description": "Assert injected HTML is inert and a mermaid click directive cannot execute page script.",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
