@@ -215,15 +215,17 @@
           "id": "phase-4-task-3",
           "name": "Write tests for the per-target sequence",
           "description": "Assert the worktree is created unprompted, the copy and .gitignore land, then the prompt is sent.",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "5bb504c"
         },
         {
           "id": "phase-4-task-4",
           "name": "Implement the per-target conversion sequence",
           "description": "Create the worktree, write inbox-note.md with its .gitignore entry, then send the prompt via the existing path.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "5bb504c"
         },
         {
           "id": "phase-4-task-5",
