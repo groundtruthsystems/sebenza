@@ -150,29 +150,33 @@
           "id": "phase-3-task-3",
           "name": "Write tests for autosave and conflict handling",
           "description": "Cover debounced save, a body_hash conflict offering reload or force-write, and a frontmatter-only change raising none.",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "e8f63c4"
         },
         {
           "id": "phase-3-task-4",
           "name": "Implement InboxDraftEditor",
           "description": "Build the split editor with live preview, debounced autosave and body-only force-write.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "e8f63c4"
         },
         {
           "id": "phase-3-task-5",
           "name": "Write tests for InboxList and route dispatch",
           "description": "Cover search, the Dropped filter, project linking, and that a project named inbox cannot shadow the route.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "e8f63c4"
         },
         {
           "id": "phase-3-task-6",
           "name": "Implement InboxList and the /inbox route",
           "description": "Build the list view and extend the reserved-prefix dispatch in api.ts and main.tsx.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "e8f63c4"
         },
         {
           "id": "phase-3-task-7",
