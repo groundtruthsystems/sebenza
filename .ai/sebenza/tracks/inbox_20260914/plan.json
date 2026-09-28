@@ -257,7 +257,7 @@
     {
       "id": "phase-5",
       "name": "Jobs, progress and the convert dialog",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -296,15 +296,17 @@
           "id": "phase-5-task-5",
           "name": "Write tests for restart resume",
           "description": "Assert progress after a restart is read from frontmatter rather than memory.",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "eda83cd"
         },
         {
           "id": "phase-5-task-6",
           "name": "Implement resume and tracing",
           "description": "Resume job state from the draft and emit job-id-correlated spans carrying draft, project, branch and outcome.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "eda83cd"
         },
         {
           "id": "phase-5-task-7",
@@ -326,10 +328,12 @@
           "id": "phase-5-task-9",
           "name": "Phase verification & checkpoint",
           "description": "Run the phase verification and checkpointing protocol per workflow.md.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "eda83cd"
         }
-      ]
+      ],
+      "checkpoint_sha": "eda83cd"
     },
     {
       "id": "phase-6",
