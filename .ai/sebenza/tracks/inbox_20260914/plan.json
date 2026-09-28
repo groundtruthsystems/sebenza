@@ -215,7 +215,7 @@
           "id": "phase-4-task-3",
           "name": "Write tests for the per-target sequence",
           "description": "Assert the worktree is created unprompted, the copy and .gitignore land, then the prompt is sent.",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
