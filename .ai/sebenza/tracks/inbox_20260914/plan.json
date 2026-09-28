@@ -5,7 +5,7 @@
     {
       "id": "phase-1",
       "name": "Draft store and model",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -44,10 +44,12 @@
           "id": "phase-1-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Run the phase verification and checkpointing protocol per workflow.md.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "e3d5247"
         }
-      ]
+      ],
+      "checkpoint_sha": "e3d5247"
     },
     {
       "id": "phase-2",

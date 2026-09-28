@@ -15,23 +15,58 @@
       "description": "Inbox: markdown/mermaid drafts designed with a builtin agent and converted into worktrees on one or more projects",
       "status": "doing",
       "created_at": "2026-09-14T00:00:00Z",
-      "updated_at": "2026-09-21T00:00:00Z",
+      "updated_at": "2026-09-28T00:00:00Z",
       "design_path": "./tracks/inbox_20260914/design.md",
       "spec_path": "./tracks/inbox_20260914/spec.md",
       "plan_path": "./tracks/inbox_20260914/plan.json",
       "phases_summary": [
-        { "id": "phase-1", "name": "Draft store and model", "status": "doing" },
-        { "id": "phase-2", "name": "Service, guarded routes and CLI", "status": "backlog" },
-        { "id": "phase-3", "name": "Editor and sanitized preview", "status": "backlog" },
-        { "id": "phase-4", "name": "Agent collaboration on a draft", "status": "backlog" },
-        { "id": "phase-5", "name": "Conversion fan-out", "status": "backlog" },
-        { "id": "phase-6", "name": "Jobs, progress and the convert dialog", "status": "backlog" },
-        { "id": "phase-7", "name": "Sandbox preference, audit and docs", "status": "backlog" }
+        {
+          "id": "phase-1",
+          "name": "Draft store and model",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-2",
+          "name": "Service, guarded routes and CLI",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-3",
+          "name": "Editor and sanitized preview",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-4",
+          "name": "Agent collaboration on a draft",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-5",
+          "name": "Conversion fan-out",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-6",
+          "name": "Jobs, progress and the convert dialog",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-7",
+          "name": "Sandbox preference, audit and docs",
+          "status": "backlog",
+          "blocked_reason": null
+        }
       ],
       "progress": {
         "total_tasks": 49,
-        "completed_tasks": 4,
-        "percentage": 8
+        "completed_tasks": 5,
+        "percentage": 10
       }
     },
     {
@@ -45,14 +80,46 @@
       "spec_path": "./tracks/platform_20260917/spec.md",
       "plan_path": "./tracks/platform_20260917/plan.json",
       "phases_summary": [
-        { "id": "phase-1", "name": "Platform domain, SQLite, and /board", "status": "backlog" },
-        { "id": "phase-2", "name": "Home chat, chat jail, files catalog", "status": "backlog" },
-        { "id": "phase-3", "name": "Inbox, canvas, seed from files", "status": "backlog" },
-        { "id": "phase-4", "name": "Dispatch on all-in-one (ItemRuntime)", "status": "backlog" },
-        { "id": "phase-5", "name": "Human asks", "status": "backlog" },
-        { "id": "phase-6", "name": "Remote S3 artifacts", "status": "backlog" },
-        { "id": "phase-7", "name": "Cluster and Headscale", "status": "backlog" },
-        { "id": "phase-8", "name": "Ops", "status": "backlog" }
+        {
+          "id": "phase-1",
+          "name": "Platform domain, SQLite, and /board",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2",
+          "name": "Home chat, chat jail, files catalog",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3",
+          "name": "Inbox, canvas, seed from files",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4",
+          "name": "Dispatch on all-in-one (ItemRuntime)",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5",
+          "name": "Human asks",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6",
+          "name": "Remote S3 artifacts",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-7",
+          "name": "Cluster and Headscale",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-8",
+          "name": "Ops",
+          "status": "backlog"
+        }
       ],
       "progress": {
         "total_tasks": 48,
