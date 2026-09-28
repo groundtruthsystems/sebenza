@@ -11,6 +11,7 @@ import {
 import MDEditor from "@uiw/react-md-editor";
 import NavRail from "./NavRail";
 import NewDraftDialog from "./NewDraftDialog";
+import ConfirmDialog from "./ConfirmDialog";
 import { fetchProjects } from "./api";
 import { renderDraftMarkdown } from "./inboxMarkdown";
 import { createDebouncer, saveDraftBody, type DraftLike } from "./inbox-editor";
@@ -59,6 +60,9 @@ export default function InboxView() {
   // none registered they are hidden rather than linking nowhere.
   const [projectBase, setProjectBase] = useState("");
   const [showNewDialog, setShowNewDialog] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
 
@@ -196,21 +200,22 @@ export default function InboxView() {
 
   const onDelete = async () => {
     if (!draft) return;
+    // `confirmed` is what lets the server delete a promoted draft; it refuses
+    // otherwise, so the dialog above is the gate, not a formality.
     const promoted = draft.status === "Promoted";
-    const ok = window.confirm(
-      promoted
-        ? "This draft has been converted into worktrees. Deleting it discards the only record of the prompts that were sent. Delete anyway?"
-        : `Delete "${draft.title}"?`,
-    );
-    if (!ok) return;
+    setDeleting(true);
+    setDeleteError("");
     try {
       await deleteInboxDraft(draft.id, promoted);
+      setConfirmDelete(false);
       setDraft(null);
       setSelectedId(null);
       setBody("");
       await refresh();
     } catch (err) {
-      setStatus((err as Error).message);
+      setDeleteError((err as Error).message);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -234,6 +239,20 @@ export default function InboxView() {
           error={createError}
           oncreate={(title) => void onCreate(title)}
           oncancel={() => setShowNewDialog(false)}
+        />
+      )}
+      {confirmDelete && draft && (
+        <ConfirmDialog
+          message={
+            draft.status === "Promoted"
+              ? `"${draft.title}" has been converted into worktrees. Deleting it discards the only record of the prompts that were sent. Delete anyway?`
+              : `Delete "${draft.title}"?`
+          }
+          confirmLabel="Delete"
+          loading={deleting}
+          error={deleteError}
+          onconfirm={() => void onDelete()}
+          oncancel={() => setConfirmDelete(false)}
         />
       )}
       <div className="inbox" data-testid="inbox">
@@ -318,7 +337,13 @@ export default function InboxView() {
                 <button type="button" onClick={() => void onDrop()}>
                   Drop
                 </button>
-                <button type="button" onClick={() => void onDelete()}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteError("");
+                    setConfirmDelete(true);
+                  }}
+                >
                   Delete
                 </button>
               </div>

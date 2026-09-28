@@ -1,17 +1,18 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 const drafts = vi.fn();
 const draft = vi.fn();
 const patch = vi.fn();
+const del = vi.fn();
 
 vi.mock("./api", () => ({
   fetchInboxDrafts: (...a: unknown[]) => drafts(...a),
   fetchInboxDraft: (...a: unknown[]) => draft(...a),
   patchInboxDraft: (...a: unknown[]) => patch(...a),
   createInboxDraft: vi.fn(),
-  deleteInboxDraft: vi.fn(),
+  deleteInboxDraft: (...a: unknown[]) => del(...a),
   saveInboxDraftBody: vi.fn(),
   loadInboxControlToken: () => Promise.resolve(),
   fetchProjects: () => Promise.resolve([{ prefix: "demo", name: "demo" }]),
@@ -24,6 +25,17 @@ vi.mock("./inboxMarkdown", () => ({
 }));
 
 import InboxView from "./InboxView";
+
+beforeAll(() => {
+  if (!HTMLDialogElement.prototype.showModal) {
+    HTMLDialogElement.prototype.showModal = function () {
+      this.open = true;
+    };
+    HTMLDialogElement.prototype.close = function () {
+      this.open = false;
+    };
+  }
+});
 
 const summary = (over: Partial<Record<string, unknown>> = {}) => ({
   id: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -134,5 +146,60 @@ describe("InboxView", () => {
     await user.click(await screen.findByText("(unparseable)"));
     expect(await screen.findByText(/bad yaml/)).toBeInTheDocument();
     expect(screen.queryByLabelText("Draft body")).not.toBeInTheDocument();
+  });
+
+  it("confirms before deleting, and warns harder for a promoted draft", async () => {
+    const user = userEvent.setup();
+    drafts.mockResolvedValue({
+      drafts: [summary({ title: "Shipped", status: "Promoted" })],
+    });
+    draft.mockResolvedValue({
+      id: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      title: "Shipped",
+      status: "Promoted",
+      body: "x",
+      bodyHash: "h",
+      project: null,
+      raw: null,
+    });
+    del.mockResolvedValue({ ok: true });
+
+    render(<InboxView />);
+    await user.click(await screen.findByText("Shipped"));
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+
+    // The warning names the real consequence, not a generic "are you sure".
+    expect(
+      await screen.findByText(/only record of the prompts/i),
+    ).toBeInTheDocument();
+    expect(del).not.toHaveBeenCalled();
+
+    // Two "Delete" buttons exist once the dialog is up: the toolbar's and the
+    // dialog's confirm. The confirm is the one that acts.
+    const dialog = document.querySelector("dialog")!;
+    await user.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      // `confirmed` must be true or the server refuses a promoted draft.
+      expect(del).toHaveBeenCalledWith("01ARZ3NDEKTSV4RRFFQ69G5FAV", true),
+    );
+  });
+
+  it("cancelling the delete leaves the draft alone", async () => {
+    const user = userEvent.setup();
+    draft.mockResolvedValue({
+      id: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      title: "Rework the scorer",
+      status: "Draft",
+      body: "x",
+      bodyHash: "h",
+      project: null,
+      raw: null,
+    });
+    render(<InboxView />);
+    await user.click(await screen.findByText("Rework the scorer"));
+    await user.click(await screen.findByRole("button", { name: "Delete" }));
+    const dialog = document.querySelector("dialog")!;
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(del).not.toHaveBeenCalled();
   });
 });
