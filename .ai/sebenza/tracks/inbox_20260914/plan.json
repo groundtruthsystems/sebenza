@@ -338,52 +338,59 @@
     {
       "id": "phase-6",
       "name": "Sandbox preference, audit and docs",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-6-task-1",
           "name": "Write tests for sandbox preference",
           "description": "Assert a sandboxed runtime is used when present and conversion proceeds with a warning when absent.",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "9339eaa"
         },
         {
           "id": "phase-6-task-2",
           "name": "Implement sandbox preference and warning",
           "description": "Prefer lxc or Apple container for converted worktrees and surface the advisory warning.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "9339eaa"
         },
         {
           "id": "phase-6-task-3",
           "name": "Write tests for the advisory scan and audit line",
           "description": "Cover secret-pattern detection before conversion and the structured audit record per target.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "9339eaa"
         },
         {
           "id": "phase-6-task-4",
           "name": "Implement the advisory scan and audit logging",
           "description": "Warn on likely secrets before the copy and launch, and write the per-target audit line.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "9339eaa"
         },
         {
           "id": "phase-6-task-5",
           "name": "Document the Inbox",
           "description": "Cover the store location, backup implications of state outside git, and the CLI surface in the project docs.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "9339eaa"
         },
         {
           "id": "phase-6-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Run the phase verification and checkpointing protocol per workflow.md.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "9339eaa"
         }
-      ]
+      ],
+      "checkpoint_sha": "9339eaa"
     }
   ]
 }
