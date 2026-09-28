@@ -478,6 +478,19 @@ pub async fn get_conversion_job(
         .ok_or_else(|| ApiError::new(404, "Unknown conversion job".to_string()))
 }
 
+/// `GET /api/inbox/{id}/conversions` — a draft's durable conversion history.
+///
+/// The job manager is in-memory and dies with the process, so after a restart
+/// this is the only thing that still knows what a wave produced. It reads the
+/// draft's own frontmatter, which is why each outcome is flushed as it happens.
+pub async fn get_draft_conversions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let history = inbox(&state).conversion_history(&id)?;
+    Ok(Json(serde_json::json!({ "conversions": history })))
+}
+
 /// `GET /api/inbox/jobs/{id}/stream` — live per-target progress.
 ///
 /// The server's first non-project-prefixed WebSocket, because a conversion is

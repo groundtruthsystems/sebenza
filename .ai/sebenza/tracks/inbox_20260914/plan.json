@@ -296,7 +296,7 @@
           "id": "phase-5-task-5",
           "name": "Write tests for restart resume",
           "description": "Assert progress after a restart is read from frontmatter rather than memory.",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {

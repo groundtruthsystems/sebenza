@@ -302,6 +302,35 @@ impl InboxService {
         Ok(outcomes)
     }
 
+    /// A draft's conversion history, as recorded in its own frontmatter.
+    ///
+    /// This is the durable record. The in-memory job manager is a cache that
+    /// dies with the process; after a restart this is the only thing that
+    /// still knows what a wave produced, which is why each outcome is flushed
+    /// as it happens rather than at the end.
+    pub fn conversion_history(
+        &self,
+        id: &str,
+    ) -> Result<Vec<ConversionOutcome>, InboxServiceError> {
+        let draft = match self.store.get(id)? {
+            InboxDraftView::Parsed(d) => d,
+            InboxDraftView::Raw { id, error, .. } => {
+                return Err(InboxServiceError::Store(InboxStoreError::Unparsed {
+                    id,
+                    error,
+                }));
+            }
+        };
+        Ok(draft
+            .frontmatter
+            .conversions
+            .into_iter()
+            // A hand-edited or older entry that no longer deserializes is
+            // skipped rather than failing the read: partial history beats none.
+            .filter_map(|v| serde_yaml::from_value(v).ok())
+            .collect())
+    }
+
     /// Every editor-authored frontmatter change goes through here, so the
     /// author is stated once and the store's ownership rules do the rest.
     fn edit(&self, id: &str, patch: FrontmatterPatch) -> Result<InboxDraft, InboxServiceError> {
@@ -791,5 +820,58 @@ mod tests {
             prompt: "go".into(),
         };
         assert!(s.convert(bad, &[target], &StubRunner::new(&[])).is_err());
+    }
+
+    #[test]
+    fn conversion_history_survives_a_lost_job() {
+        // The job manager is in-memory and dies with the process. What a wave
+        // produced must still be knowable afterwards, or a restart strands
+        // real worktrees with no record of which draft made them.
+        let s = service();
+        let (id, base) = convertible(&s, "kept");
+        let targets = vec![
+            base.clone(),
+            ConversionTarget {
+                branch: "lost".into(),
+                ..base
+            },
+        ];
+        s.convert(&id, &targets, &StubRunner::new(&["lost"]))
+            .expect("convert");
+
+        // Nothing in memory is consulted here — this reads the file.
+        let fresh = InboxService::new(
+            InboxStore::with_dir(s.store.dir().to_path_buf()),
+            ProjectsRegistry::with_file(s.projects.file().to_path_buf()),
+        );
+        let history = fresh.conversion_history(&id).expect("history");
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].branch, "kept");
+        assert!(history[0].is_created());
+        assert_eq!(history[1].branch, "lost");
+        assert!(!history[1].is_created());
+        assert_eq!(history[1].error.as_deref(), Some("nope"));
+        // The prompt is part of the record: it is the only copy of what was
+        // asked of that worktree.
+        assert_eq!(history[0].prompt, "build it");
+    }
+
+    #[test]
+    fn a_partially_written_history_still_reads() {
+        let s = service();
+        let (id, base) = convertible(&s, "one");
+        s.convert(&id, std::slice::from_ref(&base), &StubRunner::new(&[]))
+            .expect("convert");
+
+        // Something hand-edited an entry into nonsense. The rest must survive.
+        let path = s.store.dir().join(format!("{id}.md"));
+        let text = std::fs::read_to_string(&path).expect("read");
+        let broken = text.replace("conversions:", "conversions:\n- 42");
+        std::fs::write(&path, broken).expect("write");
+
+        let history = s.conversion_history(&id).expect("history");
+        assert_eq!(history.len(), 1, "the good entry still reads");
+        assert_eq!(history[0].branch, "one");
     }
 }

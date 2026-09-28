@@ -30,9 +30,13 @@ impl ProjectsRegistry {
         }
     }
 
-    #[cfg(test)]
     pub fn with_file(file: PathBuf) -> Self {
         ProjectsRegistry { file }
+    }
+
+    /// The backing file, so another instance can be opened over the same state.
+    pub fn file(&self) -> &std::path::Path {
+        &self.file
     }
 
     pub fn list(&self) -> Vec<ProjectEntry> {

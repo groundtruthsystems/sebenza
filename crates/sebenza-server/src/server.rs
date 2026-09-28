@@ -334,6 +334,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/inbox/jobs/{id}/stream",
             get(crate::inbox_routes::ws_conversion_job),
         )
+        .route(
+            "/api/inbox/{id}/conversions",
+            get(crate::inbox_routes::get_draft_conversions),
+        )
         // Per-project routes, scoped under `/<prefix>`.
         .route("/{prefix}/api/config", get(get_config))
         .route("/{prefix}/api/branches", get(get_branches))
