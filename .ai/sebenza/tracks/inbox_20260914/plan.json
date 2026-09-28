@@ -264,15 +264,17 @@
           "id": "phase-5-task-1",
           "name": "Write tests for the job manager",
           "description": "Cover ULID job ids, per-job isolation, and that an unknown or guessed id cannot subscribe.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "391cfec"
         },
         {
           "id": "phase-5-task-2",
           "name": "Implement the conversion job manager",
           "description": "Add the job-id-keyed manager and run the fan-out as a background task.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "391cfec"
         },
         {
           "id": "phase-5-task-3",
