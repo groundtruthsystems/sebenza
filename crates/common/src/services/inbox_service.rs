@@ -9,7 +9,7 @@ use crate::adapters::inbox_store::{
     FrontmatterAuthor, FrontmatterPatch, InboxStore, InboxStoreError,
 };
 use crate::adapters::projects_registry::ProjectsRegistry;
-use crate::domain::model::{DraftStatus, FileRevision, InboxDraft, InboxDraftView, ProjectRef};
+use crate::domain::model::{DraftStatus, InboxDraft, InboxDraftView, ProjectRef};
 use thiserror::Error;
 
 /// Failures callers must distinguish. Everything else surfaces as the
@@ -66,61 +66,166 @@ impl InboxService {
         Self { store, projects }
     }
 
+    /// Resolve a stored project path against the registry. Matching is by exact
+    /// path, the key the registry itself is indexed on.
+    fn resolve_project(&self, project: Option<&ProjectRef>) -> Option<ProjectLink> {
+        let path = project?.path.clone();
+        match self.projects.list().into_iter().find(|p| p.path == path) {
+            Some(entry) => Some(ProjectLink::Resolved {
+                path,
+                name: entry.name,
+            }),
+            None => Some(ProjectLink::Unresolved { path }),
+        }
+    }
+
     /// Drafts newest first, `Dropped` hidden unless asked for, filtered by
     /// `search` over title and body.
-    pub fn list(&self, _query: &ListQuery) -> Result<Vec<DraftSummary>, InboxServiceError> {
-        todo!("phase-2-task-2")
+    pub fn list(&self, query: &ListQuery) -> Result<Vec<DraftSummary>, InboxServiceError> {
+        let needle = query.search.as_ref().map(|s| s.to_lowercase());
+        let mut out = Vec::new();
+        for view in self.store.list()? {
+            let summary = match &view {
+                InboxDraftView::Parsed(draft) => {
+                    if draft.frontmatter.status == DraftStatus::Dropped && !query.include_dropped {
+                        continue;
+                    }
+                    if let Some(needle) = &needle {
+                        let hit = draft.frontmatter.title.to_lowercase().contains(needle)
+                            || draft.body.to_lowercase().contains(needle);
+                        if !hit {
+                            continue;
+                        }
+                    }
+                    DraftSummary {
+                        id: draft.id.clone(),
+                        title: draft.frontmatter.title.clone(),
+                        status: draft.frontmatter.status,
+                        updated_at: draft.frontmatter.updated_at.clone(),
+                        project: self.resolve_project(draft.frontmatter.project.as_ref()),
+                        is_raw: false,
+                    }
+                }
+                // A draft we cannot parse has no title, status or project to
+                // filter on. It lists regardless so it stays reachable — and
+                // therefore fixable — rather than vanishing from the UI.
+                InboxDraftView::Raw { id, raw_text, .. } => {
+                    if let Some(needle) = &needle
+                        && !raw_text.to_lowercase().contains(needle)
+                    {
+                        continue;
+                    }
+                    DraftSummary {
+                        id: id.clone(),
+                        title: String::new(),
+                        status: DraftStatus::Draft,
+                        updated_at: String::new(),
+                        project: None,
+                        is_raw: true,
+                    }
+                }
+            };
+            out.push(summary);
+        }
+        Ok(out)
     }
 
     /// One draft, with its project link resolved.
     pub fn get(
         &self,
-        _id: &str,
+        id: &str,
     ) -> Result<(InboxDraftView, Option<ProjectLink>), InboxServiceError> {
-        todo!("phase-2-task-2")
+        let view = self.store.get(id)?;
+        let link = match &view {
+            InboxDraftView::Parsed(draft) => {
+                self.resolve_project(draft.frontmatter.project.as_ref())
+            }
+            InboxDraftView::Raw { .. } => None,
+        };
+        Ok((view, link))
     }
 
     /// Create an empty draft.
-    pub fn create(&self, _title: &str) -> Result<InboxDraft, InboxServiceError> {
-        todo!("phase-2-task-2")
+    pub fn create(&self, title: &str) -> Result<InboxDraft, InboxServiceError> {
+        Ok(self.store.create(title)?)
     }
 
     /// Replace the body, gated on the body hash the caller last read.
     pub fn save_body(
         &self,
-        _id: &str,
-        _expected_hash: &str,
-        _body: &str,
+        id: &str,
+        expected_hash: &str,
+        body: &str,
     ) -> Result<InboxDraft, InboxServiceError> {
-        todo!("phase-2-task-2")
+        Ok(self.store.save_body(id, expected_hash, body)?)
     }
 
     /// Rename. The title never reaches the filename.
-    pub fn rename(&self, _id: &str, _title: &str) -> Result<InboxDraft, InboxServiceError> {
-        todo!("phase-2-task-2")
+    pub fn rename(&self, id: &str, title: &str) -> Result<InboxDraft, InboxServiceError> {
+        self.edit(
+            id,
+            FrontmatterPatch {
+                title: Some(title.to_string()),
+                ..Default::default()
+            },
+        )
     }
 
     /// Link the draft to a project by absolute path. The path is not validated
     /// against the registry — an unknown one simply reads back unresolved.
-    pub fn link_project(&self, _id: &str, _path: &str) -> Result<InboxDraft, InboxServiceError> {
-        todo!("phase-2-task-2")
+    pub fn link_project(&self, id: &str, path: &str) -> Result<InboxDraft, InboxServiceError> {
+        self.edit(
+            id,
+            FrontmatterPatch {
+                project: Some(Some(ProjectRef {
+                    path: path.to_string(),
+                })),
+                ..Default::default()
+            },
+        )
     }
 
     /// Remove the project link.
-    pub fn unlink_project(&self, _id: &str) -> Result<InboxDraft, InboxServiceError> {
-        todo!("phase-2-task-2")
+    pub fn unlink_project(&self, id: &str) -> Result<InboxDraft, InboxServiceError> {
+        self.edit(
+            id,
+            FrontmatterPatch {
+                project: Some(None),
+                ..Default::default()
+            },
+        )
     }
 
     /// Move the draft to `Dropped`, the terminal state for an idea that was
     /// considered and not taken.
-    pub fn drop_draft(&self, _id: &str) -> Result<InboxDraft, InboxServiceError> {
-        todo!("phase-2-task-2")
+    pub fn drop_draft(&self, id: &str) -> Result<InboxDraft, InboxServiceError> {
+        self.edit(
+            id,
+            FrontmatterPatch {
+                status: Some(DraftStatus::Dropped),
+                ..Default::default()
+            },
+        )
     }
 
     /// Delete the file. A `Promoted` draft requires `confirmed`, otherwise this
     /// returns [`InboxServiceError::ConfirmationRequired`] and writes nothing.
-    pub fn delete(&self, _id: &str, _confirmed: bool) -> Result<(), InboxServiceError> {
-        todo!("phase-2-task-2")
+    pub fn delete(&self, id: &str, confirmed: bool) -> Result<(), InboxServiceError> {
+        if !confirmed
+            && let InboxDraftView::Parsed(draft) = self.store.get(id)?
+            && draft.frontmatter.status == DraftStatus::Promoted
+        {
+            return Err(InboxServiceError::ConfirmationRequired(id.to_string()));
+        }
+        Ok(self.store.delete(id)?)
+    }
+
+    /// Every editor-authored frontmatter change goes through here, so the
+    /// author is stated once and the store's ownership rules do the rest.
+    fn edit(&self, id: &str, patch: FrontmatterPatch) -> Result<InboxDraft, InboxServiceError> {
+        Ok(self
+            .store
+            .merge_frontmatter(id, FrontmatterAuthor::Editor, patch)?)
     }
 }
 
@@ -128,6 +233,7 @@ impl InboxService {
 mod tests {
     use super::*;
     use crate::adapters::projects_registry::ProjectEntry;
+    use crate::domain::model::FileRevision;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static SEQ: AtomicUsize = AtomicUsize::new(0);

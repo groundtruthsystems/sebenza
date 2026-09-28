@@ -228,6 +228,19 @@ impl InboxStore {
         Ok(draft)
     }
 
+    /// Remove the draft file. Unparseable drafts delete like any other — a
+    /// malformed file must not become undeletable.
+    pub fn delete(&self, id: &str) -> Result<(), InboxStoreError> {
+        let path = self.path_for(id)?;
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Err(InboxStoreError::NotFound(id.to_string()))
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Apply `patch`, keeping only the keys `author` owns, then write the whole
     /// file back. This is how a job appends a back-link without touching the
     /// body and how the editor renames without dropping `conversions[]`.
@@ -406,6 +419,37 @@ mod tests {
         assert_eq!(current.frontmatter.title, "Renamed");
         assert_eq!(current.frontmatter.status, DraftStatus::Promoted);
         assert_eq!(current.frontmatter.conversions, conv);
+    }
+
+    #[test]
+    fn delete_removes_parsed_and_malformed_drafts_alike() {
+        let s = store();
+        let draft = s.create("Goodbye").expect("create");
+        s.delete(&draft.id).expect("delete parsed");
+        assert!(matches!(
+            s.get(&draft.id),
+            Err(InboxStoreError::NotFound(_))
+        ));
+        assert!(matches!(
+            s.delete(&draft.id),
+            Err(InboxStoreError::NotFound(_))
+        ));
+
+        // A draft that does not parse must still be removable, or a malformed
+        // file would be stuck in the inbox forever.
+        let bad = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        fs::write(
+            s.dir().join(format!("{bad}.md")),
+            "---\nstatus: [oops\n---\nx\n",
+        )
+        .expect("write malformed");
+        s.delete(bad).expect("delete malformed");
+        assert!(s.list().expect("list").is_empty());
+
+        assert!(matches!(
+            s.delete("../escape"),
+            Err(InboxStoreError::InvalidId(_))
+        ));
     }
 
     #[test]
