@@ -280,15 +280,17 @@
           "id": "phase-5-task-3",
           "name": "Write tests for progress delivery",
           "description": "Cover the per-job WebSocket stream and the job status route returning the same per-target state.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "407a292"
         },
         {
           "id": "phase-5-task-4",
           "name": "Implement progress delivery",
           "description": "Add the non-project-prefixed WebSocket route, GET /api/inbox/jobs/:id, and CLI job polling.",
-          "status": "backlog",
-          "blocked_reason": null
+          "status": "done",
+          "blocked_reason": null,
+          "commit_sha": "407a292"
         },
         {
           "id": "phase-5-task-5",
