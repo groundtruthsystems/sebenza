@@ -849,3 +849,101 @@ export type CiLogsResponse = z.infer<typeof CiLogsResponseSchema>;
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 export type OkResponse = z.infer<typeof OkResponseSchema>;
 export type EnabledResponse = z.infer<typeof EnabledResponseSchema>;
+
+/** A draft's project link. `resolved` is false when the stored path no longer
+ *  matches a registered project — the draft still works, the link just cannot
+ *  be followed. */
+export const InboxProjectLinkSchema = z.object({
+  path: z.string(),
+  name: z.string().nullable(),
+  resolved: z.boolean(),
+});
+
+export const DraftStatusSchema = z.enum(["Draft", "Promoted", "Dropped"]);
+
+export const InboxDraftSummarySchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: DraftStatusSchema,
+  updatedAt: z.string(),
+  project: InboxProjectLinkSchema.nullable(),
+  isRaw: z.boolean(),
+});
+
+export const InboxDraftListSchema = z.object({
+  drafts: z.array(InboxDraftSummarySchema),
+});
+
+export const ConversionOutcomeSchema = z.object({
+  projectPath: z.string(),
+  branch: z.string(),
+  baseBranch: z.string().optional(),
+  agentId: z.string().nullish(),
+  prompt: z.string(),
+  outcome: z.string(),
+  worktreePath: z.string().optional(),
+  error: z.string().optional(),
+  at: z.string(),
+});
+
+/** `bodyHash` is what a save must echo back; it is the only thing that gates a
+ *  write, so a conversion job touching frontmatter cannot provoke a conflict. */
+export const InboxDraftSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: DraftStatusSchema,
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  body: z.string(),
+  bodyHash: z.string(),
+  project: InboxProjectLinkSchema.nullable(),
+  conversions: z.array(ConversionOutcomeSchema).default([]),
+  raw: z.object({ text: z.string(), error: z.string() }).nullable(),
+});
+
+export const CreateInboxDraftRequestSchema = z.object({ title: z.string() });
+
+export const SaveInboxDraftBodyRequestSchema = z.object({
+  expectedHash: z.string(),
+  body: z.string(),
+});
+
+export const PatchInboxDraftRequestSchema = z.object({
+  title: z.string().optional(),
+  projectPath: z.string().nullable().optional(),
+  status: DraftStatusSchema.optional(),
+});
+
+
+export const ConversionTargetSchema = z.object({
+  projectPath: z.string(),
+  branch: z.string(),
+  baseBranch: z.string().nullish(),
+  agentId: z.string().nullish(),
+  prompt: z.string(),
+});
+
+export const ConvertDraftRequestSchema = z.object({
+  targets: z.array(ConversionTargetSchema),
+});
+
+export const AdvisorySchema = z.object({
+  kind: z.string(),
+  message: z.string(),
+});
+
+/** Advisories are warnings, never refusals — the fan-out has already started
+ *  by the time they are read. */
+export const ConvertDraftResponseSchema = z.object({
+  jobId: z.string(),
+  advisories: z.array(AdvisorySchema).default([]),
+});
+
+export const ConversionJobSchema = z.object({
+  id: z.string(),
+  draftId: z.string(),
+  total: z.number(),
+  outcomes: z.array(ConversionOutcomeSchema),
+  finished: z.boolean(),
+  error: z.string().optional(),
+});

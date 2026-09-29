@@ -575,3 +575,129 @@ impl Http {
         Ok(())
     }
 }
+
+// --- Inbox (hub routes; drafts are global) --------------------------------
+
+/// Read the control token the server requires on mutating inbox routes. Same
+/// file the server generates, so no handshake is needed.
+fn control_token() -> Result<String> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let path = std::path::PathBuf::from(home)
+        .join(".config")
+        .join("sebenza")
+        .join("control-token");
+    std::fs::read_to_string(&path)
+        .map(|s| s.trim().to_string())
+        .map_err(|_| {
+            anyhow!(
+                "no control token at {}; start the server once to generate it",
+                path.display()
+            )
+        })
+}
+
+impl Http {
+    /// `GET /api/inbox`
+    pub async fn inbox_list(&self, search: Option<&str>, include_dropped: bool) -> Result<Value> {
+        let mut url = format!("{}/api/inbox?includeDropped={include_dropped}", self.hub);
+        if let Some(s) = search {
+            url.push_str(&format!("&search={}", urlencode(s)));
+        }
+        self.get(&url).await
+    }
+
+    /// `GET /api/inbox/{id}`
+    pub async fn inbox_get(&self, id: &str) -> Result<Value> {
+        self.get(&format!("{}/api/inbox/{id}", self.hub)).await
+    }
+
+    /// `POST /api/inbox`
+    pub async fn inbox_create(&self, title: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!("{}/api/inbox", self.hub))
+            .bearer_auth(control_token()?)
+            .json(&serde_json::json!({ "title": title }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `PUT /api/inbox/{id}/body`
+    pub async fn inbox_save_body(
+        &self,
+        id: &str,
+        expected_hash: &str,
+        body: &str,
+    ) -> Result<Value> {
+        let resp = self
+            .http
+            .put(format!("{}/api/inbox/{id}/body", self.hub))
+            .bearer_auth(control_token()?)
+            .json(&serde_json::json!({ "expectedHash": expected_hash, "body": body }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `PATCH /api/inbox/{id}` — rename, (un)link a project, or drop.
+    pub async fn inbox_patch(&self, id: &str, patch: Value) -> Result<Value> {
+        let resp = self
+            .http
+            .patch(format!("{}/api/inbox/{id}", self.hub))
+            .bearer_auth(control_token()?)
+            .json(&patch)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `DELETE /api/inbox/{id}` — `confirmed` is required for a promoted draft.
+    pub async fn inbox_delete(&self, id: &str, confirmed: bool) -> Result<Value> {
+        let resp = self
+            .http
+            .delete(format!("{}/api/inbox/{id}?confirmed={confirmed}", self.hub))
+            .bearer_auth(control_token()?)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+}
+
+impl Http {
+    /// `POST /api/inbox/{id}/convert` — returns the job id.
+    pub async fn inbox_convert(&self, id: &str, targets: Value) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!("{}/api/inbox/{id}/convert", self.hub))
+            .bearer_auth(control_token()?)
+            .json(&serde_json::json!({ "targets": targets }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `GET /api/inbox/jobs/{id}` — the CLI polls rather than holding a socket.
+    pub async fn inbox_job(&self, job_id: &str) -> Result<Value> {
+        self.get(&format!("{}/api/inbox/jobs/{job_id}", self.hub))
+            .await
+    }
+}
+
+/// Minimal percent-encoding for a query value.
+fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            b' ' => "+".to_string(),
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}

@@ -163,7 +163,7 @@ pub fn generate_fallback_branch_name() -> String {
 
 /// Path segments owned by the server's hub routes — a project prefix must not
 /// collide with these or `/<prefix>` would shadow them.
-const RESERVED_PROJECT_PREFIXES: [&str; 4] = ["api", "ws", "assets", "registry"];
+const RESERVED_PROJECT_PREFIXES: [&str; 5] = ["api", "ws", "assets", "registry", "inbox"];
 
 /// Slug a string into a URL-path-friendly prefix (lowercase, hyphenated,
 /// alphanumeric only). Empty if nothing usable remains.
@@ -219,8 +219,304 @@ pub fn derive_project_prefix<'a>(
     format!("{base}-{}", crate::util::id::random_hex(4))
 }
 
+/// Why a request to a mutating inbox route was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboxGuardDenial {
+    /// No bearer token, or one that does not match the control token.
+    BadToken,
+    /// `Origin` or `Referer` names an origin that is not this server.
+    CrossOrigin,
+}
+
+/// The decision for one request to `/api/inbox`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InboxGuard {
+    Allow,
+    Deny(InboxGuardDenial),
+}
+
+/// True for methods that change state, which are the ones the guard covers.
+/// Reads are left to the browser's same-origin policy: with no CORS layer on
+/// this server, a cross-origin page cannot read a response it provokes.
+pub fn is_mutating_method(method: &str) -> bool {
+    matches!(
+        method.to_ascii_uppercase().as_str(),
+        "POST" | "PUT" | "PATCH" | "DELETE"
+    )
+}
+
+/// Reduce a URL to scheme://host:port, the only part an origin comparison may
+/// consider. Returns `None` for anything that is not an absolute URL.
+fn origin_of(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once("://")?;
+    if scheme.is_empty() || rest.is_empty() {
+        return None;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "{}://{}",
+        scheme.to_ascii_lowercase(),
+        authority.to_ascii_lowercase()
+    ))
+}
+
+/// Gate a request to a mutating `/api/inbox` route.
+///
+/// Both controls apply and neither substitutes for the other: the bearer token
+/// is always required, and an `Origin`/`Referer` naming another origin is
+/// always refused. An absent `Origin` is *not* an exemption — it is the normal
+/// case for `sebenza-cli`, which still has to present the token.
+///
+/// `Origin` is preferred over `Referer`; `Referer` is only consulted when no
+/// `Origin` is present, since a browser omits `Origin` on some same-origin
+/// requests but sends `Referer`.
+pub fn guard_inbox_request(
+    method: &str,
+    bearer: Option<&str>,
+    origin: Option<&str>,
+    referer: Option<&str>,
+    expected_token: &str,
+    self_origin: &str,
+) -> InboxGuard {
+    if !is_mutating_method(method) {
+        return InboxGuard::Allow;
+    }
+    match bearer {
+        Some(token) if !expected_token.is_empty() && token == expected_token => {}
+        _ => return InboxGuard::Deny(InboxGuardDenial::BadToken),
+    }
+    if origin_is_acceptable(origin, referer, self_origin) {
+        InboxGuard::Allow
+    } else {
+        InboxGuard::Deny(InboxGuardDenial::CrossOrigin)
+    }
+}
+
+/// True when the request either names this origin or names none at all.
+///
+/// Absent is accepted because a non-browser client (`sebenza-cli`) sends no
+/// `Origin` — on a mutating route the token is what stops that being a hole.
+/// `Origin` wins over `Referer`; `Referer` is consulted only when `Origin` is
+/// missing, which a browser does for some same-origin requests.
+pub fn origin_is_acceptable(
+    origin: Option<&str>,
+    referer: Option<&str>,
+    self_origin: &str,
+) -> bool {
+    let want = origin_of(self_origin);
+    let claimed = origin
+        .and_then(origin_of)
+        .or_else(|| referer.and_then(origin_of));
+    match (claimed, want) {
+        (Some(got), Some(want)) => got == want,
+        // A claimed origin we cannot compare against is refused, not trusted.
+        (Some(_), None) => false,
+        (None, _) => true,
+    }
+}
+
+/// True when `path` is safe to store as an inbox project link and later hand
+/// to git as a worktree location.
+///
+/// Deliberately strict: the value survives into `conversions[]` and is used to
+/// build filesystem paths during conversion, so it must be absolute, free of
+/// `..` and of the NUL and control bytes that truncate a C string or smuggle a
+/// newline into a log line.
+pub fn is_safe_project_path(path: &str) -> bool {
+    if path.trim().is_empty() {
+        return false;
+    }
+    if path.chars().any(|c| c == '\0' || c.is_control()) {
+        return false;
+    }
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return false;
+    }
+    // `..` only as a whole component: `/home/dev/..acme` is an ordinary name.
+    !p.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_project_path_must_be_absolute() {
+        assert!(is_safe_project_path("/home/dev/acme"));
+        assert!(!is_safe_project_path("relative/path"));
+        assert!(!is_safe_project_path(""));
+        assert!(!is_safe_project_path("   "));
+    }
+
+    #[test]
+    fn a_project_path_rejects_traversal_and_control_bytes() {
+        assert!(!is_safe_project_path("/home/dev/../../etc"));
+        assert!(!is_safe_project_path("/home/dev/acme/.."));
+        assert!(
+            !is_safe_project_path("/home/dev/\0acme"),
+            "NUL truncates a C string"
+        );
+        assert!(
+            !is_safe_project_path("/home/dev/acme\nrm -rf"),
+            "newline forges a log line"
+        );
+        assert!(!is_safe_project_path("/home/dev/acme\t"));
+    }
+
+    #[test]
+    fn a_dotfile_directory_is_not_traversal() {
+        // `..` only matters as a whole component; a name that merely starts
+        // with a dot is ordinary.
+        assert!(is_safe_project_path("/home/dev/.config/acme"));
+        assert!(is_safe_project_path("/home/dev/..acme"));
+    }
+
+    #[test]
+    fn an_inbox_id_is_the_only_thing_that_reaches_a_filename() {
+        // The store builds `<id>.md`, so the id is the entire attack surface
+        // for the draft path. Restated here because it is a security property,
+        // not an incidental detail of ULID formatting.
+        assert!(crate::util::id::is_ulid("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+        for bad in [
+            "../../etc/passwd",
+            "/etc/passwd",
+            "01ARZ3NDEKTSV4RRFFQ69G5FA/",
+            "01ARZ3NDEKTSV4RRFFQ69G5FA.",
+            "",
+        ] {
+            assert!(
+                !crate::util::id::is_ulid(bad),
+                "{bad} must not be a valid id"
+            );
+        }
+    }
+
+    const TOKEN: &str = "s3cret-control-token";
+    const SELF: &str = "http://127.0.0.1:5111";
+
+    fn guard(method: &str, bearer: Option<&str>, origin: Option<&str>) -> InboxGuard {
+        guard_inbox_request(method, bearer, origin, None, TOKEN, SELF)
+    }
+
+    #[test]
+    fn reads_are_not_gated_by_this_guard() {
+        assert_eq!(guard("GET", None, None), InboxGuard::Allow);
+        assert_eq!(
+            guard("HEAD", None, Some("https://evil.test")),
+            InboxGuard::Allow
+        );
+    }
+
+    #[test]
+    fn mutations_require_the_token() {
+        for method in ["POST", "PUT", "PATCH", "DELETE", "post"] {
+            assert_eq!(
+                guard(method, None, None),
+                InboxGuard::Deny(InboxGuardDenial::BadToken),
+                "{method} without a token"
+            );
+            assert_eq!(
+                guard(method, Some("wrong"), None),
+                InboxGuard::Deny(InboxGuardDenial::BadToken),
+                "{method} with a wrong token"
+            );
+        }
+    }
+
+    #[test]
+    fn an_absent_origin_never_waives_the_token() {
+        // sebenza-cli sends no Origin. That must not become a way past the
+        // token - the whole point of requiring both.
+        assert_eq!(
+            guard("POST", None, None),
+            InboxGuard::Deny(InboxGuardDenial::BadToken)
+        );
+        assert_eq!(guard("POST", Some(TOKEN), None), InboxGuard::Allow);
+    }
+
+    #[test]
+    fn a_cross_origin_request_is_refused_even_with_a_valid_token() {
+        assert_eq!(
+            guard("POST", Some(TOKEN), Some("https://evil.test")),
+            InboxGuard::Deny(InboxGuardDenial::CrossOrigin)
+        );
+        assert_eq!(
+            guard("POST", Some(TOKEN), Some("http://127.0.0.1:9999")),
+            InboxGuard::Deny(InboxGuardDenial::CrossOrigin),
+            "same host, different port is a different origin"
+        );
+        assert_eq!(
+            guard("POST", Some(TOKEN), Some("https://127.0.0.1:5111")),
+            InboxGuard::Deny(InboxGuardDenial::CrossOrigin),
+            "same host and port, different scheme is a different origin"
+        );
+    }
+
+    #[test]
+    fn a_same_origin_request_with_a_token_is_allowed() {
+        assert_eq!(guard("POST", Some(TOKEN), Some(SELF)), InboxGuard::Allow);
+        assert_eq!(
+            guard("POST", Some(TOKEN), Some("http://127.0.0.1:5111/inbox")),
+            InboxGuard::Allow,
+            "Origin comparison ignores path"
+        );
+        assert_eq!(
+            guard("POST", Some(TOKEN), Some("HTTP://127.0.0.1:5111")),
+            InboxGuard::Allow,
+            "scheme and host compare case-insensitively"
+        );
+    }
+
+    #[test]
+    fn referer_is_consulted_only_when_origin_is_absent() {
+        assert_eq!(
+            guard_inbox_request(
+                "POST",
+                Some(TOKEN),
+                None,
+                Some("https://evil.test/x"),
+                TOKEN,
+                SELF
+            ),
+            InboxGuard::Deny(InboxGuardDenial::CrossOrigin)
+        );
+        assert_eq!(
+            guard_inbox_request(
+                "POST",
+                Some(TOKEN),
+                None,
+                Some("http://127.0.0.1:5111/x"),
+                TOKEN,
+                SELF
+            ),
+            InboxGuard::Allow
+        );
+        // A good Origin wins over a bad Referer: Origin is the stronger signal.
+        assert_eq!(
+            guard_inbox_request(
+                "POST",
+                Some(TOKEN),
+                Some(SELF),
+                Some("https://evil.test/x"),
+                TOKEN,
+                SELF
+            ),
+            InboxGuard::Allow
+        );
+    }
+
+    #[test]
+    fn an_empty_expected_token_never_authorizes() {
+        // A server that failed to load its control token must not fall open.
+        assert_eq!(
+            guard_inbox_request("POST", Some(""), None, None, "", SELF),
+            InboxGuard::Deny(InboxGuardDenial::BadToken)
+        );
+    }
     use super::*;
 
     #[test]
@@ -301,10 +597,11 @@ mod tests {
     }
 
     /// A repo whose basename matches a hub route must not be able to shadow it
-    /// — `/registry` serves the portfolio, so it is reserved alongside api/ws.
+    /// — `/registry` serves the portfolio and `/inbox` the draft store, so both
+    /// are reserved alongside api/ws.
     #[test]
     fn project_prefixes_never_shadow_hub_routes() {
-        for reserved in ["api", "ws", "assets", "registry"] {
+        for reserved in ["api", "ws", "assets", "registry", "inbox"] {
             let prefix = derive_project_prefix(&format!("/home/dev/{reserved}"), []);
             assert_eq!(
                 prefix,

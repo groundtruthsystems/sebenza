@@ -3,9 +3,123 @@
   "version": "1.0",
   "project": {
     "name": "sebenza",
-    "path": "/home/kevinbayes/git/oss/sebenza",
-    "registered_at": "2026-07-27T14:49:46Z"
+    "path": "/home/kevinbayes/git/oss/worktrees/sebenza-inbox",
+    "registered_at": "2026-07-27T14:49:46Z",
+    "worktree": "sebenza-inbox",
+    "repo_path": "/home/kevinbayes/git/oss/sebenza"
   },
   "tracks": [
+    {
+      "track_id": "inbox_20260914",
+      "type": "feature",
+      "description": "Inbox: markdown/mermaid drafts designed with a builtin agent and converted into worktrees on one or more projects",
+      "status": "done",
+      "created_at": "2026-09-14T00:00:00Z",
+      "updated_at": "2026-09-28T00:00:00Z",
+      "design_path": "./tracks/inbox_20260914/design.md",
+      "spec_path": "./tracks/inbox_20260914/spec.md",
+      "plan_path": "./tracks/inbox_20260914/plan.json",
+      "phases_summary": [
+        {
+          "id": "phase-1",
+          "name": "Draft store and model",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-2",
+          "name": "Service, guarded routes and CLI",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-3",
+          "name": "Editor and sanitized preview",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-4",
+          "name": "Conversion fan-out",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-5",
+          "name": "Jobs, progress and the convert dialog",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-6",
+          "name": "Sandbox preference, audit and docs",
+          "status": "done",
+          "blocked_reason": null
+        }
+      ],
+      "progress": {
+        "total_tasks": 42,
+        "completed_tasks": 42,
+        "percentage": 100
+      }
+    },
+    {
+      "track_id": "platform_20260917",
+      "type": "feature",
+      "description": "Continuous agent platform: chat, work-item inbox/canvas/board, human asks, ops, S3 artifacts, Headscale cluster, LXC per work item",
+      "status": "backlog",
+      "created_at": "2026-09-17T00:00:00Z",
+      "updated_at": "2026-09-18T12:00:00Z",
+      "design_path": "./tracks/platform_20260917/design.md",
+      "spec_path": "./tracks/platform_20260917/spec.md",
+      "plan_path": "./tracks/platform_20260917/plan.json",
+      "phases_summary": [
+        {
+          "id": "phase-1",
+          "name": "Platform domain, SQLite, and /board",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2",
+          "name": "Home chat, chat jail, files catalog",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3",
+          "name": "Inbox, canvas, seed from files",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4",
+          "name": "Dispatch on all-in-one (ItemRuntime)",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5",
+          "name": "Human asks",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6",
+          "name": "Remote S3 artifacts",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-7",
+          "name": "Cluster and Headscale",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-8",
+          "name": "Ops",
+          "status": "backlog"
+        }
+      ],
+      "progress": {
+        "total_tasks": 48,
+        "completed_tasks": 0,
+        "percentage": 0
+      }
+    }
   ]
 }

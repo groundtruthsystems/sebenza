@@ -4,6 +4,7 @@
 mod completions;
 mod env_files;
 mod http;
+mod inbox;
 mod init;
 mod migrate;
 mod oneshot;
@@ -45,6 +46,7 @@ Usage:
   sebenza-cli tab          List, create, switch, or close agent tabs in a worktree
   sebenza-cli prune        Remove all closed (not open) worktrees in the current project
   sebenza-cli restore      Re-open all worktree sessions that were open before
+  sebenza-cli inbox        Draft notes before they become worktrees
   sebenza-cli project      List, add, or remove projects served by the dashboard
   sebenza-cli completion   Generate shell completion script (bash, zsh)
 
@@ -64,6 +66,7 @@ Environment:
 
 const ROOT_COMMANDS: &[&str] = &[
     "serve",
+    "inbox",
     "init",
     "service",
     "update",
@@ -261,7 +264,9 @@ async fn main() {
         migrate::warn_if_other_instances(effective_port);
     }
 
-    let code = if command == "oneshot" {
+    let code = if command == "inbox" {
+        inbox::run(&parsed.command_args, effective_port).await
+    } else if command == "oneshot" {
         oneshot::run(&parsed.command_args, effective_port, &cwd).await
     } else if command == "project" {
         project::run(&parsed.command_args, effective_port).await
@@ -279,4 +284,56 @@ async fn main() {
     };
 
     std::process::exit(code);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every command the dispatcher handles must also be in `ROOT_COMMANDS`,
+    /// or the root parser rejects it before dispatch ever runs.
+    ///
+    /// `inbox` shipped broken exactly this way: its own parser was covered by
+    /// unit tests, so nothing caught that the command was unreachable.
+    #[test]
+    fn every_dispatched_command_is_a_known_root_command() {
+        let dispatched = [
+            "serve",
+            "completion",
+            "init",
+            "service",
+            "update",
+            "inbox",
+            "oneshot",
+            "project",
+        ];
+        for cmd in dispatched {
+            assert!(
+                ROOT_COMMANDS.contains(&cmd),
+                "`{cmd}` is dispatched but missing from ROOT_COMMANDS, so the \
+                 root parser rejects it as unknown"
+            );
+        }
+        for cmd in WORKTREE_COMMANDS {
+            assert!(
+                ROOT_COMMANDS.contains(cmd),
+                "worktree command `{cmd}` is missing from ROOT_COMMANDS"
+            );
+        }
+    }
+
+    /// The usage text should name every root command, so `--help` does not
+    /// hide a working feature.
+    #[test]
+    fn usage_mentions_every_root_command() {
+        // `usage()` writes straight to stdout, so assert against this file's
+        // own source instead of capturing it.
+        let help = include_str!("main.rs");
+        for cmd in ROOT_COMMANDS {
+            assert!(
+                help.contains(&format!("sebenza-cli {cmd}")),
+                "`{cmd}` is a root command but never appears in the usage text"
+            );
+        }
+    }
 }

@@ -336,20 +336,29 @@ export async function removeProject(prefix: string): Promise<void> {
   await hubApi.removeProject({ params: { prefix } });
 }
 
-export type ProjectBootstrap = "ready" | "redirecting" | "no-projects" | "registry";
+export type ProjectBootstrap =
+  | "ready"
+  | "redirecting"
+  | "no-projects"
+  | "registry"
+  | "inbox";
 
 /** Decide what to mount before the app loads, based on the URL prefix and the
  *  known projects:
  *  - `registry`     — `/registry`, the user-scoped portfolio; not a project, so
  *                     it must short-circuit before the redirect below.
+ *  - `inbox`        — `/inbox`, the global draft store; likewise not a project,
+ *                     and reachable with no projects registered at all.
  *  - `ready`        — the URL points at a real project; mount the dashboard.
  *  - `redirecting`  — the URL has no/unknown prefix but projects exist; a
  *                     redirect to the first project is in flight, mount nothing.
  *  - `no-projects`  — nothing is registered; mount the empty state so the
  *                     dashboard doesn't boot into 404-ing per-project calls. */
 export async function ensureProjectPrefix(): Promise<ProjectBootstrap> {
-  // `registry` is a reserved prefix server-side, so it can never be a project.
+  // `registry` and `inbox` are reserved prefixes server-side, so neither can
+  // ever be a project.
   if (activePrefix === "registry") return "registry";
+  if (activePrefix === "inbox") return "inbox";
   const projects = await fetchProjects().catch((): ProjectSummary[] => []);
   if (projects.some((project) => project.prefix === activePrefix)) return "ready";
   const target = projects[0]?.prefix;
@@ -401,4 +410,127 @@ export async function uploadFiles(worktree: string, files: File[]): Promise<File
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data as FileUploadResult;
+}
+
+// ---------------------------------------------------------------------------
+// Inbox — global drafts. These live on the hub client, not the per-project one:
+// a draft may exist before it belongs to any project.
+//
+// Mutating calls carry the control token, which the server requires alongside a
+// same-origin check. `window.__SEBENZA_CONTROL_TOKEN__` is injected into the
+// page at load; a cross-origin page cannot read it.
+// ---------------------------------------------------------------------------
+
+declare global {
+  interface Window {
+    __SEBENZA_CONTROL_TOKEN__?: string;
+  }
+}
+
+function inboxAuthHeaders(): Record<string, string> {
+  const token = window.__SEBENZA_CONTROL_TOKEN__;
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
+/** Fetch the control token once at startup and cache it on `window`.
+ *
+ *  Served over GET rather than injected into the HTML so it works the same in
+ *  dev (Vite proxy) and prod (SPA embedded in the binary). A cross-origin page
+ *  can issue this request but cannot read the response - the server mounts no
+ *  CORS layer, and the route additionally refuses a foreign `Origin`. */
+export async function loadInboxControlToken(): Promise<void> {
+  if (window.__SEBENZA_CONTROL_TOKEN__) return;
+  try {
+    const res = await fetch("/api/inbox/session", { credentials: "same-origin" });
+    if (!res.ok) return;
+    const data = (await res.json()) as { token?: string };
+    if (data.token) window.__SEBENZA_CONTROL_TOKEN__ = data.token;
+  } catch {
+    // Leave it unset: mutating inbox calls will 401 and the UI reports it,
+    // which is the honest failure rather than a silent half-working inbox.
+  }
+}
+
+export async function fetchInboxDrafts(params?: {
+  search?: string;
+  includeDropped?: boolean;
+}) {
+  return hubApi.fetchInboxDrafts({ query: params ?? {} });
+}
+
+export async function fetchInboxDraft(id: string) {
+  return hubApi.fetchInboxDraft({ params: { id } });
+}
+
+export async function createInboxDraft(title: string) {
+  return hubApi.createInboxDraft({
+    body: { title },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Save the body. `expectedHash` is the `bodyHash` last read; a stale one comes
+ *  back 409 and nothing is written. */
+export async function saveInboxDraftBody(
+  id: string,
+  expectedHash: string,
+  body: string,
+) {
+  return hubApi.saveInboxDraftBody({
+    params: { id },
+    body: { expectedHash, body },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Rename, link/unlink a project (`projectPath: null` unlinks), or drop. */
+export async function patchInboxDraft(
+  id: string,
+  patch: { title?: string; projectPath?: string | null; status?: "Dropped" },
+) {
+  return hubApi.patchInboxDraft({
+    params: { id },
+    body: patch,
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Delete. A promoted draft needs `confirmed`, else the server answers 409. */
+export async function deleteInboxDraft(id: string, confirmed = false) {
+  return hubApi.deleteInboxDraft({
+    params: { id },
+    query: { confirmed },
+    body: {},
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Start a fan-out. Returns a job id immediately; the wave runs in the
+ *  background because git plus tmux is multiple seconds per target. */
+export async function convertInboxDraft(
+  id: string,
+  targets: { projectPath: string; branch: string; prompt: string }[],
+) {
+  return hubApi.convertInboxDraft({
+    params: { id },
+    body: { targets },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Poll a conversion's progress. Unknown ids are a 404 — job ids are ULIDs,
+ *  so that is the access check. */
+export async function fetchConversionJob(jobId: string) {
+  return hubApi.fetchConversionJob({ params: { id: jobId } });
+}
+
+/** Base branches for an arbitrary project, by URL prefix.
+ *
+ *  The conversion dialog is global but each row targets one project, so it
+ *  cannot use the page's own per-project client. This builds one per prefix
+ *  rather than adding a hub route that would duplicate an existing one. */
+export async function fetchBaseBranchesFor(prefix: string): Promise<string[]> {
+  const client = createApi(`/${prefix}`);
+  const { branches } = await client.fetchBaseBranches();
+  return branches.map((b) => b.name);
 }

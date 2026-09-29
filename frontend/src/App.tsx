@@ -21,6 +21,7 @@ import TabBar from "./lib/TabBar";
 import { agentCan } from "./lib/agent-capabilities";
 import DiffDialog from "./lib/DiffDialog";
 import TracksBoard from "./lib/TracksBoard";
+import NavRail from "./lib/NavRail";
 import type {
   ActiveProjectWorktrees,
   AvailableBranch,
@@ -1109,6 +1110,11 @@ export default function App() {
         <ActiveWorktreeTicker items={tickerItems} onselect={handleSelectTickerItem} />
 
         <div className="flex min-h-0 flex-1">
+        {/* Icon rail: the one place every top-level destination is reachable,
+            whether it flips view state here or navigates to its own page. */}
+        {!isMobile && (
+          <NavRail active="worktrees" onSelectView={setViewMode} />
+        )}
         {/* Sidebar: fixed overlay on mobile, static on desktop */}
         {(!isMobile || sidebarOpen) && (
           <>

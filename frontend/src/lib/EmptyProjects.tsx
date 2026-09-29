@@ -79,6 +79,13 @@ export default function EmptyProjects() {
           </a>{" "}
           shows tracks across every project it knows about.
         </p>
+        <p className="mt-2 text-sm text-muted">
+          Not ready to pick a repo? The{" "}
+          <a href="/inbox" className="text-accent hover:underline">
+            inbox
+          </a>{" "}
+          takes notes now and turns them into worktrees later.
+        </p>
       </div>
     </div>
   );

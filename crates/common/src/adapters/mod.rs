@@ -8,6 +8,7 @@ pub mod fs;
 pub mod git;
 pub mod grok_session_log;
 pub mod hooks;
+pub mod inbox_store;
 pub mod instance_registry;
 pub mod lxc;
 pub mod opencode_session_log;
