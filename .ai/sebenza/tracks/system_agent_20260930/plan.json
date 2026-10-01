@@ -299,13 +299,14 @@
           "id": "phase-5-task-3",
           "name": "Implement convert instructions and ArchitectFirstPromptBuilder",
           "description": "Generate per-target system instructions and build architect-first or direct prompts, recording both on conversions[].",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "40a90f1"
         },
         {
           "id": "phase-5-task-4",
           "name": "Wire fallbacks into inbox_runner",
           "description": "Fall back to the operator prompt when the agent is unavailable and scan comments before conversion.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-5-task-5",
