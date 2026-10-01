@@ -521,10 +521,15 @@ pub async fn convert_draft(
     let targets = body.targets.clone();
     let draft_id = id.clone();
     let job = job_id.clone();
+    let fill_state = state.clone();
 
-    // The fan-out is blocking (git, tmux), so it owns a blocking thread rather
-    // than stalling the async runtime.
-    tokio::task::spawn_blocking(move || {
+    // Drafting instructions waits on the system agent, so it runs inside the
+    // job, after the job id is returned. The fan-out itself is blocking (git,
+    // tmux), so it then owns a blocking thread rather than stalling the
+    // async runtime.
+    tokio::spawn(async move {
+        let targets = fill_missing_instructions(&fill_state, &draft_id, targets, &headers).await;
+        let _ = tokio::task::spawn_blocking(move || {
         let span = tracing::info_span!("inbox_convert", job_id = %job, draft_id = %draft_id, targets = targets.len());
         let _enter = span.enter();
         match svc.convert_streaming(&draft_id, &targets, &runner, |outcome| {
@@ -547,6 +552,8 @@ pub async fn convert_draft(
             Ok(_) => jobs.finish(&job),
             Err(e) => jobs.fail(&job, e.to_string()),
         }
+    })
+    .await;
     });
 
     Ok(Json(
@@ -1110,8 +1117,7 @@ pub async fn convert_instructions(
     headers: HeaderMap,
     Json(body): Json<ConvertInstructionsBody>,
 ) -> Result<Json<ConvertInstructionsResponse>, ApiError> {
-    use crate::services::inbox_convert::{SEBENZA_INDEX_REL_PATH, TargetError};
-    use crate::services::system_agent::{JobInput, JobOutput, JobStatus};
+    use crate::services::inbox_convert::TargetError;
     check(&headers, "POST")?;
     let svc = inbox(&state);
     let draft = match svc.get(&id)?.0 {
@@ -1148,9 +1154,41 @@ pub async fn convert_instructions(
         return Err(ApiError::new(400, errors.join("; ")));
     }
 
-    let keys = instruction_keys(&body.targets);
-    let mut targets: Vec<InstructionTargetWire> = body
-        .targets
+    let advisories = item_secret_advisories(&svc, &id, &draft.body);
+    let drafted = draft_system_instructions(&state, &id, &body.targets, &headers).await?;
+    Ok(Json(ConvertInstructionsResponse {
+        job_id: drafted.job_id,
+        status: drafted.status,
+        fallback: drafted.fallback,
+        error: drafted.error,
+        targets: drafted.targets,
+        advisories,
+    }))
+}
+
+/// What one round of instruction drafting produced.
+struct DraftedInstructions {
+    job_id: Option<String>,
+    status: &'static str,
+    fallback: bool,
+    error: Option<String>,
+    targets: Vec<InstructionTargetWire>,
+}
+
+/// Ask the item's system agent for one instruction per target and wait for
+/// it, bounded. Never fails for agent reasons: an unavailable agent, a failed
+/// job, or the bound elapsing each come back as a status with no
+/// instructions, so convert can proceed without them (UC-07a).
+async fn draft_system_instructions(
+    state: &AppState,
+    id: &str,
+    body_targets: &[InstructionTargetBody],
+    headers: &HeaderMap,
+) -> Result<DraftedInstructions, ApiError> {
+    use crate::services::inbox_convert::SEBENZA_INDEX_REL_PATH;
+    use crate::services::system_agent::{JobInput, JobOutput, JobStatus};
+    let keys = instruction_keys(body_targets);
+    let mut targets: Vec<InstructionTargetWire> = body_targets
         .iter()
         .zip(&keys)
         .map(|(t, key)| InstructionTargetWire {
@@ -1163,20 +1201,15 @@ pub async fn convert_instructions(
                 .is_file(),
         })
         .collect();
-    let advisories = item_secret_advisories(&svc, &id, &draft.body);
-    let respond = |job_id, status, fallback, error, targets| {
-        Json(ConvertInstructionsResponse {
-            job_id,
-            status,
-            fallback,
-            error,
-            targets,
-            advisories: advisories.clone(),
-        })
+    let respond = |job_id, status, fallback, error, targets| DraftedInstructions {
+        job_id,
+        status,
+        fallback,
+        error,
+        targets,
     };
 
-    let operator_prompt = body
-        .targets
+    let operator_prompt = body_targets
         .iter()
         .zip(&keys)
         .filter(|(t, _)| !t.prompt.trim().is_empty())
@@ -1188,7 +1221,7 @@ pub async fn convert_instructions(
         operator_prompt: (!operator_prompt.is_empty()).then_some(operator_prompt),
     };
     let agent = state.system_agent.clone();
-    let draft_id = id.clone();
+    let draft_id = id.to_string();
     let enqueued = tokio::task::spawn_blocking(move || agent.enqueue(&draft_id, input))
         .await
         .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
@@ -1213,7 +1246,7 @@ pub async fn convert_instructions(
         draft_id = %id,
         job_id = %job_id,
         targets = keys.len(),
-        caller = caller_marker(&headers).as_deref().unwrap_or(""),
+        caller = caller_marker(headers).as_deref().unwrap_or(""),
         "convert instructions requested"
     );
 
@@ -1260,6 +1293,54 @@ pub async fn convert_instructions(
             targets,
         )),
     }
+}
+
+/// Fill in a system instruction for every target the operator did not
+/// review one for, so a plain "Create" still briefs each worktree from the
+/// item (UC-07). Targets that already carry one keep it; on any agent failure
+/// the targets are returned unchanged and conversion proceeds (UC-07a).
+async fn fill_missing_instructions(
+    state: &AppState,
+    id: &str,
+    mut targets: Vec<ConversionTarget>,
+    headers: &HeaderMap,
+) -> Vec<ConversionTarget> {
+    let missing: Vec<usize> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.system_instruction.is_none())
+        .map(|(i, _)| i)
+        .collect();
+    if missing.is_empty() {
+        return targets;
+    }
+    let ask: Vec<InstructionTargetBody> = missing
+        .iter()
+        .map(|&i| InstructionTargetBody {
+            project: targets[i].project_path.clone(),
+            branch: targets[i].branch.clone(),
+            prompt: targets[i].prompt.clone(),
+        })
+        .collect();
+    match draft_system_instructions(state, id, &ask, headers).await {
+        Ok(drafted) => {
+            if drafted.status != "succeeded" {
+                tracing::info!(
+                    draft_id = %id,
+                    status = drafted.status,
+                    error = drafted.error.as_deref().unwrap_or(""),
+                    "convert: no system instructions, launching with the item note and operator prompt"
+                );
+            }
+            for (&i, wire) in missing.iter().zip(drafted.targets) {
+                targets[i].system_instruction = wire.system_instruction;
+            }
+        }
+        Err(e) => {
+            tracing::warn!(draft_id = %id, "convert: drafting instructions failed: {}", e.message)
+        }
+    }
+    targets
 }
 
 /// `POST /api/inbox/{id}/comments/{eventId}/redact` — tombstone a comment,
@@ -2609,8 +2690,19 @@ mod tests {
         spy.0.into_inner().unwrap()
     }
 
+    /// UC-07a: no system instruction, but the worktree is still briefed from
+    /// the item note and still starts with the architect.
+    fn assert_falls_back_with_context(sent: &[String]) {
+        assert_eq!(sent.len(), 1);
+        let p = &sent[0];
+        assert!(p.contains("Build the importer"), "{p}");
+        assert!(p.contains(".ai/sebenza/inbox-note.md"), "{p}");
+        assert!(p.contains("sebenza-architect"), "{p}");
+        assert!(!p.contains("System instruction:"), "{p}");
+    }
+
     // TS-47: with the agent disabled the dialog falls back, and convert
-    // launches with the operator prompt alone.
+    // launches with the item note and the operator prompt.
     #[tokio::test]
     async fn with_the_agent_disabled_instructions_fall_back_and_convert_uses_the_operator_prompt() {
         let f = fixture();
@@ -2630,10 +2722,10 @@ mod tests {
         assert_eq!(resp.job_id, None);
         assert_eq!(resp.targets[0].system_instruction, None);
 
-        assert_eq!(convert_with(&f, &id, &resp), vec!["Build the importer"]);
+        assert_falls_back_with_context(&convert_with(&f, &id, &resp));
         let history = f.state.inbox.conversion_history(&id).unwrap();
         assert_eq!(history[0].system_instruction, None);
-        assert!(!history[0].architect_first);
+        assert!(history[0].architect_first);
     }
 
     // TS-47: a failed instruction job falls back the same way.
@@ -2655,7 +2747,7 @@ mod tests {
         assert!(resp.fallback);
         assert!(resp.error.is_some());
         assert_eq!(resp.targets[0].system_instruction, None);
-        assert_eq!(convert_with(&f, &id, &resp), vec!["Build the importer"]);
+        assert_falls_back_with_context(&convert_with(&f, &id, &resp));
     }
 
     // TS-57-adjacent: instructions that do arrive launch architect-first and
@@ -2680,6 +2772,52 @@ mod tests {
         let history = f.state.inbox.conversion_history(&id).unwrap();
         assert!(history[0].architect_first);
         assert!(history[0].system_instruction.is_some());
+    }
+
+    // UC-07: a plain "Create" with no reviewed instruction asks the agent
+    // itself; a reviewed instruction is kept; an unavailable agent leaves the
+    // targets unchanged.
+    #[tokio::test]
+    async fn convert_fills_missing_instructions_and_keeps_reviewed_ones() {
+        let f = agent_fixture("fixture:convert_instructions");
+        let path = project(&f, "acme-demo", true);
+        let id = new_draft(&f);
+        let plain = ConversionTarget {
+            project_path: path.clone(),
+            branch: "feat-x".into(),
+            prompt: "Build the importer".into(),
+            ..Default::default()
+        };
+        let filled =
+            fill_missing_instructions(&f.state, &id, vec![plain.clone()], &good_headers()).await;
+        assert!(
+            filled[0]
+                .system_instruction
+                .as_deref()
+                .is_some_and(|s| s.contains("Architect the streaming parser only")),
+            "{filled:?}"
+        );
+
+        let reviewed = ConversionTarget {
+            system_instruction: Some("Operator-edited".into()),
+            ..plain.clone()
+        };
+        let kept = fill_missing_instructions(&f.state, &id, vec![reviewed], &good_headers()).await;
+        assert_eq!(
+            kept[0].system_instruction.as_deref(),
+            Some("Operator-edited")
+        );
+
+        let off = fixture();
+        let path = project(&off, "acme-demo", true);
+        let id = new_draft(&off);
+        let plain = ConversionTarget {
+            project_path: path,
+            ..plain
+        };
+        let unchanged =
+            fill_missing_instructions(&off.state, &id, vec![plain], &good_headers()).await;
+        assert_eq!(unchanged[0].system_instruction, None);
     }
 
     // TS-49 (route): comments are scanned too, and targets are validated.

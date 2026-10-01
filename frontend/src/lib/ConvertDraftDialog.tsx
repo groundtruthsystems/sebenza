@@ -21,7 +21,7 @@ export interface ConvertTarget {
   branch: string;
   baseBranch?: string;
   prompt: string;
-  /** The reviewed system instruction; absent launches with `prompt` alone. */
+  /** The reviewed system instruction; absent, the server drafts one at convert time (or launches with the item note and `prompt` when it cannot). */
   systemInstruction?: string;
   architectFirst?: boolean;
 }
@@ -32,7 +32,7 @@ export interface ConvertTarget {
 interface RowInstruction {
   project: string;
   branch: string;
-  /** Null: no instruction coming (fallback); convert with the prompt alone. */
+  /** Null: no instruction coming (fallback); convert with the item note and the prompt. */
   text: string | null;
   sebenzaWorkspace: boolean;
   architectFirst: boolean;
@@ -86,7 +86,7 @@ export default function ConvertDraftDialog({
 }: {
   draftTitle: string;
   /** Enables "Draft instructions" (the system agent's per-target
-   *  instruction). Absent, the dialog converts with prompts alone. */
+   *  instruction). Absent, the server still drafts them at convert time. */
   draftId?: string;
   projects: ProjectSummary[];
   /** The previous wave, so a second conversion starts from what was done
@@ -240,14 +240,14 @@ export default function ConvertDraftDialog({
             {outcome.status === "unavailable"
               ? "System agent unavailable"
               : "System agent could not draft instructions"}
-            {outcome.error ? `: ${outcome.error}` : ""}. Converting with your
-            prompts alone.
+            {outcome.error ? `: ${outcome.error}` : ""}. Each worktree still
+            gets the inbox note and your prompt.
           </p>
         )}
         {outcome?.status === "pending" && (
           <p className="text-[12px] text-warning mb-3" role="status">
-            Instructions are still being drafted. Convert now with your prompts
-            alone, or draft again.
+            Instructions are still being drafted. Convert now and they are
+            drafted again at launch, or draft again here.
           </p>
         )}
         {outcome && outcome.advisories.length > 0 && (
@@ -337,8 +337,8 @@ export default function ConvertDraftDialog({
               )}
               {instructions[target.key] && !current(target) && (
                 <p className="text-[11px] text-warning m-0">
-                  Row changed since its instruction was drafted; it converts
-                  with the prompt alone unless you draft again.
+                  Row changed since its instruction was drafted; a fresh one is
+                  drafted when you convert.
                 </p>
               )}
               {current(target) && (

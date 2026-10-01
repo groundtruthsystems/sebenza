@@ -34,8 +34,9 @@ pub struct ConversionTarget {
     /// The operator's prompt for this worktree's agent.
     pub prompt: String,
     /// The system agent's instruction for this worktree, as the operator
-    /// reviewed (and perhaps edited) it. Absent when the agent was down or
-    /// not asked (UC-07a): the operator prompt then goes out verbatim.
+    /// reviewed (and perhaps edited) it. Absent when the agent was down
+    /// (UC-07a): the launch prompt then carries the item note and the
+    /// operator prompt alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_instruction: Option<String>,
     /// Launch architect-first when the project has a Sebenza workspace.
@@ -376,8 +377,7 @@ fn run_one<R: ConversionRunner>(
         .filter(|s| !s.is_empty());
     let architect_first = target.architect_first.unwrap_or(true);
     // Only ask about the workspace when the answer can change the prompt.
-    let sebenza_workspace =
-        system_instruction.is_some() && architect_first && runner.has_sebenza_workspace(target);
+    let sebenza_workspace = architect_first && runner.has_sebenza_workspace(target);
     let launch = ArchitectFirstPromptBuilder::build(&LaunchPromptInput {
         title: item.title,
         note_path: NOTE_REL_PATH,
@@ -1090,12 +1090,10 @@ pub fn sandbox_advisory(branch: &str, sandboxed: bool) -> Option<Advisory> {
 /// How a converted worktree's agent is started.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaunchMode {
-    /// No system instruction (the agent was down, failed, or not asked):
-    /// the operator's prompt, verbatim (UC-07a).
-    OperatorOnly,
     /// Run the Sebenza architect on this worktree's portion first (UC-07).
     ArchitectFirst,
-    /// Operator prompt plus system instruction, no architect (UC-07b).
+    /// The item note, the operator prompt and any system instruction, no
+    /// architect (UC-07b).
     Direct,
 }
 
@@ -1125,23 +1123,19 @@ pub struct LaunchPromptInput<'a> {
 pub struct ArchitectFirstPromptBuilder;
 
 impl ArchitectFirstPromptBuilder {
-    /// - no (or a blank) system instruction: the operator prompt, verbatim
-    ///   (UC-07a), exactly what conversion sent before system instructions;
+    /// Every prompt points the agent at the item note, so a worktree always
+    /// starts with the inbox content, never the operator prompt alone.
+    ///
     /// - architect-first wanted and the project has a Sebenza workspace: run
     ///   the `sebenza-architect` skill on this worktree's portion first, with
-    ///   the item note, the operator instruction and the system instruction;
-    /// - otherwise: a direct instruction combining the two (UC-07b).
+    ///   the item note, the operator instruction and the system instruction
+    ///   (when the agent produced one — UC-07a omits it);
+    /// - otherwise: a direct instruction combining them (UC-07b).
     pub fn build(input: &LaunchPromptInput<'_>) -> LaunchPrompt {
-        let Some(system) = input
+        let system = input
             .system_instruction
             .map(str::trim)
-            .filter(|s| !s.is_empty())
-        else {
-            return LaunchPrompt {
-                mode: LaunchMode::OperatorOnly,
-                text: input.operator_prompt.to_string(),
-            };
-        };
+            .filter(|s| !s.is_empty());
         let operator = input.operator_prompt.trim();
         let note = input.note_path;
         let title = input.title.trim();
@@ -1150,17 +1144,31 @@ impl ArchitectFirstPromptBuilder {
         } else {
             format!("The inbox item \"{title}\" is described in full at `{note}`.")
         };
+        let operator_block = if operator.is_empty() {
+            String::new()
+        } else {
+            format!("Operator instruction:\n{operator}\n\n")
+        };
+        let system_block = system
+            .map(|s| format!("System instruction:\n{s}\n\n"))
+            .unwrap_or_default();
+        let inputs = match (operator.is_empty(), system.is_some()) {
+            (false, true) => {
+                " together with the operator instruction and the system instruction below"
+            }
+            (false, false) => " together with the operator instruction below",
+            (true, true) => " together with the system instruction below",
+            (true, false) => "",
+        };
         if input.architect_first && input.sebenza_workspace {
             let text = format!(
                 "Start with the Sebenza architect. Before anything else, run the \
                  `sebenza-architect` skill (\"design this feature\") to architect this \
                  worktree's portion of the overall inbox item. Other worktrees may own other \
-                 portions, so design only what this worktree is asked for below.\n\n\
+                 portions, so design only what this worktree is asked for.\n\n\
                  {item} Read it first and give it to the architect as the feature \
-                 description, together with the operator instruction and the system \
-                 instruction below.\n\n\
-                 Operator instruction:\n{operator}\n\n\
-                 System instruction:\n{system}\n\n\
+                 description{inputs}.\n\n\
+                 {operator_block}{system_block}\
                  Once the design is approved, continue with the Sebenza workflow."
             );
             return LaunchPrompt {
@@ -1170,7 +1178,12 @@ impl ArchitectFirstPromptBuilder {
         }
         LaunchPrompt {
             mode: LaunchMode::Direct,
-            text: format!("{operator}\n\nSystem instruction:\n{system}\n\n{item}"),
+            text: format!(
+                "{item} Read it first: it is the context for this work.\n\n\
+                 {operator_block}{system_block}"
+            )
+            .trim_end()
+            .to_string(),
         }
     }
 }
@@ -1295,18 +1308,25 @@ mod launch_tests {
         assert!(p.text.contains(SYSTEM));
     }
 
-    // TS-47 (unit): no system instruction, the operator prompt goes verbatim.
+    // TS-47 (unit): with no system instruction the worktree still gets the
+    // item note and the operator prompt, and architect-first still applies.
     #[test]
-    fn without_a_system_instruction_the_operator_prompt_goes_out_verbatim() {
-        for (si, af, ws) in [
-            (None, true, true),
-            (None, false, false),
-            (Some("   "), true, true),
+    fn without_a_system_instruction_the_item_note_and_operator_prompt_still_go_out() {
+        for (si, af, ws, mode) in [
+            (None, true, true, LaunchMode::ArchitectFirst),
+            (None, false, false, LaunchMode::Direct),
+            (Some("   "), true, false, LaunchMode::Direct),
         ] {
             let p = ArchitectFirstPromptBuilder::build(&input(si, af, ws));
-            assert_eq!(p.mode, LaunchMode::OperatorOnly);
-            assert_eq!(p.text, OPERATOR);
+            assert_eq!(p.mode, mode);
+            assert!(p.text.contains(NOTE_REL_PATH), "{}", p.text);
+            assert!(p.text.contains("Bulk importer"), "{}", p.text);
+            assert!(p.text.contains(OPERATOR), "{}", p.text);
+            assert!(!p.text.contains("System instruction:"), "{}", p.text);
+            assert_ne!(p.text, OPERATOR, "never the operator prompt alone");
         }
+        let p = ArchitectFirstPromptBuilder::build(&input(None, true, true));
+        assert!(p.text.find("sebenza-architect").unwrap() < p.text.find(OPERATOR).unwrap());
     }
 
     struct PromptSpy {
@@ -1378,8 +1398,10 @@ mod launch_tests {
         assert!(!outcomes[1].architect_first);
         assert_eq!(outcomes[1].system_instruction.as_deref(), Some(SYSTEM));
 
-        assert_eq!(sent[2], "do the thing");
-        assert!(!outcomes[2].architect_first);
+        // No system instruction still means the item note and architect-first.
+        assert!(sent[2].contains("sebenza-architect") && sent[2].contains(NOTE_REL_PATH));
+        assert!(sent[2].contains("do the thing"));
+        assert!(outcomes[2].architect_first);
         assert_eq!(outcomes[2].system_instruction, None);
 
         // The record keeps the operator's prompt, not the built one.

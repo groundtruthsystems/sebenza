@@ -20,7 +20,7 @@ Every inbox item gets its own **system agent**: a resumable headless session on 
   - **UC-06a** Worktree gone → `delivery_failed`; operator may redeliver. **UC-06b** Rejected with reason → open.
   - **UC-06c** No proposal → operator authors the resolution directly; same confirm path.
 - **UC-07 Convert with formulated instructions** — the agent drafts per-target instructions from the item and comments; the operator edits them; each worktree starts the Sebenza architect with the item description, operator instruction, and system instruction.
-  - **UC-07a** Agent unavailable → operator prompt only. **UC-07b** Architect not applicable → direct instruction.
+  - **UC-07a** Agent unavailable → item note + operator prompt, still architect-first when applicable. **UC-07b** Architect not applicable → direct instruction.
 
 ```mermaid
 flowchart LR

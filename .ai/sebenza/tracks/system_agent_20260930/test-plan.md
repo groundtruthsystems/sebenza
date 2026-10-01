@@ -64,7 +64,7 @@ Fast, deterministic levels carry the weight. Rust unit tests cover the pure logi
 | TS-44 | UC-07 | Integration | High | Item with comments; convert/instructions; per-target `system_instruction` returned | Targets |
 | TS-45 | UC-07 | Unit | High | Item, operator prompt, system instruction; builder runs; architect-first prompt contains all three | Prompt text |
 | TS-46 | UC-07, BR-06 | UI | Med | Operator edits an instruction in dialog; edited text is submitted | Payload |
-| TS-47 | UC-07a, BR-06 | Integration | High | Agent unavailable or fails; convert proceeds with operator prompt only | Launch prompt |
+| TS-47 | UC-07a, BR-06 | Integration | High | Agent unavailable or fails; convert proceeds with item note + operator prompt, architect-first when applicable, no system instruction | Launch prompt |
 | TS-48 | UC-07b | Unit | Med | `architect_first=false`; direct instruction, no architect wrapper | Prompt text |
 | TS-49 | UC-07, T-07 | Unit | Med | Fake secret in comments; convert; secret scan covers comments | Scan hit |
 | TS-50 | TD-2 | Integration | Med | Restart with open, unproposed requests; re-enqueued once, deduped on `(request_id, job_kind, attempt)` | Job count |

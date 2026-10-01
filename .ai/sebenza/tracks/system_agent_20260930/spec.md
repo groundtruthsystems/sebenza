@@ -46,7 +46,7 @@ Worktree agents cannot ask the operator for help, and the inbox has no ranked vi
 - FR-29: Draft-help returns a proposed body, applied only through the existing hash-gated PUT.
 - FR-30: Before convert, the agent drafts a `system_instruction` per target from the item and its comments; the dialog shows each, editable.
 - FR-31: Each target launches architect-first, with the item description, operator prompt, and system instruction, when it is a feature and has a Sebenza workspace.
-- FR-32: Otherwise, or with the agent down, use a direct instruction or the operator prompt; `conversions[]` records both fields.
+- FR-32: Otherwise a direct instruction; with the agent down, omit the system instruction but always include the item note; `conversions[]` records both fields.
 
 **Parity, audit & data**
 - FR-33: Every new route is in the ts-rest contract, `api.ts`, and `sebenza-cli inbox`.

@@ -265,7 +265,7 @@ describe("ConvertDraftDialog system instructions", () => {
     expect(onconvert.mock.calls[0][0][0].architectFirst).toBe(false);
   });
 
-  it("falls back to the operator prompt when the agent is unavailable", async () => {
+  it("falls back to the item note and operator prompt when the agent is unavailable", async () => {
     const user = userEvent.setup();
     instructions.mockResolvedValue(
       response(
@@ -277,7 +277,7 @@ describe("ConvertDraftDialog system instructions", () => {
     await fill(user);
     await user.click(screen.getByRole("button", { name: "Draft instructions" }));
     expect(await screen.findByText(/system agent is disabled/)).toBeInTheDocument();
-    expect(screen.getByText(/your prompts alone/i)).toBeInTheDocument();
+    expect(screen.getByText(/inbox note and your prompt/i)).toBeInTheDocument();
     expect(screen.queryByLabelText("System instruction for target 1")).toBeNull();
     await user.click(screen.getByRole("button", { name: /Create 1 worktree/ }));
     expect(onconvert.mock.calls[0][0][0].systemInstruction).toBeUndefined();

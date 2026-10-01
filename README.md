@@ -393,17 +393,18 @@ produced. Converting again pre-fills from the previous wave.
 
 ### Convert instructions and architect-first launch
 
-With the system agent enabled, the convert dialog first asks it for a **system
-instruction per target** — what that worktree's portion of the item is, informed by the
-item and its comments. Each is shown for you to edit or clear before anything launches.
-A target that has a system instruction, in a project with a Sebenza workspace
-(`.ai/sebenza/index.md`), launches **architect-first**: its agent is told to run the
-`sebenza-architect` skill on its portion, with the item, your prompt and the system
-instruction. The fallbacks:
+With the system agent enabled, every target gets a **system instruction** — what that
+worktree's portion of the item is, informed by the item and its comments. Click **Draft
+instructions** in the convert dialog to review and edit them first; otherwise **Create**
+drafts them itself before launching. Every worktree's launch prompt points its agent at
+the full item (`.ai/sebenza/inbox-note.md`) — never your prompt alone. A target in a
+project with a Sebenza workspace (`.ai/sebenza/index.md`) launches **architect-first**:
+its agent is told to run the `sebenza-architect` skill on its portion, with the item,
+your prompt and the system instruction. The fallbacks:
 
-- no Sebenza workspace, or architect-first turned off: your prompt plus the system
-  instruction, as a direct instruction;
-- the agent disabled, failed or timed out: your prompt alone, as before.
+- no Sebenza workspace, or architect-first turned off: a direct instruction with the
+  item note, your prompt and the system instruction;
+- the agent disabled, failed or timed out: the same launch without a system instruction.
 
 `conversions[]` records each target's system instruction and whether it launched
 architect-first.
