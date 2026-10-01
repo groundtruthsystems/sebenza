@@ -289,6 +289,8 @@ pub struct ParsedClaudeStreamLine {
     pub assistant_delta: Option<(String, i64)>,
     pub blocks: Vec<ClaudeStreamBlock>,
     pub complete_session_id: Option<String>,
+    /// The final assistant message a successful `result` line carries.
+    pub result_text: Option<String>,
     pub error: Option<String>,
 }
 
@@ -679,6 +681,30 @@ mod tests {
             complete, session_id,
             "result line resolves the same session id"
         );
+    }
+
+    // TS-16: the final message and session id of the recorded run, as the
+    // system agent reads them.
+    #[test]
+    fn the_result_line_carries_the_final_message() {
+        let fixture = include_str!("testdata/claude_stream.jsonl");
+        let result = fixture
+            .lines()
+            .filter_map(parse_claude_stream_line)
+            .find_map(|p| p.result_text.map(|t| (t, p.complete_session_id)));
+        assert_eq!(
+            result,
+            Some((
+                "pong".to_string(),
+                Some("8fd04c17-2ee0-4a02-9867-118288169ac2".to_string())
+            ))
+        );
+        let failed = parse_claude_stream_line(
+            r#"{"type":"result","is_error":true,"result":"boom","session_id":"s"}"#,
+        )
+        .unwrap();
+        assert_eq!(failed.result_text, None);
+        assert_eq!(failed.error.as_deref(), Some("boom"));
     }
 
     #[test]

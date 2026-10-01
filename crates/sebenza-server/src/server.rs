@@ -1610,6 +1610,11 @@ fn prepare_agent_send(
         permission_mode: (profile.yolo == Some(true)).then(|| "bypassPermissions".to_string()),
         resume_session_id,
         system_prompt: profile.system_prompt.clone(),
+        binary: None,
+        model: None,
+        tools: None,
+        isolated: false,
+        timeout: None,
     })
 }
 

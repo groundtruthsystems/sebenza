@@ -206,6 +206,61 @@ pub struct AutoNameConfig {
     pub system_prompt: Option<String>,
 }
 
+/// The CLI the inbox system agent runs on. Only claude can be held to
+/// read-only tools and a non-yolo permission mode headlessly (SA-R2), so it is
+/// the only value [`crate::config::parse_system_agent_config`] accepts.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SystemAgentKind {
+    Claude,
+}
+
+impl SystemAgentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SystemAgentKind::Claude => "claude",
+        }
+    }
+}
+
+/// `systemAgent` in `~/.ai/sebenza.yaml`: the per-item inbox agent that
+/// drafts, triages requests and formulates conversion instructions.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemAgentConfig {
+    /// Kill switch. `false` spawns no jobs; the inbox works without the agent.
+    pub enabled: bool,
+    pub agent: SystemAgentKind,
+    /// Passed as `--model`; unset uses the CLI default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Agent children running at once, across every item.
+    pub max_concurrent: usize,
+    /// Wall-clock limit per job; past it the whole process group is killed.
+    pub timeout_secs: u64,
+    /// Turns on one session before it is re-seeded from the item.
+    pub turn_cap: u32,
+    /// The agent binary. `None` runs `claude` from `PATH`; tests point it at a stub.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+}
+
+impl Default for SystemAgentConfig {
+    /// No `systemAgent` block means no agent: it spends model budget, so it is
+    /// opt-in. A block that omits `enabled` turns it on.
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            agent: SystemAgentKind::Claude,
+            model: None,
+            max_concurrent: 2,
+            timeout_secs: 120,
+            turn_cap: 40,
+            binary: None,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OneshotConfig {
