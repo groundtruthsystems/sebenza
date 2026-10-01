@@ -19,6 +19,9 @@ export interface ConvertTarget {
   branch: string;
   baseBranch?: string;
   prompt: string;
+  /** The reviewed system instruction; absent launches with `prompt` alone. */
+  systemInstruction?: string;
+  architectFirst?: boolean;
 }
 
 /** Matches the server's cap; exceeding it is refused there too. */
@@ -59,6 +62,7 @@ export function rowError(
 
 export default function ConvertDraftDialog({
   draftTitle,
+  draftId: _draftId,
   projects,
   previousTargets,
   loading = false,
@@ -67,6 +71,9 @@ export default function ConvertDraftDialog({
   oncancel,
 }: {
   draftTitle: string;
+  /** Enables "Draft instructions" (the system agent's per-target
+   *  instruction). Absent, the dialog converts with prompts alone. */
+  draftId?: string;
   projects: ProjectSummary[];
   /** The previous wave, so a second conversion starts from what was done
    *  before rather than a blank form. */

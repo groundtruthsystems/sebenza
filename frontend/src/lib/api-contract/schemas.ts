@@ -1103,6 +1103,10 @@ export const InboxRequestSchema = z.object({
   openedAt: z.string(),
 });
 
+export type InboxComment = z.infer<typeof InboxCommentSchema>;
+export type InboxCommentGroups = z.infer<typeof InboxCommentGroupsSchema>;
+export type InboxRequest = z.infer<typeof InboxRequestSchema>;
+
 export const InboxRequestListSchema = z.object({
   requests: z.array(InboxRequestSchema),
 });

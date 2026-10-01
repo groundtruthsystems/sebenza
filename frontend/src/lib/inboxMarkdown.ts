@@ -179,3 +179,8 @@ function escapeHtml(s: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
+
+/** Render one comment, request or proposal body to sanitised HTML. */
+export function renderCommentMarkdown(_source: string): string {
+  throw new Error("todo");
+}
