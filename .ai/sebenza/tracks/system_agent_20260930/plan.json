@@ -130,13 +130,14 @@
           "id": "phase-3-task-1",
           "name": "Write tests for system agent runtime",
           "description": "Write failing tests using a stub stream-json CLI for queueing, limits, timeout, isolation, schemas, restart, and re-seed.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "f843eab"
         },
         {
           "id": "phase-3-task-2",
           "name": "Extend AgentStreamManager for final message, session id and model",
           "description": "Return the final message and session id from a run and pass the configured model, keeping chat behaviour unchanged.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-3",
