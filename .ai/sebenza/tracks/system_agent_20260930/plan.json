@@ -19,13 +19,14 @@
           "id": "phase-1-task-2",
           "name": "Implement frontmatter v2 and priority fields",
           "description": "Add priority and priority_source with serde defaults, a flatten catch-all, and refusal to write newer schema versions.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "42b5f9c"
         },
         {
           "id": "phase-1-task-3",
           "name": "Implement event sidecar and request fold",
           "description": "Add the single-writer append-only events.jsonl, the request state fold, and the server-owned session.json with 0600 files.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-4",
