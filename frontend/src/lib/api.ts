@@ -583,9 +583,32 @@ export async function deleteInboxDraft(id: string, confirmed = false) {
  *  background because git plus tmux is multiple seconds per target. */
 export async function convertInboxDraft(
   id: string,
-  targets: { projectPath: string; branch: string; prompt: string }[],
+  targets: {
+    projectPath: string;
+    branch: string;
+    prompt: string;
+    baseBranch?: string | null;
+    agentId?: string | null;
+    systemInstruction?: string | null;
+    architectFirst?: boolean;
+  }[],
 ) {
   return hubApi.convertInboxDraft({
+    params: { id },
+    body: { targets },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Ask the system agent for a `systemInstruction` per target, for the
+ *  convert dialog to show and the operator to edit. Waits (bounded) for the
+ *  job; on `fallback` every instruction is null and the conversion goes
+ *  ahead with the operator prompt alone. */
+export async function requestConvertInstructions(
+  id: string,
+  targets: { project: string; branch: string; prompt?: string }[],
+) {
+  return hubApi.requestConvertInstructions({
     params: { id },
     body: { targets },
     extraHeaders: inboxAuthHeaders(),

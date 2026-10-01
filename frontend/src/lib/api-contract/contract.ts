@@ -75,6 +75,8 @@ import {
   RedactInboxCommentResponseSchema,
   InboxDraftHelpRequestSchema,
   InboxDraftHelpResponseSchema,
+  ConvertInstructionsRequestSchema,
+  ConvertInstructionsResponseSchema,
 } from "./schemas";
 
 const c = initContract();
@@ -133,6 +135,7 @@ export const apiPaths = {
   deleteInboxDraft: "/api/inbox/:id",
   saveInboxDraftBody: "/api/inbox/:id/body",
   convertInboxDraft: "/api/inbox/:id/convert",
+  requestConvertInstructions: "/api/inbox/:id/convert/instructions",
   fetchConversionJob: "/api/inbox/jobs/:id",
   setInboxPriority: "/api/inbox/:id/priority",
   fetchInboxComments: "/api/inbox/:id/comments",
@@ -632,6 +635,15 @@ export const apiContract = c.router(
         403: ErrorResponseSchema,
         404: ErrorResponseSchema,
         500: ErrorResponseSchema,
+      },
+    },
+    requestConvertInstructions: {
+      method: "POST",
+      path: apiPaths.requestConvertInstructions,
+      body: ConvertInstructionsRequestSchema,
+      responses: {
+        200: ConvertInstructionsResponseSchema,
+        ...inboxDecisionErrors,
       },
     },
     fetchConversionJob: {

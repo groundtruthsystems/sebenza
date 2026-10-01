@@ -182,6 +182,14 @@ pub fn validate_targets(
         if target.prompt.trim().is_empty() {
             errors.push(TargetError::EmptyPrompt { index });
         }
+
+        if target
+            .system_instruction
+            .as_ref()
+            .is_some_and(|s| s.len() > MAX_SYSTEM_INSTRUCTION_BYTES)
+        {
+            errors.push(TargetError::SystemInstructionTooLong { index });
+        }
     }
     errors
 }
@@ -345,25 +353,47 @@ where
     R: ConversionRunner,
     F: FnMut(&ConversionOutcome),
 {
-    targets
-        .iter()
-        .map(|target| {
-            let outcome = run_one(runner, draft_id, body, target);
-            on_outcome(&outcome);
-            outcome
-        })
-        .collect()
+    let item = ConversionItem {
+        draft_id,
+        title: "",
+        body,
+    };
+    run_conversion_item(runner, &item, targets, |o| on_outcome(o))
 }
 
 /// One target, start to finish. Every early return is a recorded failure, never
 /// a silent skip.
 fn run_one<R: ConversionRunner>(
     runner: &R,
-    draft_id: &str,
-    body: &str,
+    item: &ConversionItem<'_>,
     target: &ConversionTarget,
 ) -> ConversionOutcome {
-    let fail = |e: String| ConversionOutcome::failed(target, e, runner.now());
+    let (draft_id, body) = (item.draft_id, item.body);
+    let system_instruction = target
+        .system_instruction
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let architect_first = target.architect_first.unwrap_or(true);
+    // Only ask about the workspace when the answer can change the prompt.
+    let sebenza_workspace =
+        system_instruction.is_some() && architect_first && runner.has_sebenza_workspace(target);
+    let launch = ArchitectFirstPromptBuilder::build(&LaunchPromptInput {
+        title: item.title,
+        note_path: NOTE_REL_PATH,
+        operator_prompt: &target.prompt,
+        system_instruction,
+        architect_first,
+        sebenza_workspace,
+    });
+    // The record keeps the operator's prompt; the launch mode and the
+    // instruction ride alongside it.
+    let record = |mut outcome: ConversionOutcome| {
+        outcome.system_instruction = system_instruction.map(str::to_string);
+        outcome.architect_first = launch.mode == LaunchMode::ArchitectFirst;
+        outcome
+    };
+    let fail = |e: String| record(ConversionOutcome::failed(target, e, runner.now()));
 
     let worktree_path = match runner.create_worktree(target) {
         Ok(path) => path,
@@ -385,10 +415,18 @@ fn run_one<R: ConversionRunner>(
     // not worth discarding a worktree that is otherwise ready to work.
     let _ = runner.record_origin(&worktree_path, draft_id);
 
-    if let Err(e) = runner.send_prompt(target, &worktree_path) {
+    let launched = ConversionTarget {
+        prompt: launch.text.clone(),
+        ..target.clone()
+    };
+    if let Err(e) = runner.send_prompt(&launched, &worktree_path) {
         return fail(e);
     }
-    ConversionOutcome::created(target, worktree_path, runner.now())
+    record(ConversionOutcome::created(
+        target,
+        worktree_path,
+        runner.now(),
+    ))
 }
 
 #[cfg(test)]
@@ -1087,9 +1125,53 @@ pub struct LaunchPromptInput<'a> {
 pub struct ArchitectFirstPromptBuilder;
 
 impl ArchitectFirstPromptBuilder {
+    /// - no (or a blank) system instruction: the operator prompt, verbatim
+    ///   (UC-07a), exactly what conversion sent before system instructions;
+    /// - architect-first wanted and the project has a Sebenza workspace: run
+    ///   the `sebenza-architect` skill on this worktree's portion first, with
+    ///   the item note, the operator instruction and the system instruction;
+    /// - otherwise: a direct instruction combining the two (UC-07b).
     pub fn build(input: &LaunchPromptInput<'_>) -> LaunchPrompt {
-        let _ = input;
-        todo!("phase-5-task-3")
+        let Some(system) = input
+            .system_instruction
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            return LaunchPrompt {
+                mode: LaunchMode::OperatorOnly,
+                text: input.operator_prompt.to_string(),
+            };
+        };
+        let operator = input.operator_prompt.trim();
+        let note = input.note_path;
+        let title = input.title.trim();
+        let item = if title.is_empty() {
+            format!("The inbox item is described in full at `{note}`.")
+        } else {
+            format!("The inbox item \"{title}\" is described in full at `{note}`.")
+        };
+        if input.architect_first && input.sebenza_workspace {
+            let text = format!(
+                "Start with the Sebenza architect. Before anything else, run the \
+                 `sebenza-architect` skill (\"design this feature\") to architect this \
+                 worktree's portion of the overall inbox item. Other worktrees may own other \
+                 portions, so design only what this worktree is asked for below.\n\n\
+                 {item} Read it first and give it to the architect as the feature \
+                 description, together with the operator instruction and the system \
+                 instruction below.\n\n\
+                 Operator instruction:\n{operator}\n\n\
+                 System instruction:\n{system}\n\n\
+                 Once the design is approved, continue with the Sebenza workflow."
+            );
+            return LaunchPrompt {
+                mode: LaunchMode::ArchitectFirst,
+                text,
+            };
+        }
+        LaunchPrompt {
+            mode: LaunchMode::Direct,
+            text: format!("{operator}\n\nSystem instruction:\n{system}\n\n{item}"),
+        }
     }
 }
 
@@ -1112,8 +1194,15 @@ where
     R: ConversionRunner,
     F: FnMut(&ConversionOutcome),
 {
-    let _ = (runner, item, targets, on_outcome);
-    todo!("phase-5-task-3")
+    let mut on_outcome = on_outcome;
+    targets
+        .iter()
+        .map(|target| {
+            let outcome = run_one(runner, item, target);
+            on_outcome(&outcome);
+            outcome
+        })
+        .collect()
 }
 
 /// [`scan_for_secrets`] over the body, and over the item's comments too: they

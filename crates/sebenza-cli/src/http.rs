@@ -686,6 +686,13 @@ impl Http {
         self.read_json(resp).await
     }
 
+    /// `POST /api/inbox/{id}/convert/instructions` — waits for the agent.
+    pub async fn inbox_convert_instructions(&self, id: &str, targets: Value) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/convert/instructions", self.hub);
+        self.inbox_decision(url, serde_json::json!({ "targets": targets }))
+            .await
+    }
+
     /// `PATCH /api/inbox/{id}/priority` — `{"priority": null}` clears.
     pub async fn inbox_set_priority(&self, id: &str, body: Value) -> Result<Value> {
         let resp = self

@@ -1,6 +1,7 @@
 //! Inbox subcommands: `ls`, `show`, `new`, `edit`, `link`, `unlink`, `drop`, `rm`,
 //! `convert`, `job`, `priority`, `comment`, `comments`, `requests`, `confirm`,
-//! `reject`, `redeliver`, `retry-triage`, `agent-job`, `redact`, `draft-help`.
+//! `reject`, `redeliver`, `retry-triage`, `agent-job`, `redact`, `draft-help`,
+//! `convert-instructions`.
 //!
 //! The inbox is global — drafts exist before they belong to any project — so
 //! these talk to the hub routes rather than a project-prefixed base.
@@ -37,6 +38,17 @@ enum InboxCommand {
         specs: Vec<String>,
         base: Option<String>,
         watch: bool,
+        /// `branch=TEXT`: a system instruction for that target.
+        systems: Vec<(String, String)>,
+        /// `--no-architect`: launch with a direct instruction (UC-07b).
+        architect: bool,
+        /// `--instructions`: ask the system agent first and attach what it says.
+        instructions: bool,
+    },
+    /// Ask the system agent for each target's system instruction.
+    ConvertInstructions {
+        id: String,
+        specs: Vec<String>,
     },
     Job(String),
     /// `None` clears the override.
@@ -102,6 +114,9 @@ fn usage() -> String {
         "  sebenza-cli inbox drop <id>                    Mark a draft dropped",
         "  sebenza-cli inbox rm <id> [--yes]              Delete a draft",
         "  sebenza-cli inbox convert <id> <target>... [--base B]  Turn a draft into worktrees",
+        "  sebenza-cli inbox convert-instructions <id> <project:branch[:prompt]>...",
+        "                                                 Ask the system agent for each target's",
+        "                                                 system instruction",
         "  sebenza-cli inbox job <job-id>                 Show a conversion's progress",
         "  sebenza-cli inbox priority <id> <P0-P3|clear>  Set or clear the priority override",
         "  sebenza-cli inbox comment <id> [--worktree project:branch] <text>",
@@ -132,6 +147,12 @@ fn usage() -> String {
         "",
         "Pass --watch to poll until the fan-out finishes.",
         "",
+        "--instructions asks the system agent for each target's system instruction first",
+        "(falling back to your prompts alone if it is unavailable); --system branch=TEXT",
+        "sets one yourself. A target with a system instruction in a project with a",
+        "Sebenza workspace starts with the Sebenza architect; --no-architect sends a",
+        "direct instruction instead.",
+        "",
         "Drafts list by priority (P0 first), then newest. A priority you set is an",
         "override the system agent will not change; `priority <id> clear` hands it back.",
         "",
@@ -157,6 +178,24 @@ fn opt(args: &[String], name: &str) -> Option<String> {
     args.get(i + 1).cloned()
 }
 
+/// Every value of a repeatable option.
+fn opts(args: &[String], name: &str) -> Vec<String> {
+    args.windows(2)
+        .filter(|w| w[0] == name)
+        .map(|w| w[1].clone())
+        .collect()
+}
+
+/// `branch=TEXT`, split at the first `=`.
+fn parse_system(spec: &str) -> Result<(String, String)> {
+    match spec.split_once('=') {
+        Some((branch, text)) if !branch.trim().is_empty() && !text.trim().is_empty() => {
+            Ok((branch.trim().to_string(), text.trim().to_string()))
+        }
+        _ => Err(anyhow!("--system {spec:?} is not branch=instruction")),
+    }
+}
+
 fn positional(args: &[String]) -> Vec<String> {
     let mut out = Vec::new();
     let mut skip_next = false;
@@ -170,6 +209,7 @@ fn positional(args: &[String]) -> Vec<String> {
             || a == "--worktree"
             || a == "--body"
             || a == "--instruction"
+            || a == "--system"
         {
             skip_next = true;
             continue;
@@ -211,12 +251,27 @@ fn parse(args: &[String]) -> Result<Option<InboxCommand>> {
             if specs.is_empty() {
                 return Err(anyhow!("Missing at least one project:branch:prompt target"));
             }
+            let systems = opts(args, "--system")
+                .iter()
+                .map(|s| parse_system(s))
+                .collect::<Result<Vec<_>>>()?;
             Ok(Some(InboxCommand::Convert {
                 id,
                 specs,
                 base: opt(args, "--base"),
                 watch: flag(args, "--watch"),
+                systems,
+                architect: !flag(args, "--no-architect"),
+                instructions: flag(args, "--instructions"),
             }))
+        }
+        "convert-instructions" => {
+            let id = need(0, "draft id")?;
+            let specs: Vec<String> = pos.into_iter().skip(1).collect();
+            if specs.is_empty() {
+                return Err(anyhow!("Missing at least one project:branch target"));
+            }
+            Ok(Some(InboxCommand::ConvertInstructions { id, specs }))
         }
         "job" => Ok(Some(InboxCommand::Job(need(0, "job id")?))),
         "rm" | "remove" | "delete" => Ok(Some(InboxCommand::Rm {
@@ -505,6 +560,127 @@ fn parse_target(spec: &str, default_base: Option<&str>) -> Result<Value> {
     Ok(out)
 }
 
+/// Parse `project:branch[:prompt]` for `convert-instructions`; the prompt
+/// may be absent there.
+fn parse_instruction_target(spec: &str) -> Result<Value> {
+    let (project, rest) = spec
+        .split_once(':')
+        .ok_or_else(|| anyhow!("target {spec:?} is not project:branch[:prompt]"))?;
+    let (branch, prompt) = rest.split_once(':').unwrap_or((rest, ""));
+    if project.trim().is_empty() || branch.trim().is_empty() {
+        return Err(anyhow!("target {spec:?} has an empty field"));
+    }
+    Ok(json!({
+        "project": expand_home(project.trim()),
+        "branch": branch.trim(),
+        "prompt": prompt.trim(),
+    }))
+}
+
+/// The `convert/instructions` request for convert targets.
+fn instruction_request(targets: &[Value]) -> Value {
+    Value::Array(
+        targets
+            .iter()
+            .map(|t| {
+                json!({
+                    "project": t["projectPath"],
+                    "branch": t["branch"],
+                    "prompt": t["prompt"],
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Attach system instructions to convert targets: an explicit
+/// `--system branch=TEXT` wins over the agent's, and `--no-architect`
+/// applies to every target.
+fn attach_instructions(
+    targets: &mut [Value],
+    from_agent: Option<&Value>,
+    systems: &[(String, String)],
+    architect: bool,
+) {
+    for target in targets.iter_mut() {
+        let branch = target["branch"].as_str().unwrap_or("").to_string();
+        let project = target["projectPath"].as_str().unwrap_or("").to_string();
+        let agent = from_agent
+            .and_then(|r| r.get("targets"))
+            .and_then(Value::as_array)
+            .and_then(|all| {
+                all.iter().find(|t| {
+                    t["branch"].as_str() == Some(&branch) && t["project"].as_str() == Some(&project)
+                })
+            })
+            .and_then(|t| t.get("systemInstruction"))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let explicit = systems
+            .iter()
+            .find(|(b, _)| *b == branch)
+            .map(|(_, text)| text.clone());
+        if let Some(text) = explicit.or(agent) {
+            target["systemInstruction"] = Value::String(text);
+        }
+        if !architect {
+            target["architectFirst"] = Value::Bool(false);
+        }
+    }
+}
+
+fn print_instructions(resp: &Value) {
+    let status = resp.get("status").and_then(Value::as_str).unwrap_or("");
+    if resp
+        .get("fallback")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        let why = resp.get("error").and_then(Value::as_str).unwrap_or(status);
+        println!("No system instructions ({why}); convert with your prompts alone.");
+    } else if status == "pending" {
+        let job = resp.get("jobId").and_then(Value::as_str).unwrap_or("");
+        println!("Still running; follow it with: sebenza-cli inbox agent-job <id> {job}");
+    }
+    for t in resp
+        .get("targets")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let key = t.get("key").and_then(Value::as_str).unwrap_or("");
+        let workspace = if t
+            .get("sebenzaWorkspace")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            "architect-first"
+        } else {
+            "direct (no Sebenza workspace)"
+        };
+        println!("{key}  [{workspace}]");
+        match t.get("systemInstruction").and_then(Value::as_str) {
+            Some(text) => {
+                for line in text.lines() {
+                    println!("    {line}");
+                }
+            }
+            None => println!("    (none)"),
+        }
+    }
+    for a in resp
+        .get("advisories")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        eprintln!(
+            "warning: {}",
+            a.get("message").and_then(Value::as_str).unwrap_or("")
+        );
+    }
+}
+
 fn print_job(job: &Value) {
     let outcomes = job
         .get("outcomes")
@@ -692,12 +868,25 @@ pub async fn run(args: &[String], port: u16) -> i32 {
                 specs,
                 base,
                 watch,
+                systems,
+                architect,
+                instructions,
             } => {
-                let targets: Result<Vec<Value>> = specs
+                let mut targets = specs
                     .iter()
                     .map(|s| parse_target(s, base.as_deref()))
-                    .collect();
-                let started = http.inbox_convert(&id, Value::Array(targets?)).await?;
+                    .collect::<Result<Vec<Value>>>()?;
+                let from_agent = if instructions {
+                    let resp = http
+                        .inbox_convert_instructions(&id, instruction_request(&targets))
+                        .await?;
+                    print_instructions(&resp);
+                    Some(resp)
+                } else {
+                    None
+                };
+                attach_instructions(&mut targets, from_agent.as_ref(), &systems, architect);
+                let started = http.inbox_convert(&id, Value::Array(targets)).await?;
                 let job_id = started
                     .get("jobId")
                     .and_then(Value::as_str)
@@ -724,6 +913,17 @@ pub async fn run(args: &[String], port: u16) -> i32 {
                 }
             }
             InboxCommand::Job(job_id) => print_job(&http.inbox_job(&job_id).await?),
+            InboxCommand::ConvertInstructions { id, specs } => {
+                let targets = specs
+                    .iter()
+                    .map(|s| parse_instruction_target(s))
+                    .collect::<Result<Vec<Value>>>()?;
+                print_instructions(
+                    &http
+                        .inbox_convert_instructions(&id, Value::Array(targets))
+                        .await?,
+                );
+            }
             InboxCommand::Priority { id, priority } => {
                 let d = http
                     .inbox_set_priority(&id, json!({ "priority": priority }))
@@ -1152,6 +1352,91 @@ mod tests {
             Some(InboxCommand::Redact { .. })
         ));
         assert!(parse(&a(&["redact", "D1"])).is_err());
+    }
+
+    #[test]
+    fn convert_takes_system_instructions_and_the_architect_switch() {
+        match parse(&a(&[
+            "convert",
+            "D1",
+            "/code/acme:feat-x:build it",
+            "--system",
+            "feat-x=Architect the parser only",
+            "--no-architect",
+            "--instructions",
+        ]))
+        .unwrap()
+        .unwrap()
+        {
+            InboxCommand::Convert {
+                specs,
+                systems,
+                architect,
+                instructions,
+                ..
+            } => {
+                assert_eq!(specs, vec!["/code/acme:feat-x:build it"]);
+                assert_eq!(
+                    systems,
+                    vec![(
+                        "feat-x".to_string(),
+                        "Architect the parser only".to_string()
+                    )]
+                );
+                assert!(!architect);
+                assert!(instructions);
+            }
+            _ => panic!("expected Convert"),
+        }
+        assert!(parse(&a(&["convert", "D1", "/c:b:p", "--system", "no-equals"])).is_err());
+    }
+
+    #[test]
+    fn explicit_system_instructions_win_over_the_agent_and_fallback_attaches_none() {
+        let mut targets = vec![
+            parse_target("/code/acme:one:p1", None).unwrap(),
+            parse_target("/code/acme:two:p2", None).unwrap(),
+        ];
+        let agent = json!({ "targets": [
+            { "project": "/code/acme", "branch": "one", "systemInstruction": "agent one" },
+            { "project": "/code/acme", "branch": "two", "systemInstruction": "agent two" },
+        ]});
+        attach_instructions(
+            &mut targets,
+            Some(&agent),
+            &[("two".into(), "mine".into())],
+            true,
+        );
+        assert_eq!(targets[0]["systemInstruction"], "agent one");
+        assert_eq!(targets[1]["systemInstruction"], "mine");
+        assert!(targets[0].get("architectFirst").is_none());
+
+        // UC-07a: a fallback response carries nulls, so nothing is attached.
+        let mut plain = vec![parse_target("/code/acme:one:p1", None).unwrap()];
+        let fallback = json!({ "fallback": true, "targets": [
+            { "project": "/code/acme", "branch": "one", "systemInstruction": null },
+        ]});
+        attach_instructions(&mut plain, Some(&fallback), &[], false);
+        assert!(plain[0].get("systemInstruction").is_none());
+        assert_eq!(plain[0]["architectFirst"], false);
+    }
+
+    #[test]
+    fn convert_instructions_take_targets_with_an_optional_prompt() {
+        match parse(&a(&["convert-instructions", "D1", "/code/acme:feat-x"]))
+            .unwrap()
+            .unwrap()
+        {
+            InboxCommand::ConvertInstructions { specs, .. } => {
+                let t = parse_instruction_target(&specs[0]).unwrap();
+                assert_eq!(t["project"], "/code/acme");
+                assert_eq!(t["branch"], "feat-x");
+                assert_eq!(t["prompt"], "");
+            }
+            _ => panic!("expected ConvertInstructions"),
+        }
+        assert!(parse(&a(&["convert-instructions", "D1"])).is_err());
+        assert!(usage().contains("inbox convert-instructions "));
     }
 
     #[test]

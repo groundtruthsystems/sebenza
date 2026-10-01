@@ -17,8 +17,8 @@ use crate::domain::model::{
     DraftStatus, InboxDraft, InboxDraftView, Priority, PrioritySource, ProjectRef, inbox_order,
 };
 use crate::services::inbox_convert::{
-    ConversionOutcome, ConversionRunner, ConversionTarget, TargetError, run_conversion,
-    status_after, validate_targets,
+    ConversionItem, ConversionOutcome, ConversionRunner, ConversionTarget, TargetError,
+    run_conversion_item, status_after, validate_targets,
 };
 use crate::services::inbox_limits::{InboxLimits, RateLimiter};
 use crate::services::resolution_delivery::{PaneSink, ResolutionDelivery};
@@ -589,7 +589,12 @@ impl InboxService {
         // Prior waves are kept: the draft is the ledger of everything it has
         // ever produced, not just the most recent run.
         let mut recorded = draft.frontmatter.conversions.clone();
-        let outcomes = run_conversion(runner, id, &draft.body, targets, |outcome| {
+        let item = ConversionItem {
+            draft_id: id,
+            title: &draft.frontmatter.title,
+            body: &draft.body,
+        };
+        let outcomes = run_conversion_item(runner, &item, targets, |outcome| {
             if let Ok(value) = serde_yaml::to_value(outcome) {
                 recorded.push(value);
                 // Flush immediately; losing a back-link to a worktree that

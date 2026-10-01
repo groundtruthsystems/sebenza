@@ -571,6 +571,56 @@ describe("inbox priority, comments and requests", () => {
     expect(out.proposed_body).toBe("# Goal");
   });
 
+  it("asks for convert instructions and reads a fallback", async () => {
+    const reply = {
+      jobId: null,
+      status: "unavailable",
+      fallback: true,
+      error: "the system agent is disabled",
+      targets: [
+        {
+          project: "/code/acme-demo",
+          branch: "feat-x",
+          key: "acme-demo/feat-x",
+          systemInstruction: null,
+          sebenzaWorkspace: true,
+        },
+      ],
+      advisories: [],
+    };
+    const seen = recordFetch(reply);
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+    const got = await api.requestConvertInstructions(draft.id, [
+      { project: "/code/acme-demo", branch: "feat-x", prompt: "Build it" },
+    ]);
+    expect(got.fallback).toBe(true);
+    expect(got.targets[0].systemInstruction).toBeNull();
+    expect(seen[0].url).toContain(
+      `/api/inbox/${draft.id}/convert/instructions`,
+    );
+    expect(seen[0].auth).toBe("Bearer tok");
+    expect(JSON.parse(seen[0].body).targets[0].project).toBe("/code/acme-demo");
+  });
+
+  it("submits system instructions with a conversion", async () => {
+    const seen = recordFetch({ jobId: "01JOB", advisories: [] });
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+    await api.convertInboxDraft(draft.id, [
+      {
+        projectPath: "/code/acme-demo",
+        branch: "feat-x",
+        prompt: "Build it",
+        systemInstruction: "Architect the parser only.",
+        architectFirst: false,
+      },
+    ]);
+    const sent = JSON.parse(seen[0].body).targets[0];
+    expect(sent.systemInstruction).toBe("Architect the parser only.");
+    expect(sent.architectFirst).toBe(false);
+  });
+
   it("redacts a comment", async () => {
     const seen = recordFetch({ eventId: "01TOMB", targetEventId: "01EV" });
     window.__SEBENZA_CONTROL_TOKEN__ = "tok";

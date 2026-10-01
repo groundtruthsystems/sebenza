@@ -1030,16 +1030,210 @@ pub struct ConvertInstructionsResponse {
     pub advisories: Vec<Advisory>,
 }
 
+/// How each target is named to the agent: `<project dir name>/<branch>`,
+/// or the full path where two targets would share a short name.
+fn instruction_keys(targets: &[InstructionTargetBody]) -> Vec<String> {
+    let short: Vec<String> = targets
+        .iter()
+        .map(|t| {
+            let name = std::path::Path::new(&t.project)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| t.project.clone());
+            format!("{name}/{}", t.branch)
+        })
+        .collect();
+    short
+        .iter()
+        .zip(targets)
+        .map(|(key, t)| {
+            if short.iter().filter(|k| *k == key).count() > 1 {
+                format!("{}/{}", t.project.trim_end_matches('/'), t.branch)
+            } else {
+                key.clone()
+            }
+        })
+        .collect()
+}
+
+/// Longest the route waits for the instruction job past its own timeout.
+const INSTRUCTIONS_WAIT_SLACK_SECS: u64 = 15;
+/// Longest the route ever holds a request open.
+const INSTRUCTIONS_WAIT_CAP_SECS: u64 = 300;
+
 /// `POST /api/inbox/{id}/convert/instructions` — ask the system agent for a
-/// `systemInstruction` per target (FR-30) and wait for it, up to a bound.
+/// `systemInstruction` per target (FR-30), drawn from the item and its
+/// comments, for the convert dialog to show and the operator to edit.
+///
+/// Waits for the job, bounded by the agent's timeout plus slack, because
+/// the dialog has nothing to show until it ends. The answer is always a 200
+/// with a `status`:
+/// - `succeeded`: each target carries its `systemInstruction`;
+/// - `unavailable` (agent disabled, not running, or its queue is full) or
+///   `failed`: `fallback` is true and every instruction is null; convert
+///   with the operator prompt alone (UC-07a);
+/// - `pending`: the bound elapsed first; follow `jobId` on
+///   `GET …/agent/jobs/{jobId}` or the agent stream, whose convert output
+///   names each target by its `key`.
+///
+/// Nothing is written: the instructions reach a worktree only when the
+/// operator submits them with the convert request.
 pub async fn convert_instructions(
     State(state): State<AppState>,
     Path(id): Path<String>,
     headers: HeaderMap,
     Json(body): Json<ConvertInstructionsBody>,
 ) -> Result<Json<ConvertInstructionsResponse>, ApiError> {
-    let _ = (state, id, headers, body);
-    todo!("phase-5-task-3")
+    use crate::services::inbox_convert::{SEBENZA_INDEX_REL_PATH, TargetError};
+    use crate::services::system_agent::{JobInput, JobOutput, JobStatus};
+    check(&headers, "POST")?;
+    let svc = inbox(&state);
+    let draft = match svc.get(&id)?.0 {
+        InboxDraftView::Parsed(d) => d,
+        InboxDraftView::Raw { .. } => {
+            return Err(ApiError::new(422, "the draft does not parse".to_string()));
+        }
+    };
+
+    // The operator may ask before writing a prompt; everything else is
+    // checked exactly as convert will check it.
+    let known: Vec<String> = state
+        .manager
+        .list()
+        .iter()
+        .map(|a| a.path.clone())
+        .collect();
+    let as_targets: Vec<ConversionTarget> = body
+        .targets
+        .iter()
+        .map(|t| ConversionTarget {
+            project_path: t.project.clone(),
+            branch: t.branch.clone(),
+            prompt: t.prompt.clone(),
+            ..Default::default()
+        })
+        .collect();
+    let errors: Vec<String> = validate_targets(&as_targets, &known)
+        .into_iter()
+        .filter(|e| !matches!(e, TargetError::EmptyPrompt { .. }))
+        .map(|e| e.to_string())
+        .collect();
+    if !errors.is_empty() {
+        return Err(ApiError::new(400, errors.join("; ")));
+    }
+
+    let keys = instruction_keys(&body.targets);
+    let mut targets: Vec<InstructionTargetWire> = body
+        .targets
+        .iter()
+        .zip(&keys)
+        .map(|(t, key)| InstructionTargetWire {
+            project: t.project.clone(),
+            branch: t.branch.clone(),
+            key: key.clone(),
+            system_instruction: None,
+            sebenza_workspace: std::path::Path::new(&t.project)
+                .join(SEBENZA_INDEX_REL_PATH)
+                .is_file(),
+        })
+        .collect();
+    let advisories = scan_for_secrets(&draft.body);
+    let respond = |job_id, status, fallback, error, targets| {
+        Json(ConvertInstructionsResponse {
+            job_id,
+            status,
+            fallback,
+            error,
+            targets,
+            advisories: advisories.clone(),
+        })
+    };
+
+    let operator_prompt = body
+        .targets
+        .iter()
+        .zip(&keys)
+        .filter(|(t, _)| !t.prompt.trim().is_empty())
+        .map(|(t, key)| format!("{key}: {}", t.prompt.trim()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let input = JobInput::Convert {
+        targets: keys.clone(),
+        operator_prompt: (!operator_prompt.is_empty()).then_some(operator_prompt),
+    };
+    let agent = state.system_agent.clone();
+    let draft_id = id.clone();
+    let enqueued = tokio::task::spawn_blocking(move || agent.enqueue(&draft_id, input))
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
+    let job_id = match enqueued {
+        Ok(job_id) => job_id,
+        Err(
+            e @ (EnqueueError::Disabled | EnqueueError::NoRuntime | EnqueueError::QueueFull(_)),
+        ) => {
+            tracing::info!(draft_id = %id, "convert instructions unavailable: {e}");
+            return Ok(respond(
+                None,
+                "unavailable",
+                true,
+                Some(e.to_string()),
+                targets,
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    tracing::info!(
+        audit = "inbox.agent.convert_instructions",
+        draft_id = %id,
+        job_id = %job_id,
+        targets = keys.len(),
+        caller = caller_marker(&headers).as_deref().unwrap_or(""),
+        "convert instructions requested"
+    );
+
+    let bound = std::time::Duration::from_secs(
+        state
+            .system_agent
+            .config()
+            .timeout_secs
+            .saturating_add(INSTRUCTIONS_WAIT_SLACK_SECS)
+            .min(INSTRUCTIONS_WAIT_CAP_SECS),
+    );
+    let job = match tokio::time::timeout(bound, state.system_agent.wait(&job_id)).await {
+        Ok(Some(job)) => job,
+        Ok(None) => {
+            return Ok(respond(
+                Some(job_id),
+                "failed",
+                true,
+                Some("the instruction job was lost".to_string()),
+                targets,
+            ));
+        }
+        Err(_) => return Ok(respond(Some(job_id), "pending", false, None, targets)),
+    };
+    match (job.status, &job.output) {
+        (JobStatus::Succeeded, Some(JobOutput::Convert(out))) => {
+            for target in &mut targets {
+                target.system_instruction = out
+                    .targets
+                    .iter()
+                    .find(|o| o.project == target.key)
+                    .map(|o| o.system_instruction.clone());
+            }
+            Ok(respond(Some(job_id), "succeeded", false, None, targets))
+        }
+        _ => Ok(respond(
+            Some(job_id),
+            "failed",
+            true,
+            Some(
+                job.error
+                    .unwrap_or_else(|| "the instruction job produced no instructions".into()),
+            ),
+            targets,
+        )),
+    }
 }
 
 /// `POST /api/inbox/{id}/comments/{eventId}/redact` — tombstone a comment,
@@ -2150,7 +2344,7 @@ mod tests {
         let f = agent_fixture("ok");
         let id = new_draft(&f);
         let hash = body_hash(&f, &id).await;
-        save(&f, &id, &hash, "rough notes about an importer")
+        let _ = save(&f, &id, &hash, "rough notes about an importer")
             .await
             .expect("save");
         let before = draft_bytes(&f, &id);
@@ -2201,7 +2395,7 @@ mod tests {
             .to_string();
 
         // The operator kept typing while the agent worked.
-        save(&f, &id, &shown, "edited meanwhile")
+        let _ = save(&f, &id, &shown, "edited meanwhile")
             .await
             .expect("edit");
         let after_edit = draft_bytes(&f, &id);

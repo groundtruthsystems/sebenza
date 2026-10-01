@@ -983,6 +983,10 @@ export const ConversionOutcomeSchema = z.object({
   baseBranch: z.string().optional(),
   agentId: z.string().nullish(),
   prompt: z.string(),
+  /** The system instruction the launch carried, when there was one. */
+  systemInstruction: z.string().optional(),
+  /** Launched architect-first; false for a direct or operator-only launch. */
+  architectFirst: z.boolean().default(false),
   outcome: z.string(),
   worktreePath: z.string().optional(),
   error: z.string().optional(),
@@ -1176,21 +1180,69 @@ export const RedactInboxCommentResponseSchema = z.object({
   targetEventId: z.string(),
 });
 
+export const AdvisorySchema = z.object({
+  kind: z.string(),
+  message: z.string(),
+});
+
+/** `systemInstruction` is the reviewed (perhaps edited) instruction from
+ *  `convert/instructions`; omit it to launch with `prompt` alone (UC-07a).
+ *  `architectFirst` defaults to true and applies only when the project has a
+ *  Sebenza workspace; false asks for a direct instruction (UC-07b). */
 export const ConversionTargetSchema = z.object({
   projectPath: z.string(),
   branch: z.string(),
   baseBranch: z.string().nullish(),
   agentId: z.string().nullish(),
   prompt: z.string(),
+  systemInstruction: z.string().nullish(),
+  architectFirst: z.boolean().optional(),
 });
+
+/** `POST /api/inbox/:id/convert/instructions`. `project` is the registered
+ *  project's path; `prompt` may still be empty. */
+export const ConvertInstructionsRequestSchema = z.object({
+  targets: z.array(
+    z.object({
+      project: z.string(),
+      branch: z.string(),
+      prompt: z.string().optional(),
+    }),
+  ),
+});
+
+export const ConvertInstructionTargetSchema = z.object({
+  project: z.string(),
+  branch: z.string(),
+  /** How the agent named this target (`<project dir>/<branch>`); the key in
+   *  a convert job's `output.targets[].project`. */
+  key: z.string(),
+  /** Null when no instruction is coming: convert with the prompt alone. */
+  systemInstruction: z.string().nullable(),
+  /** `.ai/sebenza/index.md` exists, so an architect-first launch can run. */
+  sebenzaWorkspace: z.boolean(),
+});
+
+/** The route waits for the job (bounded by the agent timeout plus slack).
+ *  `succeeded`: instructions filled in. `unavailable` / `failed`: `fallback`
+ *  is true, every instruction is null; convert with the operator prompt.
+ *  `pending`: the wait elapsed first; follow `jobId` on the agent job route
+ *  or stream. Always a 200 apart from validation and guard errors. */
+export const ConvertInstructionsResponseSchema = z.object({
+  jobId: z.string().nullable(),
+  status: z.enum(["succeeded", "failed", "unavailable", "pending"]),
+  fallback: z.boolean(),
+  error: z.string().nullable(),
+  targets: z.array(ConvertInstructionTargetSchema),
+  advisories: z.array(AdvisorySchema).default([]),
+});
+
+export type ConvertInstructionsResponse = z.infer<
+  typeof ConvertInstructionsResponseSchema
+>;
 
 export const ConvertDraftRequestSchema = z.object({
   targets: z.array(ConversionTargetSchema),
-});
-
-export const AdvisorySchema = z.object({
-  kind: z.string(),
-  message: z.string(),
 });
 
 /** Advisories are warnings, never refusals — the fan-out has already started
