@@ -206,13 +206,19 @@ pub fn fold_requests(events: &[InboxEvent]) -> Vec<RequestView> {
             continue;
         };
         match &e.kind {
+            // A late proposal never reopens a decided request.
             InboxEventKind::Proposal {
-                proposal_id, body, ..
-            } => {
+                proposal_id,
+                body,
+                warnings,
+                ..
+            } if matches!(v.status, RequestStatus::Open | RequestStatus::Proposed) => {
                 v.status = RequestStatus::Proposed;
                 v.flagged = false;
                 v.proposal_id = Some(proposal_id.clone());
                 v.proposal = Some(body.clone());
+                v.proposal_hash = Some(content_hash(body));
+                v.proposal_warnings = warnings.clone();
             }
             InboxEventKind::TriageFailed { error, .. } => {
                 v.flagged = true;
@@ -222,6 +228,8 @@ pub fn fold_requests(events: &[InboxEvent]) -> Vec<RequestView> {
                 v.status = RequestStatus::Open;
                 v.proposal_id = None;
                 v.proposal = None;
+                v.proposal_hash = None;
+                v.proposal_warnings = Vec::new();
                 v.last_reason = Some(reason.clone());
             }
             InboxEventKind::ResolutionConfirmed {

@@ -996,8 +996,7 @@ impl InboxService {
 impl InboxService {
     /// One request, folded from the log with redactions applied.
     pub fn request(&self, id: &str, request_id: &str) -> Result<RequestView, InboxServiceError> {
-        let _ = (id, request_id);
-        todo!("phase-4-task-2")
+        find_request(&self.events(id)?, request_id)
     }
 
     /// The system agent's proposed resolution (AA-D2). Only an open request
@@ -1010,8 +1009,37 @@ impl InboxService {
         body: &str,
         rationale: &str,
     ) -> Result<Option<InboxEvent>, InboxServiceError> {
-        let _ = (id, request_id, body, rationale);
-        todo!("phase-4-task-2")
+        if body.trim().is_empty() {
+            return Err(InboxServiceError::Invalid(
+                "a proposal needs a body".to_string(),
+            ));
+        }
+        self.cap("body", body.len(), self.limits.max_body_bytes)?;
+        // Under the decisions lock, so a confirm cannot land between the
+        // open check and the append.
+        let _decide = self.decisions.lock().unwrap_or_else(|e| e.into_inner());
+        let events = self.events(id)?;
+        let view = find_request(&events, request_id)?;
+        if view.status != RequestStatus::Open {
+            return Ok(None);
+        }
+        let mut record = AuditRecord::new("inbox.proposal.added", id, AuthorKind::SystemAgent)
+            .with_worktree(&view.worktree);
+        record.request_id = Some(request_id.to_string());
+        let event = self.store.append_event(
+            id,
+            EventAuthor::system_agent(),
+            opened_event_id(&events, request_id),
+            InboxEventKind::Proposal {
+                request_id: request_id.to_string(),
+                proposal_id: random_ulid(),
+                body: body.to_string(),
+                rationale: rationale.to_string(),
+                warnings: secret_warnings(body),
+            },
+        )?;
+        self.audit.record(&record.with_event(&event));
+        Ok(Some(event))
     }
 
     /// The system agent's advice on a request: a comment in the request's
@@ -1022,8 +1050,29 @@ impl InboxService {
         request_id: &str,
         body: &str,
     ) -> Result<InboxEvent, InboxServiceError> {
-        let _ = (id, request_id, body);
-        todo!("phase-4-task-2")
+        if body.trim().is_empty() {
+            return Err(InboxServiceError::Invalid(
+                "advice needs a body".to_string(),
+            ));
+        }
+        self.cap("body", body.len(), self.limits.max_body_bytes)?;
+        let events = self.events(id)?;
+        let view = find_request(&events, request_id)?;
+        let mut record = AuditRecord::new("inbox.advice.added", id, AuthorKind::SystemAgent)
+            .with_worktree(&view.worktree);
+        record.request_id = Some(request_id.to_string());
+        let event = self.store.append_event(
+            id,
+            EventAuthor::system_agent(),
+            opened_event_id(&events, request_id),
+            InboxEventKind::Advice {
+                request_id: request_id.to_string(),
+                body: body.to_string(),
+                warnings: secret_warnings(body),
+            },
+        )?;
+        self.audit.record(&record.with_event(&event));
+        Ok(event)
     }
 
     /// Triage failed, timed out or answered badly: the request stays open
@@ -1034,8 +1083,22 @@ impl InboxService {
         request_id: &str,
         error: &str,
     ) -> Result<InboxEvent, InboxServiceError> {
-        let _ = (id, request_id, error);
-        todo!("phase-4-task-2")
+        let events = self.events(id)?;
+        let view = find_request(&events, request_id)?;
+        let mut record = AuditRecord::new("inbox.triage.failed", id, AuthorKind::SystemAgent)
+            .with_worktree(&view.worktree);
+        record.request_id = Some(request_id.to_string());
+        let event = self.store.append_event(
+            id,
+            EventAuthor::system_agent(),
+            opened_event_id(&events, request_id),
+            InboxEventKind::TriageFailed {
+                request_id: request_id.to_string(),
+                error: error.chars().take(MAX_ERROR_CHARS).collect(),
+            },
+        )?;
+        self.audit.record(&record.with_event(&event));
+        Ok(event)
     }
 
     /// The operator confirms a resolution and it is delivered (UC-06, 06c).
@@ -1092,6 +1155,38 @@ impl InboxService {
     ) -> Result<InboxEvent, InboxServiceError> {
         let _ = (id, event_id, caller);
         todo!("phase-4-task-5")
+    }
+}
+
+/// Longest error kept on a `triage_failed` or `delivery_failed` event.
+const MAX_ERROR_CHARS: usize = 500;
+
+/// One request from an already-read log.
+fn find_request(events: &[InboxEvent], request_id: &str) -> Result<RequestView, InboxServiceError> {
+    fold_requests(events)
+        .into_iter()
+        .find(|r| r.request_id == request_id)
+        .ok_or_else(|| InboxServiceError::UnknownRequest(request_id.to_string()))
+}
+
+/// The `request_opened` event a request's later events hang from.
+fn opened_event_id(events: &[InboxEvent], request_id: &str) -> Option<String> {
+    events.iter().find_map(|e| match &e.kind {
+        InboxEventKind::RequestOpened { request_id: r, .. } if r == request_id => {
+            Some(e.event_id.clone())
+        }
+        _ => None,
+    })
+}
+
+/// The wire name of a request status, for error messages.
+fn status_name(status: RequestStatus) -> &'static str {
+    match status {
+        RequestStatus::Open => "open",
+        RequestStatus::Proposed => "proposed",
+        RequestStatus::Confirmed => "confirmed",
+        RequestStatus::Resolved => "resolved",
+        RequestStatus::DeliveryFailed => "delivery_failed",
     }
 }
 

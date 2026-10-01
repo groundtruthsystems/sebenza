@@ -620,8 +620,71 @@ impl SystemAgentService {
     /// one more than any attempt this run has seen for it, or than the
     /// triage outcomes its log records, so the dedupe key is fresh.
     pub fn retry_triage(&self, draft_id: &str, request_id: &str) -> Result<String, EnqueueError> {
-        let _ = (draft_id, request_id);
-        todo!("phase-4-task-2")
+        use crate::domain::inbox_events::InboxEventKind;
+        use crate::services::inbox_service::InboxServiceError;
+        if !self.config.enabled {
+            return Err(EnqueueError::Disabled);
+        }
+        let events = self.inbox.events(draft_id).map_err(|e| match e {
+            InboxServiceError::Store(_) => {
+                EnqueueError::Invalid(format!("unknown draft {draft_id}"))
+            }
+            other => EnqueueError::Invalid(other.to_string()),
+        })?;
+        let request = crate::domain::inbox_events::fold_requests(&events)
+            .into_iter()
+            .find(|r| r.request_id == request_id)
+            .ok_or_else(|| EnqueueError::UnknownRequest(request_id.to_string()))?;
+        if request.status != RequestStatus::Open {
+            let status = serde_json::to_value(request.status)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default();
+            return Err(EnqueueError::NotRetryable(status));
+        }
+        let (in_flight, seen) = {
+            let st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let mine: Vec<&JobRecord> = st
+                .jobs
+                .values()
+                .map(|(_, j)| j)
+                .filter(|j| {
+                    j.draft_id == draft_id
+                        && j.kind == JobKind::Triage
+                        && j.request_id.as_deref() == Some(request_id)
+                })
+                .collect();
+            (
+                mine.iter()
+                    .find(|j| !j.status.is_terminal())
+                    .map(|j| j.job_id.clone()),
+                mine.iter().map(|j| j.attempt).max().unwrap_or(0),
+            )
+        };
+        // A triage already waiting or running is the retry.
+        if let Some(job_id) = in_flight {
+            return Ok(job_id);
+        }
+        // After a restart the registry is empty; the log still counts the
+        // attempts that ended (failed, proposed or advised).
+        let logged = events
+            .iter()
+            .filter(|e| match &e.kind {
+                InboxEventKind::TriageFailed { request_id: r, .. }
+                | InboxEventKind::Proposal { request_id: r, .. }
+                | InboxEventKind::Advice { request_id: r, .. } => r == request_id,
+                _ => false,
+            })
+            .count() as u32;
+        let attempt = seen.max(logged) + 1;
+        tracing::info!(draft_id, request_id, attempt, "triage retry requested");
+        self.enqueue(
+            draft_id,
+            JobInput::Triage {
+                request_id: request_id.to_string(),
+                attempt,
+            },
+        )
     }
 
     /// One job by id.

@@ -152,6 +152,11 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         agent_stream.clone(),
         services::system_agent::SystemAgentOptions::default(),
     );
+    // Finished triage jobs set priority and record proposals, advice or a
+    // failure flag; nothing a job returns is ever delivered (AA-D2).
+    system_agent.set_sink(Arc::new(services::system_agent::apply::TriageApplier::new(
+        inbox.clone(),
+    )));
     inbox.set_request_observer(system_agent.observer());
     // Requests that arrived while the daemon was down, or whose triage died
     // with it, are triaged now — once each (TD-2).
