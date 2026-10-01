@@ -99,7 +99,7 @@
           "id": "phase-2-task-5",
           "name": "Execute test scenarios TS-06, TS-11, TS-12, TS-13, TS-32, TS-37, TS-40, TS-41",
           "description": "Run and pass the phase's test-plan scenarios.",
-          "status": "doing",
+          "status": "done",
           "test_scenarios": [
             "TS-06",
             "TS-11",
@@ -115,7 +115,7 @@
           "id": "phase-2-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "doing"
         }
       ]
     },
