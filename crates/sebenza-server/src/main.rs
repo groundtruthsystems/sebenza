@@ -113,6 +113,18 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         );
     }
 
+    // An unusable systemAgent block (e.g. `agent: grok`) stops startup rather
+    // than silently running without, or with a less restricted, agent (FR-13).
+    let system_agent_config = common::config::load_system_agent_config()
+        .map_err(|e| anyhow::anyhow!("invalid ~/.ai/sebenza.yaml: {e}"))?;
+    tracing::info!(
+        enabled = system_agent_config.enabled,
+        agent = system_agent_config.agent.as_str(),
+        max_concurrent = system_agent_config.max_concurrent,
+        timeout_secs = system_agent_config.timeout_secs,
+        "inbox system agent configured"
+    );
+
     let terminal = Arc::new(TerminalManager::new(port));
     // Reap orphaned grouped sessions from previous runs before serving.
     terminal.cleanup_stale_sessions();

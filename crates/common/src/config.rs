@@ -478,7 +478,64 @@ pub struct SystemAgentConfigError(pub String);
 pub fn parse_system_agent_config(
     raw: Option<&serde_yaml::Value>,
 ) -> std::result::Result<SystemAgentConfig, SystemAgentConfigError> {
-    todo!("phase-3-task-3: {raw:?}")
+    let err = |msg: String| Err(SystemAgentConfigError(msg));
+    let mut config = SystemAgentConfig::default();
+    let Some(raw) = raw else {
+        return Ok(config);
+    };
+    let Some(map) = raw.as_mapping() else {
+        return err("must be a mapping".to_string());
+    };
+    config.enabled = true;
+    for (key, value) in map {
+        let Some(key) = key.as_str() else {
+            return err("keys must be strings".to_string());
+        };
+        let text = || value.as_str().map(str::trim).filter(|s| !s.is_empty());
+        let bounded = |min: u64, max: u64| {
+            value
+                .as_u64()
+                .filter(|n| (min..=max).contains(n))
+                .ok_or_else(|| {
+                    SystemAgentConfigError(format!("{key} must be a whole number {min}-{max}"))
+                })
+        };
+        match key {
+            "enabled" => {
+                config.enabled = value.as_bool().ok_or_else(|| {
+                    SystemAgentConfigError("enabled must be true or false".to_string())
+                })?;
+            }
+            "agent" => match text() {
+                Some("claude") => config.agent = SystemAgentKind::Claude,
+                Some(other @ ("grok" | "codex" | "opencode")) => {
+                    return err(format!(
+                        "agent {other} is not supported; only claude can run as the system \
+                         agent, because it can be held to read-only tools headlessly"
+                    ));
+                }
+                Some(other) => {
+                    return err(format!("unknown agent {other:?}; only claude is supported"));
+                }
+                None => return err("agent must be a string".to_string()),
+            },
+            "model" => config.model = text().map(str::to_string),
+            "maxConcurrent" => config.max_concurrent = bounded(1, 16)? as usize,
+            "timeoutSecs" => config.timeout_secs = bounded(1, 3600)?,
+            "turnCap" => config.turn_cap = bounded(1, 1000)? as u32,
+            "binary" => {
+                config.binary = Some(
+                    text()
+                        .ok_or_else(|| {
+                            SystemAgentConfigError("binary must be a non-empty path".to_string())
+                        })?
+                        .to_string(),
+                );
+            }
+            other => return err(format!("unknown key {other:?}")),
+        }
+    }
+    Ok(config)
 }
 
 /// The machine-wide `systemAgent` block from `~/.ai/sebenza.yaml`. The inbox is
@@ -496,7 +553,22 @@ pub fn load_system_agent_config() -> std::result::Result<SystemAgentConfig, Syst
 pub fn load_system_agent_config_from(
     path: &Path,
 ) -> std::result::Result<SystemAgentConfig, SystemAgentConfigError> {
-    todo!("phase-3-task-3: {}", path.display())
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SystemAgentConfig::default());
+        }
+        Err(e) => {
+            return Err(SystemAgentConfigError(format!(
+                "cannot read {}: {e}",
+                path.display()
+            )));
+        }
+    };
+    let doc: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| {
+        SystemAgentConfigError(format!("{} is not valid YAML: {e}", path.display()))
+    })?;
+    parse_system_agent_config(doc.as_mapping().and_then(|m| m.get("systemAgent")))
 }
 
 fn read_local_config_document(root: &str) -> (PathBuf, serde_yaml::Value) {
