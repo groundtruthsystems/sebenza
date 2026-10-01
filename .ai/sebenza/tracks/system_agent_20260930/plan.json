@@ -202,7 +202,7 @@
     {
       "id": "phase-4",
       "name": "Triage, confirmation and delivery",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -270,21 +270,22 @@
           "id": "phase-4-task-7",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "doing"
+          "status": "done"
         }
-      ]
+      ],
+      "checkpoint_sha": "b31643e"
     },
     {
       "id": "phase-5",
       "name": "Draft help and architect-first conversion",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-5-task-1",
           "name": "Write tests for draft help and conversion instructions",
           "description": "Write failing tests for draft-help proposals, conflicts, per-target instructions, the prompt builder, and fallbacks.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-5-task-2",
