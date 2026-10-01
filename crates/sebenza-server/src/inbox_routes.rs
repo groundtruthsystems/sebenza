@@ -16,7 +16,7 @@ use crate::domain::policies::{
 };
 use crate::inbox_runner::ServerConversionRunner;
 use crate::services::inbox_convert::{
-    Advisory, ConversionTarget, sandbox_advisory, scan_for_secrets, validate_targets,
+    Advisory, ConversionTarget, sandbox_advisory, scan_item_for_secrets, validate_targets,
 };
 use crate::services::inbox_jobs::{JobEvent, JobSnapshot, JobSubscription};
 use crate::services::inbox_service::{
@@ -486,7 +486,7 @@ pub async fn convert_draft(
     // heuristic that gets switched off.
     let mut advisories: Vec<Advisory> = Vec::new();
     if let InboxDraftView::Parsed(ref d) = view {
-        advisories.extend(scan_for_secrets(&d.body));
+        advisories.extend(item_secret_advisories(&svc, &id, &d.body));
     }
     for target in &body.targets {
         let sandboxed = state
@@ -547,6 +547,27 @@ pub async fn convert_draft(
     Ok(Json(
         serde_json::json!({ "jobId": job_id, "advisories": advisories }),
     ))
+}
+
+/// The secret scan over a draft's body and its conversational events
+/// (comments, requests, proposals, advice), redactions applied. Advisory
+/// only: a log that cannot be read just scans the body.
+fn item_secret_advisories(svc: &InboxService, id: &str, body: &str) -> Vec<Advisory> {
+    use crate::domain::inbox_events::InboxEventKind;
+    let bodies: Vec<String> = svc
+        .events(id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| match e.kind {
+            InboxEventKind::Comment { body, .. }
+            | InboxEventKind::Proposal { body, .. }
+            | InboxEventKind::Advice { body, .. } => Some(body),
+            InboxEventKind::RequestOpened { title, body, .. } => Some(format!("{title}\n{body}")),
+            _ => None,
+        })
+        .collect();
+    let refs: Vec<&str> = bodies.iter().map(String::as_str).collect();
+    scan_item_for_secrets(body, &refs)
 }
 
 /// `GET /api/inbox/jobs/{id}` — a job's state.
@@ -1137,7 +1158,7 @@ pub async fn convert_instructions(
                 .is_file(),
         })
         .collect();
-    let advisories = scan_for_secrets(&draft.body);
+    let advisories = item_secret_advisories(&svc, &id, &draft.body);
     let respond = |job_id, status, fallback, error, targets| {
         Json(ConvertInstructionsResponse {
             job_id,
@@ -2712,5 +2733,22 @@ mod tests {
             status(instructions(&f, "01ARZ3NDEKTSV4RRFFQ69G5FAV", ok, good_headers()).await),
             404
         );
+    }
+
+    // The real runner launches architect-first only where the project has
+    // a Sebenza workspace.
+    #[tokio::test]
+    async fn the_server_runner_detects_a_sebenza_workspace() {
+        use crate::services::inbox_convert::ConversionRunner;
+        let f = fixture();
+        let with = project(&f, "with-workspace", true);
+        let without = project(&f, "without-workspace", false);
+        let runner = ServerConversionRunner::new(f.state.clone());
+        let target = |p: &str| ConversionTarget {
+            project_path: p.to_string(),
+            ..Default::default()
+        };
+        assert!(runner.has_sebenza_workspace(&target(&with)));
+        assert!(!runner.has_sebenza_workspace(&target(&without)));
     }
 }

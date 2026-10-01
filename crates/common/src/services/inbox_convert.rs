@@ -1207,9 +1207,25 @@ where
 
 /// [`scan_for_secrets`] over the body, and over the item's comments too: they
 /// reach the system agent and inform every system instruction.
+///
+/// Body hits read as today; comment hits are reported once per pattern
+/// across every comment, separately from the body's, and never quote the
+/// matched text.
 pub fn scan_item_for_secrets(body: &str, comments: &[&str]) -> Vec<Advisory> {
-    let _ = (body, comments);
-    todo!("phase-5-task-4")
+    let mut advisories = scan_for_secrets(body);
+    let mut labels: Vec<&'static str> = Vec::new();
+    for label in comments.iter().flat_map(|c| secret_hit_names(c)) {
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    advisories.extend(labels.into_iter().map(|label| Advisory {
+        kind: "secret".to_string(),
+        message: format!(
+            "A comment on this draft looks like it contains {label} text. Comments inform the system instructions sent to each worktree's agent."
+        ),
+    }));
+    advisories
 }
 
 #[cfg(test)]
