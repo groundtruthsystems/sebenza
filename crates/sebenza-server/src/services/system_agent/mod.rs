@@ -21,7 +21,7 @@ pub use output::{
 };
 
 use crate::domain::config::SystemAgentConfig;
-use crate::domain::inbox_events::{AgentSession, InboxEvent};
+use crate::domain::inbox_events::{AgentSession, InboxEvent, RequestStatus};
 use crate::domain::model::{InboxDraft, InboxDraftView};
 use crate::services::agent_stream::AgentStreamManager;
 use crate::services::inbox_service::{InboxService, ListQuery, RequestObserver};
@@ -220,8 +220,8 @@ struct QueueState {
     jobs: HashMap<String, (u64, JobRecord)>,
     /// Finished job ids, oldest first, for bounded retention.
     done: VecDeque<String>,
-    /// `(request_id, kind, attempt)` to job id (TD-2).
-    dedupe: HashMap<(String, JobKind, u32), String>,
+    /// `(draft_id, request_id, kind, attempt)` to job id (TD-2).
+    dedupe: HashMap<(String, String, JobKind, u32), String>,
 }
 
 /// A failed job: why, and whether its session had been re-seeded.
@@ -335,7 +335,9 @@ impl SystemAgentService {
             _ => (None, 1),
         };
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let key = request_id.clone().map(|r| (r, kind, attempt));
+        let key = request_id
+            .clone()
+            .map(|r| (draft_id.to_string(), r, kind, attempt));
         if let Some(existing) = key.as_ref().and_then(|k| st.dedupe.get(k)) {
             return Ok((existing.clone(), false));
         }
@@ -633,7 +635,42 @@ impl SystemAgentService {
     /// triaged: no proposal, not flagged, not rejected. Returns how many jobs
     /// were queued (TD-2, FR-21).
     pub fn recover_on_startup(&self) -> usize {
-        todo!("phase-3-task-6")
+        if !self.config.enabled {
+            return 0;
+        }
+        let items = match self.inbox.list(&ListQuery::default()) {
+            Ok(items) => items,
+            Err(e) => {
+                tracing::warn!("system agent recovery: cannot list the inbox: {e}");
+                return 0;
+            }
+        };
+        let mut queued = 0;
+        for item in items.iter().filter(|i| !i.is_raw) {
+            let Ok(requests) = self.inbox.list_requests(&item.id) else {
+                continue;
+            };
+            let untriaged = requests.into_iter().filter(|r| {
+                r.status == RequestStatus::Open
+                    && r.proposal_id.is_none()
+                    && !r.flagged
+                    && r.last_reason.is_none()
+            });
+            for request in untriaged {
+                let input = JobInput::Triage {
+                    request_id: request.request_id,
+                    attempt: 1,
+                };
+                match self.enqueue_new(&item.id, input) {
+                    Ok((_, true)) => queued += 1,
+                    Ok((_, false)) => {}
+                    Err(e) => {
+                        tracing::warn!(draft_id = %item.id, "recovery triage not queued: {e}")
+                    }
+                }
+            }
+        }
+        queued
     }
 }
 

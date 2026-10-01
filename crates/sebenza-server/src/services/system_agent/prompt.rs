@@ -4,7 +4,7 @@
 //! items' titles and priorities only — never bodies, comments or ids (T-05).
 
 use crate::domain::inbox_events::{AuthorKind, InboxEvent, InboxEventKind, fold_requests};
-use crate::domain::model::{InboxDraft, Priority};
+use crate::domain::model::{DraftStatus, InboxDraft, Priority};
 use crate::services::inbox_service::DraftSummary;
 
 use super::JobInput;
@@ -66,12 +66,29 @@ fn defuse(text: &str) -> String {
 /// Up to [`DIGEST_LIMIT`] other open (non-dropped, parsed) items, in inbox
 /// order, as title and priority only. `items` is a listing in inbox order.
 pub fn build_digest(items: &[DraftSummary], exclude_id: &str) -> Vec<DigestEntry> {
-    todo!("phase-3-task-6: {} {exclude_id}", items.len())
+    items
+        .iter()
+        .filter(|i| !i.is_raw && i.status != DraftStatus::Dropped && i.id != exclude_id)
+        .take(DIGEST_LIMIT)
+        .map(|i| DigestEntry {
+            title: one_line(&i.title, DIGEST_TITLE_CHARS),
+            priority: i.priority,
+        })
+        .collect()
 }
 
 /// The digest as fenced text.
 pub fn render_digest(entries: &[DigestEntry]) -> String {
-    todo!("phase-3-task-6: {}", entries.len())
+    let lines = if entries.is_empty() {
+        "(no other open items)".to_string()
+    } else {
+        entries
+            .iter()
+            .map(|e| format!("- [{:?}] {}", e.priority, e.title))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    fence("open-items", &lines)
 }
 
 /// What a job prompt is built from.
@@ -88,7 +105,145 @@ pub struct PromptContext<'a> {
 /// The prompt for one job. Starts with a `JOB-KIND: <kind>` line; a re-seed
 /// adds a `SESSION-SEED` section. Fails when a triage names an unknown request.
 pub fn build_job_prompt(ctx: &PromptContext<'_>, input: &JobInput) -> Result<String, String> {
-    todo!("phase-3-task-6: {} {:?}", ctx.draft.id, input.kind())
+    let kind = input.kind();
+    let mut out = format!("JOB-KIND: {}\n\n", kind.as_str());
+    if ctx.reseed {
+        out.push_str(&seed_section(ctx));
+    }
+    match input {
+        JobInput::Triage { request_id, .. } => {
+            let request = fold_requests(ctx.events)
+                .into_iter()
+                .find(|r| &r.request_id == request_id)
+                .ok_or_else(|| "the request to triage is not on this item".to_string())?;
+            out.push_str(
+                "TASK: Triage the worktree request below against the other open inbox items. \
+                 Choose this item's priority (P0 most urgent, P3 least), explain why, and \
+                 recommend one of: \"proposal\" (a resolution the operator may confirm and \
+                 send to the worktree, written as an instruction to that worktree's agent), \
+                 \"advice\" (a note for the operator only), or \"none\".\n\n",
+            );
+            out.push_str(&fence(
+                "request",
+                &format!(
+                    "Worktree: {}/{}\nTitle: {}\n\n{}",
+                    request.worktree.project, request.worktree.branch, request.title, request.body
+                ),
+            ));
+            out.push_str("\nOther open items (title and priority only):\n");
+            out.push_str(&render_digest(ctx.digest));
+            out.push_str(
+                "\nReply with: {\"schema_version\": 1, \"job_kind\": \"triage\", \
+                 \"priority\": \"P0|P1|P2|P3\", \"rationale\": \"...\", \
+                 \"recommendation\": \"none|advice|proposal\", \
+                 \"body\": \"required for advice or proposal\"}\n",
+            );
+        }
+        JobInput::DraftHelp { instruction } => {
+            out.push_str(
+                "TASK: Propose an improved body for this inbox item: clearer, complete, and \
+                 ready to hand to a coding agent. Keep its intent. Summarise what you changed.\n\n",
+            );
+            out.push_str(&fence("item", &item_text(ctx.draft)));
+            if let Some(instruction) = instruction.as_deref().filter(|i| !i.trim().is_empty()) {
+                out.push_str(&fence("operator-instruction", instruction));
+            }
+            out.push_str(
+                "\nReply with: {\"schema_version\": 1, \"job_kind\": \"draft_help\", \
+                 \"proposed_body\": \"...\", \"summary\": \"...\"}\n",
+            );
+        }
+        JobInput::Convert {
+            targets,
+            operator_prompt,
+        } => {
+            out.push_str(
+                "TASK: This item is being converted into one worktree per target project. For \
+                 each target, write a system_instruction for that worktree's agent: what to \
+                 build there, drawn from the item and its comments, starting with the Sebenza \
+                 architect when the work is a feature.\n\n",
+            );
+            out.push_str(&fence("item", &item_text(ctx.draft)));
+            out.push_str(&fence(
+                "recent-comments",
+                &recent_comments(ctx.events, SEED_COMMENT_LIMIT),
+            ));
+            out.push_str(&fence("targets", &targets.join("\n")));
+            if let Some(prompt) = operator_prompt.as_deref().filter(|p| !p.trim().is_empty()) {
+                out.push_str(&fence("operator-prompt", prompt));
+            }
+            out.push_str(
+                "\nReply with: {\"schema_version\": 1, \"job_kind\": \"convert\", \
+                 \"targets\": [{\"project\": \"...\", \"system_instruction\": \"...\"}]} \
+                 with exactly one entry per target.\n",
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// `text` on one line (control characters as spaces, runs collapsed), at
+/// most `max` characters.
+fn one_line(text: &str, max: usize) -> String {
+    text.split(|c: char| c.is_whitespace() || c.is_control())
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(max)
+        .collect()
+}
+
+/// The item as the agent sees it.
+fn item_text(draft: &InboxDraft) -> String {
+    format!(
+        "Title: {}\nPriority: {:?}\n\n{}",
+        draft.frontmatter.title, draft.frontmatter.priority, draft.body
+    )
+}
+
+/// The last `limit` conversational events (comments, requests, proposals,
+/// advice), oldest first, one block each.
+fn recent_comments(events: &[InboxEvent], limit: usize) -> String {
+    let rows: Vec<String> = events
+        .iter()
+        .filter_map(|e| {
+            let who = match e.author {
+                AuthorKind::Operator => "operator",
+                AuthorKind::WorktreeAgent => "worktree agent",
+                AuthorKind::SystemAgent => "system agent",
+            };
+            let (what, body) = match &e.kind {
+                InboxEventKind::Comment { body, .. } => ("comment", body.clone()),
+                InboxEventKind::RequestOpened { title, body, .. } => {
+                    ("request", format!("{title}\n{body}"))
+                }
+                InboxEventKind::Proposal { body, .. } => ("proposal", body.clone()),
+                InboxEventKind::Advice { body, .. } => ("advice", body.clone()),
+                _ => return None,
+            };
+            Some(format!("[{} {who} {what}]\n{body}", e.ts))
+        })
+        .collect();
+    let start = rows.len().saturating_sub(limit);
+    if rows.is_empty() {
+        "(no comments yet)".to_string()
+    } else {
+        rows[start..].join("\n\n")
+    }
+}
+
+/// Replays the item and its recent comments into a new session (TD-3).
+fn seed_section(ctx: &PromptContext<'_>) -> String {
+    format!(
+        "SESSION-SEED\nThis starts your session for this inbox item. Later jobs resume it, so \
+         keep this context in mind.\n\n{}{}\n",
+        fence("item", &item_text(ctx.draft)),
+        fence(
+            "recent-comments",
+            &recent_comments(ctx.events, SEED_COMMENT_LIMIT)
+        ),
+    )
 }
 
 #[cfg(test)]

@@ -153,6 +153,12 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         services::system_agent::SystemAgentOptions::default(),
     );
     inbox.set_request_observer(system_agent.observer());
+    // Requests that arrived while the daemon was down, or whose triage died
+    // with it, are triaged now — once each (TD-2).
+    let recovered = system_agent.recover_on_startup();
+    if recovered > 0 {
+        tracing::info!(count = recovered, "inbox: re-queued untriaged requests");
+    }
 
     let state = AppState {
         manager,
