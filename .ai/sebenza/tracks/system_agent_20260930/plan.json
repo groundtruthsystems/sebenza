@@ -144,13 +144,14 @@
           "id": "phase-3-task-3",
           "name": "Implement systemAgent config and claude-only validation",
           "description": "Add the systemAgent config block and reject agents other than claude at startup.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "f1ddba9"
         },
         {
           "id": "phase-3-task-4",
           "name": "Implement SystemAgentService queue, semaphore and timeout",
           "description": "Add per-item serial queues, a global semaphore, an interactive priority lane, process-group timeout kill, and the kill switch.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-5",
