@@ -165,13 +165,14 @@
           "id": "phase-3-task-6",
           "name": "Implement sessions, digest, restart recovery and re-seed",
           "description": "Persist sessions, build the titles-only digest, re-enqueue unproposed requests once on restart, and re-seed past turnCap.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "5c887be"
         },
         {
           "id": "phase-3-task-7",
           "name": "Execute test scenarios TS-15, TS-16, TS-17, TS-18, TS-19, TS-21, TS-22, TS-35, TS-50, TS-51, TS-52, TS-60, TS-65, TS-67",
           "description": "Run and pass the phase's test-plan scenarios.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-15",
             "TS-16",
