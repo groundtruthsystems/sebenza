@@ -20,6 +20,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use thiserror::Error;
 
+/// Files kept beside `<id>.md`.
+const SIDECAR_SUFFIXES: [&str; 2] = ["events.jsonl", "session.json"];
+
 /// Every way a store operation can fail. `Conflict` carries both hashes so a
 /// caller can show the editor what it was racing.
 #[derive(Debug, Error)]
@@ -345,6 +348,18 @@ impl InboxStore {
     /// malformed file must not become undeletable.
     pub fn delete(&self, id: &str) -> Result<(), InboxStoreError> {
         let path = self.path_for(id)?;
+        if !path.exists() {
+            return Err(InboxStoreError::NotFound(id.to_string()));
+        }
+        // Sidecars first: a crash between the two leaves an orphan the startup
+        // sweep removes, never a draft whose history has vanished.
+        for suffix in SIDECAR_SUFFIXES {
+            match fs::remove_file(self.sidecar(id, suffix)?) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -501,7 +516,27 @@ impl InboxStore {
 
     /// Remove sidecars whose draft no longer exists. Returns what was removed.
     pub fn sweep_orphans(&self) -> Result<Vec<PathBuf>, InboxStoreError> {
-        todo!("sweep_orphans")
+        let mut removed = Vec::new();
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
+            Err(e) => return Err(e.into()),
+        };
+        for ent in entries.flatten() {
+            let name = ent.file_name();
+            let name = name.to_string_lossy();
+            let Some(id) = SIDECAR_SUFFIXES
+                .iter()
+                .find_map(|sfx| name.strip_suffix(&format!(".{sfx}")))
+            else {
+                continue;
+            };
+            if is_ulid(id) && !self.dir.join(format!("{id}.md")).exists() {
+                fs::remove_file(ent.path())?;
+                removed.push(ent.path());
+            }
+        }
+        Ok(removed)
     }
 }
 
