@@ -180,7 +180,14 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;");
 }
 
-/** Render one comment, request or proposal body to sanitised HTML. */
-export function renderCommentMarkdown(_source: string): string {
-  throw new Error("todo");
+/**
+ * Render one comment or request body to sanitised HTML, synchronously.
+ *
+ * These come from worktree agents and the system agent as well as the
+ * operator, so they get the draft's sanitiser — but no mermaid: a thread
+ * row is no place for a diagram, and a fence stays an inert code block.
+ */
+export function renderCommentMarkdown(source: string): string {
+  const marked = new Marked({ async: false, gfm: true, breaks: true });
+  return sanitize(taskBoxes(marked.parse(source) as string));
 }

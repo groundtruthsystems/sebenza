@@ -180,6 +180,13 @@ dialog textarea:focus {
 .inbox-preview .task-box { color: var(--muted, #b0bec5); margin-right: 4px; }
 .inbox-preview .task-box.task-done { color: var(--success, #00e676); }
 .inbox-preview ul:has(.task-box) { list-style: none; padding-left: 0.5em; }
+/* Comment and request bodies: compact, and never wider than the panel. */
+.inbox-comment { font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.inbox-comment > :first-child { margin-top: 0; }
+.inbox-comment > :last-child { margin-bottom: 0; }
+.inbox-comment p, .inbox-comment ul, .inbox-comment ol { margin: 0.25em 0; }
+.inbox-comment pre { white-space: pre-wrap; font-size: 11px; }
+.inbox-comment a { color: var(--color-accent, #00d4ff); }
 .mermaid-error {
   color: var(--warning, #ffb74d);
   background: rgba(255, 183, 77, 0.08);

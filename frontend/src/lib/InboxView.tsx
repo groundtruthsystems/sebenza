@@ -10,7 +10,10 @@ import {
   patchInboxDraft,
   saveInboxDraftBody,
   setInboxPriority,
+  connectInboxAgentStream,
 } from "./api";
+import type { InboxAgentJob } from "./api-contract";
+import InboxActivity from "./InboxActivity";
 import MDEditor from "@uiw/react-md-editor";
 import NavRail from "./NavRail";
 import NewDraftDialog from "./NewDraftDialog";
@@ -67,6 +70,19 @@ interface Draft extends DraftLike {
   }[];
 }
 
+/** The worktrees an item was converted into, for the comment composer. */
+function worktreesOf(draft: Draft): { project: string; branch: string }[] {
+  const seen = new Map<string, { project: string; branch: string }>();
+  for (const c of draft.conversions ?? []) {
+    if (c.outcome !== "created") continue;
+    seen.set(`${c.projectPath}\u0000${c.branch}`, {
+      project: c.projectPath,
+      branch: c.branch,
+    });
+  }
+  return [...seen.values()];
+}
+
 export default function InboxView() {
   const [drafts, setDrafts] = useState<Summary[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -94,6 +110,9 @@ export default function InboxView() {
   const [deleteError, setDeleteError] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
+
+  /** The newest agent-job frame for the open item. */
+  const [lastJob, setLastJob] = useState<InboxAgentJob | null>(null);
 
   const loadedRef = useRef<DraftLike>({ body: "", bodyHash: "" });
   const debouncer = useMemo(() => createDebouncer(AUTOSAVE_MS), []);
@@ -129,6 +148,35 @@ export default function InboxView() {
   }, []);
 
   useEffect(() => () => debouncer.cancel(), [debouncer]);
+
+  // Follow the open item's system-agent jobs: triage results refresh the
+  // requests, a draft-help result fills the proposal.
+  const parsedId = draft && !draft.raw ? draft.id : null;
+  useEffect(() => {
+    if (!parsedId) return;
+    setLastJob(null);
+    return connectInboxAgentStream(parsedId, {
+      onJob: (job) => setLastJob(job),
+      onError: (message) => setStatus(message),
+    });
+  }, [parsedId]);
+
+  /** Re-read the list and the open item's priority — never its body, which
+   *  the editor owns. */
+  const onActivityChanged = useCallback(() => {
+    void refresh();
+    if (!selectedId) return;
+    void fetchInboxDraft(selectedId)
+      .then((d) => {
+        const fresh = d as Draft;
+        setDraft((prev) =>
+          prev && prev.id === fresh.id
+            ? { ...prev, priority: fresh.priority, prioritySource: fresh.prioritySource }
+            : prev,
+        );
+      })
+      .catch(() => undefined);
+  }, [refresh, selectedId]);
 
   const open = useCallback(async (id: string) => {
     debouncer.cancel();
@@ -599,27 +647,35 @@ export default function InboxView() {
                 </Btn>
               </div>
             )}
-            <div className="flex-1 min-h-0 flex" data-color-mode="dark">
-              <MDEditor
-                value={body}
-                onChange={(next) => onBodyChange(next ?? "")}
-                height="100%"
-                visibleDragbar={false}
-                textareaProps={{
-                  "aria-label": "Draft body",
-                  spellCheck: false,
-                }}
-                components={{
-                  // MDEditor's own preview renders markdown its own way, which
-                  // would bypass DOMPurify and mermaid's strict mode. Drafts are
-                  // pasted-in text, so the preview stays ours.
-                  preview: () => (
-                    <div
-                      className="inbox-preview md-body"
-                      dangerouslySetInnerHTML={{ __html: preview }}
-                    />
-                  ),
-                }}
+            <div className="flex-1 min-h-0 flex">
+              <div className="flex-1 min-w-0 min-h-0 flex" data-color-mode="dark">
+                <MDEditor
+                  value={body}
+                  onChange={(next) => onBodyChange(next ?? "")}
+                  height="100%"
+                  visibleDragbar={false}
+                  textareaProps={{
+                    "aria-label": "Draft body",
+                    spellCheck: false,
+                  }}
+                  components={{
+                    // MDEditor's own preview renders markdown its own way, which
+                    // would bypass DOMPurify and mermaid's strict mode. Drafts are
+                    // pasted-in text, so the preview stays ours.
+                    preview: () => (
+                      <div
+                        className="inbox-preview md-body"
+                        dangerouslySetInnerHTML={{ __html: preview }}
+                      />
+                    ),
+                  }}
+                />
+              </div>
+              <InboxActivity
+                draftId={draft.id}
+                worktrees={worktreesOf(draft)}
+                lastJob={lastJob}
+                onchanged={onActivityChanged}
               />
             </div>
           </>
