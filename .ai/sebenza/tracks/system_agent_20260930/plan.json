@@ -306,13 +306,14 @@
           "id": "phase-5-task-4",
           "name": "Wire fallbacks into inbox_runner",
           "description": "Fall back to the operator prompt when the agent is unavailable and scan comments before conversion.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "d4f71d4"
         },
         {
           "id": "phase-5-task-5",
           "name": "Execute test scenarios TS-01, TS-03, TS-44, TS-45, TS-47, TS-48, TS-49",
           "description": "Run and pass the phase's test-plan scenarios.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-01",
             "TS-03",
