@@ -10,8 +10,8 @@ use crate::adapters::inbox_store::{
 };
 use crate::adapters::projects_registry::ProjectsRegistry;
 use crate::domain::inbox_events::{
-    AgentSession, AuthorKind, InboxEvent, InboxEventKind, RequestStatus, RequestView, Thread,
-    WorktreeKey, apply_redactions, fold_requests,
+    AgentSession, AuthorKind, InboxEvent, InboxEventKind, REDACTED_BODY, RequestStatus,
+    RequestView, Thread, WorktreeKey, apply_redactions, content_hash as hash_of, fold_requests,
 };
 use crate::domain::model::{
     DraftStatus, InboxDraft, InboxDraftView, Priority, PrioritySource, ProjectRef, inbox_order,
@@ -1117,8 +1117,85 @@ impl InboxService {
         content_hash: &str,
         caller: Option<String>,
     ) -> Result<RequestView, InboxServiceError> {
-        let _ = (id, request_id, body, content_hash, caller);
-        todo!("phase-4-task-3")
+        if let Some(body) = body {
+            self.cap("body", body.len(), self.limits.max_body_bytes)?;
+        }
+        let _decide = self.decisions.lock().unwrap_or_else(|e| e.into_inner());
+        let events = self.events(id)?;
+        let view = find_request(&events, request_id)?;
+        if !matches!(view.status, RequestStatus::Open | RequestStatus::Proposed) {
+            return Err(InboxServiceError::WrongState(
+                status_name(view.status),
+                "only an open or proposed request can be confirmed",
+            ));
+        }
+        let proposal = match (view.status, &view.proposal) {
+            (RequestStatus::Proposed, Some(p)) => Some(p.as_str()),
+            _ => None,
+        };
+        let shown = match (proposal, body) {
+            (Some(p), _) => p,
+            (None, Some(b)) => b,
+            (None, None) => {
+                return Err(InboxServiceError::Invalid(
+                    "there is no proposal to confirm; send the resolution as body".to_string(),
+                ));
+            }
+        };
+        if proposal == Some(REDACTED_BODY) && body.is_none() {
+            return Err(InboxServiceError::Invalid(
+                "the proposal was redacted; send the resolution as body".to_string(),
+            ));
+        }
+        let text = body.unwrap_or(shown);
+        if text.trim().is_empty() {
+            return Err(InboxServiceError::Invalid(
+                "a resolution needs text".to_string(),
+            ));
+        }
+        if content_hash != hash_of(shown) {
+            return Err(InboxServiceError::HashMismatch);
+        }
+        let edited = proposal.is_some_and(|p| p != text);
+        let parent = proposal
+            .and_then(|_| proposal_event_id(&events, view.proposal_id.as_deref()?))
+            .or_else(|| opened_event_id(&events, request_id));
+        let attempt = view.attempts + 1;
+
+        let mut record = AuditRecord::new("inbox.resolution.confirmed", id, AuthorKind::Operator)
+            .with_caller(&caller)
+            .with_worktree(&view.worktree);
+        record.request_id = Some(request_id.to_string());
+        record.edited = Some(edited);
+        record.attempt = Some(attempt);
+        let author = EventAuthor {
+            caller: caller.clone(),
+            ..EventAuthor::operator()
+        };
+        let confirmed = self.store.append_event(
+            id,
+            author,
+            parent,
+            InboxEventKind::ResolutionConfirmed {
+                request_id: request_id.to_string(),
+                proposal_id: proposal.and(view.proposal_id.clone()),
+                content_hash: hash_of(text),
+                text: text.to_string(),
+                edited,
+                warnings: secret_warnings(text),
+            },
+        )?;
+        self.audit.record(&record.with_event(&confirmed));
+        self.deliver_attempt(
+            id,
+            &view.worktree,
+            request_id,
+            text,
+            attempt,
+            &caller,
+            &confirmed.event_id,
+        )?;
+        self.request(id, request_id)
     }
 
     /// The operator rejects with a reason; the request reopens (UC-06b).
@@ -1129,8 +1206,44 @@ impl InboxService {
         reason: &str,
         caller: Option<String>,
     ) -> Result<RequestView, InboxServiceError> {
-        let _ = (id, request_id, reason, caller);
-        todo!("phase-4-task-3")
+        let reason = reason.trim();
+        if reason.is_empty() {
+            return Err(InboxServiceError::Invalid(
+                "a rejection needs a reason".to_string(),
+            ));
+        }
+        self.cap("reason", reason.len(), self.limits.max_body_bytes)?;
+        let _decide = self.decisions.lock().unwrap_or_else(|e| e.into_inner());
+        let events = self.events(id)?;
+        let view = find_request(&events, request_id)?;
+        if !matches!(
+            view.status,
+            RequestStatus::Open | RequestStatus::Proposed | RequestStatus::DeliveryFailed
+        ) {
+            return Err(InboxServiceError::WrongState(
+                status_name(view.status),
+                "a confirmed or resolved request cannot be rejected",
+            ));
+        }
+        let mut record = AuditRecord::new("inbox.request.rejected", id, AuthorKind::Operator)
+            .with_caller(&caller)
+            .with_worktree(&view.worktree);
+        record.request_id = Some(request_id.to_string());
+        let author = EventAuthor {
+            caller,
+            ..EventAuthor::operator()
+        };
+        let event = self.store.append_event(
+            id,
+            author,
+            opened_event_id(&events, request_id),
+            InboxEventKind::Rejected {
+                request_id: request_id.to_string(),
+                reason: reason.to_string(),
+            },
+        )?;
+        self.audit.record(&record.with_event(&event));
+        self.request(id, request_id)
     }
 
     /// Retry a failed delivery as the next attempt (UC-06a). Only a
@@ -1143,6 +1256,82 @@ impl InboxService {
     ) -> Result<RequestView, InboxServiceError> {
         let _ = (id, request_id, caller);
         todo!("phase-4-task-4")
+    }
+
+    /// Paste `text` for `attempt` and record the result. Idempotent on
+    /// `(request_id, attempt)`: an attempt already recorded is returned, not
+    /// re-sent. `delivered` is appended only after the paste returned (DD-5).
+    /// Callers hold the decisions lock.
+    #[allow(clippy::too_many_arguments)]
+    fn deliver_attempt(
+        &self,
+        id: &str,
+        worktree: &WorktreeKey,
+        request_id: &str,
+        text: &str,
+        attempt: u32,
+        caller: &Option<String>,
+        parent: &str,
+    ) -> Result<InboxEvent, InboxServiceError> {
+        let recorded = self
+            .store
+            .read_events(id)?
+            .into_iter()
+            .find(|e| match &e.kind {
+                InboxEventKind::Delivered {
+                    request_id: r,
+                    attempt: a,
+                }
+                | InboxEventKind::DeliveryFailed {
+                    request_id: r,
+                    attempt: a,
+                    ..
+                } => r == request_id && *a == attempt,
+                _ => false,
+            });
+        if let Some(event) = recorded {
+            return Ok(event);
+        }
+        let delivery = self
+            .delivery
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let sent = match delivery {
+            Some(d) => d.deliver(worktree, request_id, text),
+            None => Err("no pane delivery is configured".to_string()),
+        };
+        let (action, kind) = match sent {
+            Ok(()) => (
+                "inbox.resolution.delivered",
+                InboxEventKind::Delivered {
+                    request_id: request_id.to_string(),
+                    attempt,
+                },
+            ),
+            Err(error) => (
+                "inbox.resolution.delivery_failed",
+                InboxEventKind::DeliveryFailed {
+                    request_id: request_id.to_string(),
+                    attempt,
+                    error: error.chars().take(MAX_ERROR_CHARS).collect(),
+                },
+            ),
+        };
+        let mut record = AuditRecord::new(action, id, AuthorKind::Operator)
+            .with_caller(caller)
+            .with_worktree(worktree);
+        record.request_id = Some(request_id.to_string());
+        record.attempt = Some(attempt);
+        let author = EventAuthor {
+            caller: caller.clone(),
+            ..EventAuthor::operator()
+        };
+        let event = self
+            .store
+            .append_event(id, author, Some(parent.to_string()), kind)?;
+        self.audit.record(&record.with_event(&event));
+        Ok(event)
     }
 
     /// Tombstone a comment, request, proposal or advice body (FR-11). The
@@ -1173,6 +1362,16 @@ fn find_request(events: &[InboxEvent], request_id: &str) -> Result<RequestView, 
 fn opened_event_id(events: &[InboxEvent], request_id: &str) -> Option<String> {
     events.iter().find_map(|e| match &e.kind {
         InboxEventKind::RequestOpened { request_id: r, .. } if r == request_id => {
+            Some(e.event_id.clone())
+        }
+        _ => None,
+    })
+}
+
+/// The event that carried proposal `proposal_id`.
+fn proposal_event_id(events: &[InboxEvent], proposal_id: &str) -> Option<String> {
+    events.iter().find_map(|e| match &e.kind {
+        InboxEventKind::Proposal { proposal_id: p, .. } if p == proposal_id => {
             Some(e.event_id.clone())
         }
         _ => None,

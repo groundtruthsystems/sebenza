@@ -726,6 +726,57 @@ impl Http {
             .await
     }
 
+    /// `POST` to a request decision route with the token and the CLI marker.
+    async fn inbox_decision(&self, url: String, body: Value) -> Result<Value> {
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(control_token()?)
+            .header(CALLER_HEADER, "cli")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `POST /api/inbox/{id}/requests/{rid}/confirm`
+    pub async fn inbox_confirm(&self, id: &str, rid: &str, body: Value) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/requests/{rid}/confirm", self.hub);
+        self.inbox_decision(url, body).await
+    }
+
+    /// `POST /api/inbox/{id}/requests/{rid}/reject`
+    pub async fn inbox_reject(&self, id: &str, rid: &str, reason: &str) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/requests/{rid}/reject", self.hub);
+        self.inbox_decision(url, serde_json::json!({ "reason": reason }))
+            .await
+    }
+
+    /// `POST /api/inbox/{id}/requests/{rid}/redeliver`
+    pub async fn inbox_redeliver(&self, id: &str, rid: &str) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/requests/{rid}/redeliver", self.hub);
+        self.inbox_decision(url, serde_json::json!({})).await
+    }
+
+    /// `POST /api/inbox/{id}/requests/{rid}/retry-triage`
+    pub async fn inbox_retry_triage(&self, id: &str, rid: &str) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/requests/{rid}/retry-triage", self.hub);
+        self.inbox_decision(url, serde_json::json!({})).await
+    }
+
+    /// `POST /api/inbox/{id}/comments/{eventId}/redact`
+    pub async fn inbox_redact(&self, id: &str, event_id: &str) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/comments/{event_id}/redact", self.hub);
+        self.inbox_decision(url, serde_json::json!({})).await
+    }
+
+    /// `GET /api/inbox/{id}/agent/jobs/{jobId}`
+    pub async fn inbox_agent_job(&self, id: &str, job_id: &str) -> Result<Value> {
+        self.get(&format!("{}/api/inbox/{id}/agent/jobs/{job_id}", self.hub))
+            .await
+    }
+
     /// `GET /api/inbox/jobs/{id}` — the CLI polls rather than holding a socket.
     pub async fn inbox_job(&self, job_id: &str) -> Result<Value> {
         self.get(&format!("{}/api/inbox/jobs/{job_id}", self.hub))

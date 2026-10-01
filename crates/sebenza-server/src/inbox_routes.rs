@@ -23,6 +23,7 @@ use crate::services::inbox_service::{
     CommentGroups, DraftSummary, InboxService, InboxServiceError, ListQuery, ProjectLink,
     parse_worktree_ingress,
 };
+use crate::services::system_agent::{EnqueueError, JobRecord};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -187,6 +188,12 @@ impl From<InboxServiceError> for ApiError {
                 ApiError::new(429, err.to_string())
             }
             InboxServiceError::ForeignWorktree(_) => ApiError::new(403, err.to_string()),
+            InboxServiceError::UnknownRequest(_) | InboxServiceError::UnknownEvent(_) => {
+                ApiError::new(404, err.to_string())
+            }
+            InboxServiceError::HashMismatch | InboxServiceError::WrongState(..) => {
+                ApiError::new(409, err.to_string())
+            }
             other => ApiError::new(500, other.to_string()),
         }
     }
@@ -732,11 +739,60 @@ pub struct RejectBody {
     pub reason: String,
 }
 
-fn not_yet() -> ApiError {
-    ApiError::new(501, "not implemented".to_string())
+impl From<EnqueueError> for ApiError {
+    fn from(err: EnqueueError) -> Self {
+        let status = match err {
+            EnqueueError::Disabled | EnqueueError::NoRuntime => 503,
+            EnqueueError::QueueFull(_) => 429,
+            EnqueueError::Invalid(_) => 400,
+            EnqueueError::UnknownRequest(_) => 404,
+            EnqueueError::NotRetryable(_) => 409,
+        };
+        ApiError::new(status, err.to_string())
+    }
+}
+
+/// Run a blocking inbox call off the async runtime. Confirm and redeliver
+/// paste through tmux, so they must not stall a runtime thread.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, InboxServiceError> + Send + 'static,
+) -> Result<T, ApiError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".to_string()))?
+        .map_err(ApiError::from)
+}
+
+/// The read-side guard for routes that carry agent output: the Host
+/// allowlist and, when a browser names an origin, the same-origin check.
+/// Reads need no token, like every other inbox GET.
+fn check_read(headers: &HeaderMap) -> Result<(), ApiError> {
+    let header = |name: axum::http::HeaderName| -> Option<String> {
+        headers.get(name)?.to_str().ok().map(str::to_string)
+    };
+    let host = header(axum::http::header::HOST).unwrap_or_default();
+    check_host(&host)?;
+    if origin_is_acceptable(
+        header(axum::http::header::ORIGIN).as_deref(),
+        header(axum::http::header::REFERER).as_deref(),
+        &format!("http://{host}"),
+    ) {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            403,
+            "Cross-origin request refused".to_string(),
+        ))
+    }
 }
 
 /// `POST /api/inbox/{id}/requests/{rid}/confirm` — confirm and deliver.
+///
+/// `contentHash` binds the confirm to the text the operator was shown (the
+/// proposal, or the authored `body` when there is none); a stale hash is a
+/// 409 and nothing is delivered (T-12). The control token is the only
+/// credential, so a worktree agent holding it is accepted here too; the
+/// audit records its unauthenticated caller marker (T-01, accepted).
 pub async fn confirm_request(
     State(state): State<AppState>,
     Path((id, rid)): Path<(String, String)>,
@@ -744,8 +800,13 @@ pub async fn confirm_request(
     Json(body): Json<ConfirmBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     check(&headers, "POST")?;
-    let _ = (state, id, rid, body);
-    Err(not_yet())
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let request = blocking(move || {
+        svc.confirm_resolution(&id, &rid, body.body.as_deref(), &body.content_hash, caller)
+    })
+    .await?;
+    Ok(Json(serde_json::json!({ "request": request })))
 }
 
 /// `POST /api/inbox/{id}/requests/{rid}/reject` — back to open, with a reason.
@@ -756,8 +817,10 @@ pub async fn reject_request(
     Json(body): Json<RejectBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     check(&headers, "POST")?;
-    let _ = (state, id, rid, body);
-    Err(not_yet())
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let request = blocking(move || svc.reject_request(&id, &rid, &body.reason, caller)).await?;
+    Ok(Json(serde_json::json!({ "request": request })))
 }
 
 /// `POST /api/inbox/{id}/requests/{rid}/redeliver` — retry a failed delivery.
@@ -767,40 +830,108 @@ pub async fn redeliver_request(
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     check(&headers, "POST")?;
-    let _ = (state, id, rid);
-    Err(not_yet())
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let request = blocking(move || svc.redeliver(&id, &rid, caller)).await?;
+    Ok(Json(serde_json::json!({ "request": request })))
 }
 
-/// `POST /api/inbox/{id}/requests/{rid}/retry-triage` — re-run triage.
+/// `POST /api/inbox/{id}/requests/{rid}/retry-triage` — re-run triage on an
+/// open (typically flagged) request as its next attempt.
 pub async fn retry_triage(
     State(state): State<AppState>,
     Path((id, rid)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     check(&headers, "POST")?;
-    let _ = (state, id, rid);
-    Err(not_yet())
+    let agent = state.system_agent.clone();
+    let job_id = tokio::task::spawn_blocking(move || agent.retry_triage(&id, &rid))
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
+    Ok(Json(serde_json::json!({ "jobId": job_id })))
 }
 
-/// `GET /api/inbox/{id}/agent/jobs/{jobId}` — one system-agent job.
+/// `GET /api/inbox/{id}/agent/jobs/{jobId}` — one system-agent job. A job
+/// of another item is a 404, as is an unknown or expired id.
 pub async fn get_agent_job(
     State(state): State<AppState>,
     Path((id, job_id)): Path<(String, String)>,
     headers: HeaderMap,
-) -> Result<Json<crate::services::system_agent::JobRecord>, ApiError> {
-    let _ = (state, id, job_id, headers);
-    Err(not_yet())
+) -> Result<Json<JobRecord>, ApiError> {
+    check_read(&headers)?;
+    state
+        .system_agent
+        .job(&job_id)
+        .filter(|j| j.draft_id == id)
+        .map(Json)
+        .ok_or_else(|| ApiError::new(404, "Unknown system agent job".to_string()))
 }
 
-/// `GET /api/inbox/{id}/agent/stream` — WebSocket of `inbox.job` events.
+/// `GET /api/inbox/{id}/agent/stream` — a WebSocket of `inbox.job` events
+/// for one item: each of its known jobs first, then every state change.
 pub async fn ws_agent_jobs(
     ws: WebSocketUpgrade,
     Path(id): Path<String>,
     headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Response {
-    let _ = (ws, id, headers, state);
-    not_yet().into_response()
+    if let Err(e) = check_read(&headers) {
+        return e.into_response();
+    }
+    let agent = state.system_agent.clone();
+    ws.on_upgrade(move |socket| agent_job_socket(socket, agent, id))
+}
+
+fn job_event(job: &JobRecord) -> Option<String> {
+    serde_json::to_string(&serde_json::json!({ "type": "inbox.job", "job": job })).ok()
+}
+
+async fn agent_job_socket(
+    mut socket: WebSocket,
+    agent: Arc<crate::services::system_agent::SystemAgentService>,
+    draft_id: String,
+) {
+    // Subscribe before the snapshot, so a change between the two is not lost.
+    let mut updates = agent.subscribe();
+    let snapshot = |agent: &crate::services::system_agent::SystemAgentService| {
+        agent
+            .jobs_for(&draft_id)
+            .iter()
+            .filter_map(job_event)
+            .collect::<Vec<_>>()
+    };
+    for text in snapshot(&agent) {
+        if socket.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
+    }
+    loop {
+        tokio::select! {
+            update = updates.recv() => {
+                let texts = match update {
+                    Ok(job) if job.draft_id == draft_id => job_event(&job).into_iter().collect(),
+                    Ok(_) => continue,
+                    // Lagged: resend the item's jobs rather than leave a gap.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => snapshot(&agent),
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                };
+                for text in texts {
+                    if socket.send(Message::Text(text.into())).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            incoming = socket.recv() => {
+                if !matches!(incoming, Some(Ok(_))) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+fn not_yet() -> ApiError {
+    ApiError::new(501, "not implemented".to_string())
 }
 
 /// `POST /api/inbox/{id}/comments/{eventId}/redact` — tombstone a body.

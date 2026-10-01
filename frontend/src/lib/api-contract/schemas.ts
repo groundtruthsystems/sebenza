@@ -19,7 +19,12 @@ export const EnabledResponseSchema = z.object({
   enabled: z.boolean(),
 });
 
-export const BuiltInAgentIdSchema = z.enum(["claude", "grok", "codex", "opencode"]);
+export const BuiltInAgentIdSchema = z.enum([
+  "claude",
+  "grok",
+  "codex",
+  "opencode",
+]);
 export const AgentIdSchema = z.string().trim().min(1);
 export const AgentKindSchema = BuiltInAgentIdSchema;
 export const WorktreeCreateModeSchema = z.enum(["new", "existing"]);
@@ -98,7 +103,10 @@ export const AvailableBranchesQuerySchema = z.object({
 
 const NumberLikePathParamSchema = z.union([
   z.number().int().nonnegative(),
-  z.string().regex(/^\d+$/).transform((value) => Number(value)),
+  z
+    .string()
+    .regex(/^\d+$/)
+    .transform((value) => Number(value)),
 ]);
 
 export const BranchListResponseSchema = z.object({
@@ -223,14 +231,21 @@ export const PrEntrySchema = z.object({
   comments: z.array(PrCommentSchema),
 });
 
-export const AutoNameProviderSchema = z.enum(["claude", "grok", "codex", "opencode"]);
+export const AutoNameProviderSchema = z.enum([
+  "claude",
+  "grok",
+  "codex",
+  "opencode",
+]);
 
 export const AutoNameConfigResponseSchema = z.object({
-  autoName: z.object({
-    provider: AutoNameProviderSchema,
-    model: z.string().optional(),
-    systemPrompt: z.string().optional(),
-  }).nullable(),
+  autoName: z
+    .object({
+      provider: AutoNameProviderSchema,
+      model: z.string().optional(),
+      systemPrompt: z.string().optional(),
+    })
+    .nullable(),
 });
 
 export const WorktreeCreationStateSchema = z.object({
@@ -240,7 +255,12 @@ export const WorktreeCreationStateSchema = z.object({
 export const AppNotificationSchema = z.object({
   id: z.number(),
   branch: z.string(),
-  type: z.enum(["agent_stopped", "pr_opened", "runtime_error", "worktree_auto_removed"]),
+  type: z.enum([
+    "agent_stopped",
+    "pr_opened",
+    "runtime_error",
+    "worktree_auto_removed",
+  ]),
   message: z.string(),
   url: z.string().optional(),
   timestamp: z.number(),
@@ -396,9 +416,21 @@ export const AgentsUiWorktreeSummarySchema = z.object({
   conversation: WorktreeConversationRefSchema.nullable(),
 });
 
-export const AgentsUiConversationMessageRoleSchema = z.enum(["user", "assistant"]);
-export const AgentsUiConversationMessageStatusSchema = z.enum(["completed", "inProgress", "failed"]);
-export const AgentsUiConversationMessageKindSchema = z.enum(["text", "thinking", "toolUse", "toolResult"]);
+export const AgentsUiConversationMessageRoleSchema = z.enum([
+  "user",
+  "assistant",
+]);
+export const AgentsUiConversationMessageStatusSchema = z.enum([
+  "completed",
+  "inProgress",
+  "failed",
+]);
+export const AgentsUiConversationMessageKindSchema = z.enum([
+  "text",
+  "thinking",
+  "toolUse",
+  "toolResult",
+]);
 
 export const AgentsUiConversationMessageSchema = z.object({
   id: z.string(),
@@ -761,8 +793,12 @@ export type AddProjectResponse = z.infer<typeof AddProjectResponseSchema>;
 export type ProjectInitPhase = z.infer<typeof ProjectInitPhaseSchema>;
 export type ProjectInitState = z.infer<typeof ProjectInitStateSchema>;
 export type ProjectInitsResponse = z.infer<typeof ProjectInitsResponseSchema>;
-export type MigrateProjectsRequest = z.infer<typeof MigrateProjectsRequestSchema>;
-export type MigrateProjectsResponse = z.infer<typeof MigrateProjectsResponseSchema>;
+export type MigrateProjectsRequest = z.infer<
+  typeof MigrateProjectsRequestSchema
+>;
+export type MigrateProjectsResponse = z.infer<
+  typeof MigrateProjectsResponseSchema
+>;
 
 export type BuiltInAgentId = z.infer<typeof BuiltInAgentIdSchema>;
 export type AgentId = z.infer<typeof AgentIdSchema>;
@@ -771,9 +807,13 @@ export type AgentCapabilities = z.infer<typeof AgentCapabilitiesSchema>;
 export type AgentSummary = z.infer<typeof AgentSummarySchema>;
 export type AgentDetails = z.infer<typeof AgentDetailsSchema>;
 export type AgentListResponse = z.infer<typeof AgentListResponseSchema>;
-export type UpsertCustomAgentRequest = z.infer<typeof UpsertCustomAgentRequestSchema>;
+export type UpsertCustomAgentRequest = z.infer<
+  typeof UpsertCustomAgentRequestSchema
+>;
 export type AgentResponse = z.infer<typeof AgentResponseSchema>;
-export type ValidateCustomAgentResponse = z.infer<typeof ValidateCustomAgentResponseSchema>;
+export type ValidateCustomAgentResponse = z.infer<
+  typeof ValidateCustomAgentResponseSchema
+>;
 export type WorktreeCreateMode = z.infer<typeof WorktreeCreateModeSchema>;
 export type OneshotConfig = z.infer<typeof OneshotConfigSchema>;
 export type WorktreeCreationPhase = z.infer<typeof WorktreeCreationPhaseSchema>;
@@ -788,47 +828,103 @@ export type WorktreeSource = z.infer<typeof WorktreeSourceSchema>;
 export type WorktreeKind = z.infer<typeof WorktreeKindSchema>;
 export type WorktreeFeedbackState = z.infer<typeof WorktreeFeedbackStateSchema>;
 export type ActiveWorktreeProject = z.infer<typeof ActiveWorktreeProjectSchema>;
-export type ActiveWorktreesResponse = z.infer<typeof ActiveWorktreesResponseSchema>;
-export type CreateWorktreeResponse = z.infer<typeof CreateWorktreeResponseSchema>;
-export type SetWorktreeArchivedRequest = z.infer<typeof SetWorktreeArchivedRequestSchema>;
-export type SetWorktreeArchivedResponse = z.infer<typeof SetWorktreeArchivedResponseSchema>;
-export type SetWorktreeLabelRequest = z.infer<typeof SetWorktreeLabelRequestSchema>;
-export type SetWorktreeLabelResponse = z.infer<typeof SetWorktreeLabelResponseSchema>;
+export type ActiveWorktreesResponse = z.infer<
+  typeof ActiveWorktreesResponseSchema
+>;
+export type CreateWorktreeResponse = z.infer<
+  typeof CreateWorktreeResponseSchema
+>;
+export type SetWorktreeArchivedRequest = z.infer<
+  typeof SetWorktreeArchivedRequestSchema
+>;
+export type SetWorktreeArchivedResponse = z.infer<
+  typeof SetWorktreeArchivedResponseSchema
+>;
+export type SetWorktreeLabelRequest = z.infer<
+  typeof SetWorktreeLabelRequestSchema
+>;
+export type SetWorktreeLabelResponse = z.infer<
+  typeof SetWorktreeLabelResponseSchema
+>;
 export type ToggleEnabledRequest = z.infer<typeof ToggleEnabledRequestSchema>;
-export type SendWorktreePromptRequest = z.infer<typeof SendWorktreePromptRequestSchema>;
-export type AgentsSendMessageRequest = z.infer<typeof AgentsSendMessageRequestSchema>;
+export type SendWorktreePromptRequest = z.infer<
+  typeof SendWorktreePromptRequestSchema
+>;
+export type AgentsSendMessageRequest = z.infer<
+  typeof AgentsSendMessageRequestSchema
+>;
 export type PullMainRequest = z.infer<typeof PullMainRequestSchema>;
 export type PullMainResult = z.infer<typeof PullMainResponseSchema>;
 export type ServiceStatus = z.infer<typeof ServiceStatusSchema>;
 export type PrComment = z.infer<typeof PrCommentSchema>;
 export type CiCheck = z.infer<typeof CiCheckSchema>;
 export type PrEntry = z.infer<typeof PrEntrySchema>;
-export type AutoNameConfigResponse = z.infer<typeof AutoNameConfigResponseSchema>;
+export type AutoNameConfigResponse = z.infer<
+  typeof AutoNameConfigResponseSchema
+>;
 export type WorktreeCreationState = z.infer<typeof WorktreeCreationStateSchema>;
 export type AppNotification = z.infer<typeof AppNotificationSchema>;
-export type ProjectWorktreeSnapshot = z.infer<typeof ProjectWorktreeSnapshotSchema>;
+export type ProjectWorktreeSnapshot = z.infer<
+  typeof ProjectWorktreeSnapshotSchema
+>;
 export type WorktreeTab = z.infer<typeof WorktreeTabSchema>;
 export type WorktreeTabParams = z.infer<typeof WorktreeTabParamsSchema>;
 export type CreateTabResponse = z.infer<typeof CreateTabResponseSchema>;
 export type ProjectSnapshot = z.infer<typeof ProjectSnapshotSchema>;
-export type WorktreeConversationProvider = z.infer<typeof WorktreeConversationProviderSchema>;
-export type CodexWorktreeConversationRef = z.infer<typeof CodexWorktreeConversationRefSchema>;
-export type ClaudeWorktreeConversationRef = z.infer<typeof ClaudeWorktreeConversationRefSchema>;
-export type WorktreeConversationRef = z.infer<typeof WorktreeConversationRefSchema>;
-export type AgentsUiWorktreeSummary = z.infer<typeof AgentsUiWorktreeSummarySchema>;
-export type AgentsUiConversationMessageRole = z.infer<typeof AgentsUiConversationMessageRoleSchema>;
-export type AgentsUiConversationMessageStatus = z.infer<typeof AgentsUiConversationMessageStatusSchema>;
-export type AgentsUiConversationMessageKind = z.infer<typeof AgentsUiConversationMessageKindSchema>;
-export type AgentsUiConversationMessage = z.infer<typeof AgentsUiConversationMessageSchema>;
-export type AgentsUiConversationState = z.infer<typeof AgentsUiConversationStateSchema>;
-export type AgentsUiWorktreeConversationResponse = z.infer<typeof AgentsUiWorktreeConversationResponseSchema>;
-export type AgentsUiSendMessageResponse = z.infer<typeof AgentsUiSendMessageResponseSchema>;
-export type AgentsUiInterruptResponse = z.infer<typeof AgentsUiInterruptResponseSchema>;
-export type AgentsUiConversationMessageDeltaEvent = z.infer<typeof AgentsUiConversationMessageDeltaEventSchema>;
-export type AgentsUiConversationMessageUpsertEvent = z.infer<typeof AgentsUiConversationMessageUpsertEventSchema>;
-export type AgentsUiConversationStatusEvent = z.infer<typeof AgentsUiConversationStatusEventSchema>;
-export type AgentsUiConversationErrorEvent = z.infer<typeof AgentsUiConversationErrorEventSchema>;
-export type AgentsUiConversationEvent = z.infer<typeof AgentsUiConversationEventSchema>;
+export type WorktreeConversationProvider = z.infer<
+  typeof WorktreeConversationProviderSchema
+>;
+export type CodexWorktreeConversationRef = z.infer<
+  typeof CodexWorktreeConversationRefSchema
+>;
+export type ClaudeWorktreeConversationRef = z.infer<
+  typeof ClaudeWorktreeConversationRefSchema
+>;
+export type WorktreeConversationRef = z.infer<
+  typeof WorktreeConversationRefSchema
+>;
+export type AgentsUiWorktreeSummary = z.infer<
+  typeof AgentsUiWorktreeSummarySchema
+>;
+export type AgentsUiConversationMessageRole = z.infer<
+  typeof AgentsUiConversationMessageRoleSchema
+>;
+export type AgentsUiConversationMessageStatus = z.infer<
+  typeof AgentsUiConversationMessageStatusSchema
+>;
+export type AgentsUiConversationMessageKind = z.infer<
+  typeof AgentsUiConversationMessageKindSchema
+>;
+export type AgentsUiConversationMessage = z.infer<
+  typeof AgentsUiConversationMessageSchema
+>;
+export type AgentsUiConversationState = z.infer<
+  typeof AgentsUiConversationStateSchema
+>;
+export type AgentsUiWorktreeConversationResponse = z.infer<
+  typeof AgentsUiWorktreeConversationResponseSchema
+>;
+export type AgentsUiSendMessageResponse = z.infer<
+  typeof AgentsUiSendMessageResponseSchema
+>;
+export type AgentsUiInterruptResponse = z.infer<
+  typeof AgentsUiInterruptResponseSchema
+>;
+export type AgentsUiConversationMessageDeltaEvent = z.infer<
+  typeof AgentsUiConversationMessageDeltaEventSchema
+>;
+export type AgentsUiConversationMessageUpsertEvent = z.infer<
+  typeof AgentsUiConversationMessageUpsertEventSchema
+>;
+export type AgentsUiConversationStatusEvent = z.infer<
+  typeof AgentsUiConversationStatusEventSchema
+>;
+export type AgentsUiConversationErrorEvent = z.infer<
+  typeof AgentsUiConversationErrorEventSchema
+>;
+export type AgentsUiConversationEvent = z.infer<
+  typeof AgentsUiConversationEventSchema
+>;
 export type WorktreeListResponse = z.infer<typeof WorktreeListResponseSchema>;
 export type UnpushedCommit = z.infer<typeof UnpushedCommitSchema>;
 export type WorktreeDiffResponse = z.infer<typeof WorktreeDiffResponseSchema>;
@@ -923,7 +1019,6 @@ export const PatchInboxDraftRequestSchema = z.object({
   status: DraftStatusSchema.optional(),
 });
 
-
 /** `null` clears the override and hands priority back to the agent. The key
  *  is required: an empty body is refused rather than read as a clear. */
 export const SetInboxPriorityRequestSchema = z.object({
@@ -991,6 +1086,10 @@ export const InboxRequestSchema = z.object({
   flagged: z.boolean(),
   proposalId: z.string().nullable(),
   proposal: z.string().nullable(),
+  /** `content_hash` of `proposal`: what confirming it must quote. */
+  proposalHash: z.string().nullable().default(null),
+  /** Secret/PHI scan hits on the proposal; shown before confirm. */
+  proposalWarnings: z.array(z.string()).default([]),
   contentHash: z.string().nullable(),
   confirmedText: z.string().nullable(),
   lastReason: z.string().nullable(),
@@ -1002,6 +1101,57 @@ export const InboxRequestSchema = z.object({
 
 export const InboxRequestListSchema = z.object({
   requests: z.array(InboxRequestSchema),
+});
+
+/** `contentHash` is the hash of the text the operator was shown: the
+ *  proposal, or `body` itself when there is no proposal (an authored
+ *  resolution). `body` alongside a proposal is an edit. A stale hash is a
+ *  409 and nothing is delivered. */
+export const ConfirmInboxRequestSchema = z.object({
+  contentHash: z.string(),
+  body: z.string().optional(),
+});
+
+export const RejectInboxRequestSchema = z.object({
+  reason: z.string(),
+});
+
+export const InboxRequestResponseSchema = z.object({
+  request: InboxRequestSchema,
+});
+
+export const RetryInboxTriageResponseSchema = z.object({
+  jobId: z.string(),
+});
+
+/** A system-agent job (triage, draft-help, convert). `output` is the
+ *  validated result, tagged by `jobKind`; `error` never holds agent text. */
+export const InboxAgentJobSchema = z.object({
+  jobId: z.string(),
+  draftId: z.string(),
+  kind: z.enum(["triage", "draft_help", "convert"]),
+  requestId: z.string().nullable(),
+  attempt: z.number(),
+  status: z.enum(["queued", "running", "succeeded", "failed"]),
+  output: z.record(z.string(), z.unknown()).nullable(),
+  error: z.string().nullable(),
+  reseeded: z.boolean(),
+  enqueuedAt: z.string(),
+  startedAt: z.string().nullable(),
+  finishedAt: z.string().nullable(),
+});
+
+export type InboxAgentJob = z.infer<typeof InboxAgentJobSchema>;
+
+/** One frame of `/api/inbox/:id/agent/stream`. */
+export const InboxJobEventSchema = z.object({
+  type: z.literal("inbox.job"),
+  job: InboxAgentJobSchema,
+});
+
+export const RedactInboxCommentResponseSchema = z.object({
+  eventId: z.string(),
+  targetEventId: z.string(),
 });
 
 export const ConversionTargetSchema = z.object({

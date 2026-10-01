@@ -387,6 +387,7 @@ impl SystemAgentService {
             finished_at: None,
             input,
         };
+        self.publish(&record);
         st.jobs.insert(job_id.clone(), (seq, record));
         let lane = if kind.is_interactive() { 0 } else { 1 };
         st.queued.insert((lane, seq), job_id.clone());
@@ -429,6 +430,7 @@ impl SystemAgentService {
             };
             record.status = JobStatus::Running;
             record.started_at = Some(now());
+            let _ = self.updates.send(record.clone());
             let draft_id = record.draft_id.clone();
             st.busy.insert(draft_id);
             st.running += 1;
@@ -493,6 +495,9 @@ impl SystemAgentService {
             );
             let sink = self.sink.read().unwrap_or_else(|e| e.into_inner()).clone();
             sink.job_finished(&job);
+            // After the sink, so a subscriber that reads the inbox on a
+            // finished job sees what the job applied.
+            self.publish(&job);
         }
         self.finished.send_modify(|n| *n += 1);
     }
@@ -613,7 +618,7 @@ impl SystemAgentService {
 
     /// Tell subscribers a job changed. No subscriber is not an error.
     fn publish(&self, job: &JobRecord) {
-        let _ = job;
+        let _ = self.updates.send(job.clone());
     }
 
     /// Re-run triage for an open request as its next attempt (UC-05a, TS-63):

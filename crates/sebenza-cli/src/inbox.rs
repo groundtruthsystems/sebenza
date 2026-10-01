@@ -1,5 +1,6 @@
 //! Inbox subcommands: `ls`, `show`, `new`, `edit`, `link`, `unlink`, `drop`, `rm`,
-//! `convert`, `job`, `priority`, `comment`, `comments`, `requests`.
+//! `convert`, `job`, `priority`, `comment`, `comments`, `requests`, `confirm`,
+//! `reject`, `redeliver`, `retry-triage`, `agent-job`, `redact`.
 //!
 //! The inbox is global — drafts exist before they belong to any project — so
 //! these talk to the hub routes rather than a project-prefixed base.
@@ -99,6 +100,15 @@ fn usage() -> String {
         "                                                 Comment overall or on one worktree",
         "  sebenza-cli inbox comments <id>                Show the overall and worktree threads",
         "  sebenza-cli inbox requests <id>                List requests worktree agents raised",
+        "  sebenza-cli inbox confirm <id> <request-id> [--body TEXT]",
+        "                                                 Confirm the proposal (or, with --body, an",
+        "                                                 edit or your own resolution) and paste it",
+        "                                                 into the request's worktree",
+        "  sebenza-cli inbox reject <id> <request-id> <reason>  Reject; the request reopens",
+        "  sebenza-cli inbox redeliver <id> <request-id>  Retry a failed delivery",
+        "  sebenza-cli inbox retry-triage <id> <request-id>  Re-run triage on a flagged request",
+        "  sebenza-cli inbox agent-job <id> <job-id>      Show a system agent job",
+        "  sebenza-cli inbox redact <id> <event-id>       Mask a comment, request or proposal",
         "",
         "A convert target is project:branch:prompt, for example:",
         "  sebenza-cli inbox convert 01ARZ... ~/code/acme:fix-scorer:'rewrite the scorer'",
@@ -144,7 +154,7 @@ fn positional(args: &[String]) -> Vec<String> {
             skip_next = false;
             continue;
         }
-        if a == "--search" || a == "--base" || a == "--worktree" {
+        if a == "--search" || a == "--base" || a == "--worktree" || a == "--body" {
             skip_next = true;
             continue;
         }
@@ -219,6 +229,40 @@ fn parse(args: &[String]) -> Result<Option<InboxCommand>> {
         }
         "comments" => Ok(Some(InboxCommand::Comments(need(0, "draft id")?))),
         "requests" => Ok(Some(InboxCommand::Requests(need(0, "draft id")?))),
+        "confirm" => Ok(Some(InboxCommand::Confirm {
+            id: need(0, "draft id")?,
+            request_id: need(1, "request id")?,
+            body: opt(args, "--body"),
+        })),
+        "reject" => {
+            let id = need(0, "draft id")?;
+            let request_id = need(1, "request id")?;
+            let reason = pos[2..].join(" ");
+            if reason.trim().is_empty() {
+                return Err(anyhow!("Missing a reason for the rejection"));
+            }
+            Ok(Some(InboxCommand::Reject {
+                id,
+                request_id,
+                reason,
+            }))
+        }
+        "redeliver" => Ok(Some(InboxCommand::Redeliver {
+            id: need(0, "draft id")?,
+            request_id: need(1, "request id")?,
+        })),
+        "retry-triage" => Ok(Some(InboxCommand::RetryTriage {
+            id: need(0, "draft id")?,
+            request_id: need(1, "request id")?,
+        })),
+        "agent-job" => Ok(Some(InboxCommand::AgentJob {
+            id: need(0, "draft id")?,
+            job_id: need(1, "job id")?,
+        })),
+        "redact" => Ok(Some(InboxCommand::Redact {
+            id: need(0, "draft id")?,
+            event_id: need(1, "event id")?,
+        })),
         other => Err(anyhow!("Unknown inbox command: {other}")),
     }
 }
@@ -249,8 +293,27 @@ fn parse_worktree(spec: &str) -> Result<(String, String)> {
 /// The hash a confirm must quote: of the proposal the operator is
 /// confirming (edited or not), else of the resolution they authored.
 fn confirm_hash(request: &Value, body: Option<&str>) -> Result<String> {
-    let _ = (request, body);
-    Err(anyhow!("not implemented"))
+    use common::domain::inbox_events::content_hash;
+    match (request.get("proposal").and_then(Value::as_str), body) {
+        (Some(proposal), _) => Ok(content_hash(proposal)),
+        (None, Some(body)) => Ok(content_hash(body)),
+        (None, None) => Err(anyhow!(
+            "the request has no proposal; pass --body with the resolution to send"
+        )),
+    }
+}
+
+fn print_request(body: &Value) {
+    let r = body.get("request").cloned().unwrap_or(Value::Null);
+    let id = r.get("requestId").and_then(Value::as_str).unwrap_or("");
+    let status = r.get("status").and_then(Value::as_str).unwrap_or("");
+    println!("{id}  {status}");
+    if let Some(err) = r.get("lastError").and_then(Value::as_str)
+        && status == "delivery_failed"
+    {
+        eprintln!("delivery failed: {err}");
+        eprintln!("Retry with: sebenza-cli inbox redeliver <id> {id}");
+    }
 }
 
 fn print_comment_rows(rows: &[Value]) {
@@ -602,12 +665,65 @@ pub async fn run(args: &[String], port: u16) -> i32 {
             }
             InboxCommand::Comments(id) => print_comments(&http.inbox_comments(&id).await?),
             InboxCommand::Requests(id) => print_requests(&http.inbox_requests(&id).await?),
-            InboxCommand::Confirm { .. }
-            | InboxCommand::Reject { .. }
-            | InboxCommand::Redeliver { .. }
-            | InboxCommand::RetryTriage { .. }
-            | InboxCommand::AgentJob { .. }
-            | InboxCommand::Redact { .. } => return Err(anyhow!("not implemented")),
+            InboxCommand::Confirm {
+                id,
+                request_id,
+                body,
+            } => {
+                // Hash what is shown here, from a fresh read: confirming
+                // binds to this text, and a change since is a 409.
+                let requests = http.inbox_requests(&id).await?;
+                let request = requests
+                    .get("requests")
+                    .and_then(Value::as_array)
+                    .and_then(|all| {
+                        all.iter()
+                            .find(|r| r.get("requestId").and_then(Value::as_str) == Some(&request_id))
+                    })
+                    .cloned()
+                    .ok_or_else(|| anyhow!("no request {request_id} on {id}"))?;
+                let hash = confirm_hash(&request, body.as_deref())?;
+                let sent = body
+                    .clone()
+                    .or_else(|| {
+                        request
+                            .get("proposal")
+                            .and_then(Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_default();
+                println!("Confirming:");
+                for line in sent.lines() {
+                    println!("    {line}");
+                }
+                let mut payload = json!({ "contentHash": hash });
+                if let Some(body) = body {
+                    payload["body"] = Value::String(body);
+                }
+                print_request(&http.inbox_confirm(&id, &request_id, payload).await?);
+            }
+            InboxCommand::Reject {
+                id,
+                request_id,
+                reason,
+            } => print_request(&http.inbox_reject(&id, &request_id, &reason).await?),
+            InboxCommand::Redeliver { id, request_id } => {
+                print_request(&http.inbox_redeliver(&id, &request_id).await?)
+            }
+            InboxCommand::RetryTriage { id, request_id } => {
+                let v = http.inbox_retry_triage(&id, &request_id).await?;
+                let job = v.get("jobId").and_then(Value::as_str).unwrap_or("");
+                println!("job {job}");
+                println!("Follow it with: sebenza-cli inbox agent-job {id} {job}");
+            }
+            InboxCommand::AgentJob { id, job_id } => {
+                let job = http.inbox_agent_job(&id, &job_id).await?;
+                println!("{}", serde_json::to_string_pretty(&job)?);
+            }
+            InboxCommand::Redact { id, event_id } => {
+                http.inbox_redact(&id, &event_id).await?;
+                println!("Redacted {event_id}.");
+            }
             InboxCommand::Rm { id, yes } => {
                 http.inbox_delete(&id, yes).await?;
                 println!("Deleted {id}.");

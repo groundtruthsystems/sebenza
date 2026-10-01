@@ -67,6 +67,12 @@ import {
   PostInboxCommentRequestSchema,
   PostInboxCommentResponseSchema,
   InboxRequestListSchema,
+  ConfirmInboxRequestSchema,
+  RejectInboxRequestSchema,
+  InboxRequestResponseSchema,
+  RetryInboxTriageResponseSchema,
+  InboxAgentJobSchema,
+  RedactInboxCommentResponseSchema,
 } from "./schemas";
 
 const c = initContract();
@@ -130,8 +136,30 @@ export const apiPaths = {
   fetchInboxComments: "/api/inbox/:id/comments",
   postInboxComment: "/api/inbox/:id/comments",
   fetchInboxRequests: "/api/inbox/:id/requests",
+  confirmInboxRequest: "/api/inbox/:id/requests/:rid/confirm",
+  rejectInboxRequest: "/api/inbox/:id/requests/:rid/reject",
+  redeliverInboxRequest: "/api/inbox/:id/requests/:rid/redeliver",
+  retryInboxTriage: "/api/inbox/:id/requests/:rid/retry-triage",
+  fetchInboxAgentJob: "/api/inbox/:id/agent/jobs/:jobId",
+  streamInboxAgent: "/api/inbox/:id/agent/stream",
+  redactInboxComment: "/api/inbox/:id/comments/:eventId/redact",
   fetchRegistry: "/api/registry",
   fetchRegistryFile: "/api/registry/file",
+} as const;
+
+/** Errors every guarded inbox decision route can return: 401/403 from the
+ *  token, origin and Host guards, 404 for an unknown item or request, 409
+ *  for a stale hash or a request in the wrong state. */
+const inboxDecisionErrors = {
+  400: ErrorResponseSchema,
+  401: ErrorResponseSchema,
+  403: ErrorResponseSchema,
+  404: ErrorResponseSchema,
+  409: ErrorResponseSchema,
+  413: ErrorResponseSchema,
+  422: ErrorResponseSchema,
+  429: ErrorResponseSchema,
+  500: ErrorResponseSchema,
 } as const;
 
 const commonErrorResponses = {
@@ -143,599 +171,658 @@ const commonErrorResponses = {
   503: ErrorResponseSchema,
 } as const;
 
-export const apiContract = c.router({
-  fetchConfig: {
-    method: "GET",
-    path: apiPaths.fetchConfig,
-    responses: {
-      200: AppConfigSchema,
+export const apiContract = c.router(
+  {
+    fetchConfig: {
+      method: "GET",
+      path: apiPaths.fetchConfig,
+      responses: {
+        200: AppConfigSchema,
+      },
+    },
+    fetchAvailableBranches: {
+      method: "GET",
+      path: apiPaths.fetchAvailableBranches,
+      query: AvailableBranchesQuerySchema,
+      responses: {
+        200: BranchListResponseSchema,
+        400: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    fetchBaseBranches: {
+      method: "GET",
+      path: apiPaths.fetchBaseBranches,
+      responses: {
+        200: BranchListResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    fetchProject: {
+      method: "GET",
+      path: apiPaths.fetchProject,
+      responses: {
+        200: ProjectSnapshotSchema,
+        500: ErrorResponseSchema,
+        502: ErrorResponseSchema,
+      },
+    },
+    fetchAgents: {
+      method: "GET",
+      path: apiPaths.fetchAgents,
+      responses: {
+        200: AgentListResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    createAgent: {
+      method: "POST",
+      path: apiPaths.createAgent,
+      body: UpsertCustomAgentRequestSchema,
+      responses: {
+        200: AgentResponseSchema,
+        400: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    updateAgent: {
+      method: "PUT",
+      path: apiPaths.updateAgent,
+      pathParams: AgentIdParamsSchema,
+      body: UpsertCustomAgentRequestSchema,
+      responses: {
+        200: AgentResponseSchema,
+        400: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    deleteAgent: {
+      method: "DELETE",
+      path: apiPaths.deleteAgent,
+      pathParams: AgentIdParamsSchema,
+      body: c.noBody(),
+      responses: {
+        200: OkResponseSchema,
+        400: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    validateAgent: {
+      method: "POST",
+      path: apiPaths.validateAgent,
+      body: UpsertCustomAgentRequestSchema,
+      responses: {
+        200: ValidateCustomAgentResponseSchema,
+        400: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    attachAgentsWorktreeConversation: {
+      method: "POST",
+      path: apiPaths.attachAgentsWorktreeConversation,
+      pathParams: WorktreeNameParamsSchema,
+      body: c.noBody(),
+      responses: {
+        200: AgentsUiWorktreeConversationResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    fetchAgentsWorktreeConversationHistory: {
+      method: "GET",
+      path: apiPaths.fetchAgentsWorktreeConversationHistory,
+      pathParams: WorktreeNameParamsSchema,
+      responses: {
+        200: AgentsUiWorktreeConversationResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    sendAgentsWorktreeConversationMessage: {
+      method: "POST",
+      path: apiPaths.sendAgentsWorktreeConversationMessage,
+      pathParams: WorktreeNameParamsSchema,
+      body: AgentsSendMessageRequestSchema,
+      responses: {
+        200: AgentsUiSendMessageResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    interruptAgentsWorktreeConversation: {
+      method: "POST",
+      path: apiPaths.interruptAgentsWorktreeConversation,
+      pathParams: WorktreeNameParamsSchema,
+      body: c.noBody(),
+      responses: {
+        200: AgentsUiInterruptResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    fetchWorktrees: {
+      method: "GET",
+      path: apiPaths.fetchWorktrees,
+      responses: {
+        200: WorktreeListResponseSchema,
+        500: ErrorResponseSchema,
+        502: ErrorResponseSchema,
+      },
+    },
+    createWorktree: {
+      method: "POST",
+      path: apiPaths.createWorktree,
+      body: CreateWorktreeRequestSchema,
+      responses: {
+        201: CreateWorktreeResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    removeWorktree: {
+      method: "DELETE",
+      path: apiPaths.removeWorktree,
+      pathParams: WorktreeNameParamsSchema,
+      responses: {
+        200: OkResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    openWorktree: {
+      method: "POST",
+      path: apiPaths.openWorktree,
+      pathParams: WorktreeNameParamsSchema,
+      body: OpenWorktreeRequestSchema,
+      responses: {
+        200: OkResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    launchWorktree: {
+      method: "POST",
+      path: apiPaths.launchWorktree,
+      pathParams: WorktreeNameParamsSchema,
+      body: LaunchWorktreeRequestSchema,
+      responses: {
+        200: OkResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    closeWorktree: {
+      method: "POST",
+      path: apiPaths.closeWorktree,
+      pathParams: WorktreeNameParamsSchema,
+      body: c.noBody(),
+      responses: {
+        200: OkResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    refreshWorktreeAgentTerminal: {
+      method: "POST",
+      path: apiPaths.refreshWorktreeAgentTerminal,
+      pathParams: WorktreeNameParamsSchema,
+      body: c.noBody(),
+      responses: {
+        200: OkResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    setWorktreeArchived: {
+      method: "PUT",
+      path: apiPaths.setWorktreeArchived,
+      pathParams: WorktreeNameParamsSchema,
+      body: SetWorktreeArchivedRequestSchema,
+      responses: {
+        200: SetWorktreeArchivedResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    syncWorktreePrs: {
+      method: "POST",
+      path: apiPaths.syncWorktreePrs,
+      pathParams: WorktreeNameParamsSchema,
+      body: c.noBody(),
+      responses: {
+        200: ProjectWorktreeSnapshotSchema,
+        ...commonErrorResponses,
+      },
+    },
+    setWorktreeLabel: {
+      method: "PUT",
+      path: apiPaths.setWorktreeLabel,
+      pathParams: WorktreeNameParamsSchema,
+      body: SetWorktreeLabelRequestSchema,
+      responses: {
+        200: SetWorktreeLabelResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    sendWorktreePrompt: {
+      method: "POST",
+      path: apiPaths.sendWorktreePrompt,
+      pathParams: WorktreeNameParamsSchema,
+      body: SendWorktreePromptRequestSchema,
+      responses: {
+        200: OkResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    createWorktreeTab: {
+      method: "POST",
+      path: apiPaths.createWorktreeTab,
+      pathParams: WorktreeNameParamsSchema,
+      body: c.noBody(),
+      responses: {
+        201: CreateTabResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    createWorktreeShellTab: {
+      method: "POST",
+      path: apiPaths.createWorktreeShellTab,
+      pathParams: WorktreeNameParamsSchema,
+      body: c.noBody(),
+      responses: {
+        201: CreateTabResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    createWorktreeAgentTab: {
+      method: "POST",
+      path: apiPaths.createWorktreeAgentTab,
+      pathParams: WorktreeNameParamsSchema,
+      body: CreateAgentTabRequestSchema,
+      responses: {
+        201: CreateTabResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    selectWorktreeTab: {
+      method: "POST",
+      path: apiPaths.selectWorktreeTab,
+      pathParams: WorktreeTabParamsSchema,
+      body: c.noBody(),
+      responses: {
+        200: OkResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    deleteWorktreeTab: {
+      method: "DELETE",
+      path: apiPaths.deleteWorktreeTab,
+      pathParams: WorktreeTabParamsSchema,
+      responses: {
+        200: OkResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    mergeWorktree: {
+      method: "POST",
+      path: apiPaths.mergeWorktree,
+      pathParams: WorktreeNameParamsSchema,
+      body: c.noBody(),
+      responses: {
+        200: OkResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    fetchTracks: {
+      method: "GET",
+      path: apiPaths.fetchTracks,
+      pathParams: WorktreeNameParamsSchema,
+      responses: {
+        200: TracksSchema.nullable(),
+        ...commonErrorResponses,
+      },
+    },
+    fetchTrackFile: {
+      method: "GET",
+      path: apiPaths.fetchTrackFile,
+      pathParams: WorktreeNameParamsSchema,
+      query: TrackFileQuerySchema,
+      responses: {
+        200: TrackFileResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    fetchWorktreeDiff: {
+      method: "GET",
+      path: apiPaths.fetchWorktreeDiff,
+      pathParams: WorktreeNameParamsSchema,
+      responses: {
+        200: WorktreeDiffResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    fetchAutoNameConfig: {
+      method: "GET",
+      path: apiPaths.fetchAutoNameConfig,
+      responses: {
+        200: AutoNameConfigResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    setAutoRemoveOnMerge: {
+      method: "PUT",
+      path: apiPaths.setAutoRemoveOnMerge,
+      body: ToggleEnabledRequestSchema,
+      responses: {
+        200: EnabledResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    pullMain: {
+      method: "POST",
+      path: apiPaths.pullMain,
+      body: PullMainRequestSchema,
+      responses: {
+        200: PullMainResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    fetchCiLogs: {
+      method: "GET",
+      path: apiPaths.fetchCiLogs,
+      pathParams: RunIdParamsSchema,
+      responses: {
+        200: CiLogsResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    dismissNotification: {
+      method: "POST",
+      path: apiPaths.dismissNotification,
+      pathParams: NotificationIdParamsSchema,
+      body: c.noBody(),
+      responses: {
+        200: OkResponseSchema,
+        400: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+      },
+    },
+    fetchInstances: {
+      method: "GET",
+      path: apiPaths.fetchInstances,
+      responses: {
+        200: InstancesResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    fetchInboxDrafts: {
+      method: "GET",
+      path: apiPaths.fetchInboxDrafts,
+      query: z.object({
+        search: z.string().optional(),
+        includeDropped: z.boolean().optional(),
+      }),
+      responses: { 200: InboxDraftListSchema, 500: ErrorResponseSchema },
+    },
+    createInboxDraft: {
+      method: "POST",
+      path: apiPaths.createInboxDraft,
+      body: CreateInboxDraftRequestSchema,
+      responses: {
+        200: InboxDraftSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    fetchInboxDraft: {
+      method: "GET",
+      path: apiPaths.fetchInboxDraft,
+      responses: {
+        200: InboxDraftSchema,
+        400: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    saveInboxDraftBody: {
+      method: "PUT",
+      path: apiPaths.saveInboxDraftBody,
+      body: SaveInboxDraftBodyRequestSchema,
+      responses: {
+        200: InboxDraftSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    patchInboxDraft: {
+      method: "PATCH",
+      path: apiPaths.patchInboxDraft,
+      body: PatchInboxDraftRequestSchema,
+      responses: {
+        200: InboxDraftSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    deleteInboxDraft: {
+      method: "DELETE",
+      path: apiPaths.deleteInboxDraft,
+      query: z.object({ confirmed: z.boolean().optional() }),
+      body: z.object({}).optional(),
+      responses: {
+        200: OkResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    convertInboxDraft: {
+      method: "POST",
+      path: apiPaths.convertInboxDraft,
+      body: ConvertDraftRequestSchema,
+      responses: {
+        200: ConvertDraftResponseSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    fetchConversionJob: {
+      method: "GET",
+      path: apiPaths.fetchConversionJob,
+      responses: {
+        200: ConversionJobSchema,
+        404: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    setInboxPriority: {
+      method: "PATCH",
+      path: apiPaths.setInboxPriority,
+      body: SetInboxPriorityRequestSchema,
+      responses: {
+        200: InboxDraftSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    fetchInboxComments: {
+      method: "GET",
+      path: apiPaths.fetchInboxComments,
+      responses: {
+        200: InboxCommentGroupsSchema,
+        400: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    postInboxComment: {
+      method: "POST",
+      path: apiPaths.postInboxComment,
+      body: PostInboxCommentRequestSchema,
+      responses: {
+        200: PostInboxCommentResponseSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        413: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        429: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    fetchInboxRequests: {
+      method: "GET",
+      path: apiPaths.fetchInboxRequests,
+      responses: {
+        200: InboxRequestListSchema,
+        400: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    confirmInboxRequest: {
+      method: "POST",
+      path: apiPaths.confirmInboxRequest,
+      body: ConfirmInboxRequestSchema,
+      responses: {
+        200: InboxRequestResponseSchema,
+        ...inboxDecisionErrors,
+      },
+    },
+    rejectInboxRequest: {
+      method: "POST",
+      path: apiPaths.rejectInboxRequest,
+      body: RejectInboxRequestSchema,
+      responses: {
+        200: InboxRequestResponseSchema,
+        ...inboxDecisionErrors,
+      },
+    },
+    redeliverInboxRequest: {
+      method: "POST",
+      path: apiPaths.redeliverInboxRequest,
+      body: z.object({}).optional(),
+      responses: {
+        200: InboxRequestResponseSchema,
+        ...inboxDecisionErrors,
+      },
+    },
+    retryInboxTriage: {
+      method: "POST",
+      path: apiPaths.retryInboxTriage,
+      body: z.object({}).optional(),
+      responses: {
+        200: RetryInboxTriageResponseSchema,
+        ...inboxDecisionErrors,
+        503: ErrorResponseSchema,
+      },
+    },
+    fetchInboxAgentJob: {
+      method: "GET",
+      path: apiPaths.fetchInboxAgentJob,
+      responses: {
+        200: InboxAgentJobSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    redactInboxComment: {
+      method: "POST",
+      path: apiPaths.redactInboxComment,
+      body: z.object({}).optional(),
+      responses: {
+        200: RedactInboxCommentResponseSchema,
+        ...inboxDecisionErrors,
+      },
+    },
+    fetchRegistry: {
+      method: "GET",
+      path: apiPaths.fetchRegistry,
+      responses: {
+        200: PortfolioSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    fetchRegistryFile: {
+      method: "GET",
+      path: apiPaths.fetchRegistryFile,
+      query: RegistryFileQuerySchema,
+      responses: {
+        200: TrackFileResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    /** Hub-level: spans every loaded project, so it carries no project prefix. */
+    fetchActiveWorktrees: {
+      method: "GET",
+      path: apiPaths.fetchActiveWorktrees,
+      responses: {
+        200: ActiveWorktreesResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    fetchProjects: {
+      method: "GET",
+      path: apiPaths.fetchProjects,
+      responses: {
+        200: ProjectsResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    addProject: {
+      method: "POST",
+      path: apiPaths.addProject,
+      body: AddProjectRequestSchema,
+      responses: {
+        200: AddProjectResponseSchema,
+        400: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    projectInits: {
+      method: "GET",
+      path: apiPaths.projectInits,
+      responses: {
+        200: ProjectInitsResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    migrateProjects: {
+      method: "POST",
+      path: apiPaths.migrateProjects,
+      body: MigrateProjectsRequestSchema,
+      responses: {
+        200: MigrateProjectsResponseSchema,
+        400: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    removeProject: {
+      method: "DELETE",
+      path: apiPaths.removeProject,
+      pathParams: ProjectPrefixParamsSchema,
+      body: c.noBody(),
+      responses: {
+        200: OkResponseSchema,
+        404: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
     },
   },
-  fetchAvailableBranches: {
-    method: "GET",
-    path: apiPaths.fetchAvailableBranches,
-    query: AvailableBranchesQuerySchema,
-    responses: {
-      200: BranchListResponseSchema,
-      400: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
+  {
+    strictStatusCodes: true,
   },
-  fetchBaseBranches: {
-    method: "GET",
-    path: apiPaths.fetchBaseBranches,
-    responses: {
-      200: BranchListResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  fetchProject: {
-    method: "GET",
-    path: apiPaths.fetchProject,
-    responses: {
-      200: ProjectSnapshotSchema,
-      500: ErrorResponseSchema,
-      502: ErrorResponseSchema,
-    },
-  },
-  fetchAgents: {
-    method: "GET",
-    path: apiPaths.fetchAgents,
-    responses: {
-      200: AgentListResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  createAgent: {
-    method: "POST",
-    path: apiPaths.createAgent,
-    body: UpsertCustomAgentRequestSchema,
-    responses: {
-      200: AgentResponseSchema,
-      400: ErrorResponseSchema,
-      409: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  updateAgent: {
-    method: "PUT",
-    path: apiPaths.updateAgent,
-    pathParams: AgentIdParamsSchema,
-    body: UpsertCustomAgentRequestSchema,
-    responses: {
-      200: AgentResponseSchema,
-      400: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      409: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  deleteAgent: {
-    method: "DELETE",
-    path: apiPaths.deleteAgent,
-    pathParams: AgentIdParamsSchema,
-    body: c.noBody(),
-    responses: {
-      200: OkResponseSchema,
-      400: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  validateAgent: {
-    method: "POST",
-    path: apiPaths.validateAgent,
-    body: UpsertCustomAgentRequestSchema,
-    responses: {
-      200: ValidateCustomAgentResponseSchema,
-      400: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  attachAgentsWorktreeConversation: {
-    method: "POST",
-    path: apiPaths.attachAgentsWorktreeConversation,
-    pathParams: WorktreeNameParamsSchema,
-    body: c.noBody(),
-    responses: {
-      200: AgentsUiWorktreeConversationResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  fetchAgentsWorktreeConversationHistory: {
-    method: "GET",
-    path: apiPaths.fetchAgentsWorktreeConversationHistory,
-    pathParams: WorktreeNameParamsSchema,
-    responses: {
-      200: AgentsUiWorktreeConversationResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  sendAgentsWorktreeConversationMessage: {
-    method: "POST",
-    path: apiPaths.sendAgentsWorktreeConversationMessage,
-    pathParams: WorktreeNameParamsSchema,
-    body: AgentsSendMessageRequestSchema,
-    responses: {
-      200: AgentsUiSendMessageResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  interruptAgentsWorktreeConversation: {
-    method: "POST",
-    path: apiPaths.interruptAgentsWorktreeConversation,
-    pathParams: WorktreeNameParamsSchema,
-    body: c.noBody(),
-    responses: {
-      200: AgentsUiInterruptResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  fetchWorktrees: {
-    method: "GET",
-    path: apiPaths.fetchWorktrees,
-    responses: {
-      200: WorktreeListResponseSchema,
-      500: ErrorResponseSchema,
-      502: ErrorResponseSchema,
-    },
-  },
-  createWorktree: {
-    method: "POST",
-    path: apiPaths.createWorktree,
-    body: CreateWorktreeRequestSchema,
-    responses: {
-      201: CreateWorktreeResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  removeWorktree: {
-    method: "DELETE",
-    path: apiPaths.removeWorktree,
-    pathParams: WorktreeNameParamsSchema,
-    responses: {
-      200: OkResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  openWorktree: {
-    method: "POST",
-    path: apiPaths.openWorktree,
-    pathParams: WorktreeNameParamsSchema,
-    body: OpenWorktreeRequestSchema,
-    responses: {
-      200: OkResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  launchWorktree: {
-    method: "POST",
-    path: apiPaths.launchWorktree,
-    pathParams: WorktreeNameParamsSchema,
-    body: LaunchWorktreeRequestSchema,
-    responses: {
-      200: OkResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  closeWorktree: {
-    method: "POST",
-    path: apiPaths.closeWorktree,
-    pathParams: WorktreeNameParamsSchema,
-    body: c.noBody(),
-    responses: {
-      200: OkResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  refreshWorktreeAgentTerminal: {
-    method: "POST",
-    path: apiPaths.refreshWorktreeAgentTerminal,
-    pathParams: WorktreeNameParamsSchema,
-    body: c.noBody(),
-    responses: {
-      200: OkResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  setWorktreeArchived: {
-    method: "PUT",
-    path: apiPaths.setWorktreeArchived,
-    pathParams: WorktreeNameParamsSchema,
-    body: SetWorktreeArchivedRequestSchema,
-    responses: {
-      200: SetWorktreeArchivedResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  syncWorktreePrs: {
-    method: "POST",
-    path: apiPaths.syncWorktreePrs,
-    pathParams: WorktreeNameParamsSchema,
-    body: c.noBody(),
-    responses: {
-      200: ProjectWorktreeSnapshotSchema,
-      ...commonErrorResponses,
-    },
-  },
-  setWorktreeLabel: {
-    method: "PUT",
-    path: apiPaths.setWorktreeLabel,
-    pathParams: WorktreeNameParamsSchema,
-    body: SetWorktreeLabelRequestSchema,
-    responses: {
-      200: SetWorktreeLabelResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  sendWorktreePrompt: {
-    method: "POST",
-    path: apiPaths.sendWorktreePrompt,
-    pathParams: WorktreeNameParamsSchema,
-    body: SendWorktreePromptRequestSchema,
-    responses: {
-      200: OkResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  createWorktreeTab: {
-    method: "POST",
-    path: apiPaths.createWorktreeTab,
-    pathParams: WorktreeNameParamsSchema,
-    body: c.noBody(),
-    responses: {
-      201: CreateTabResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  createWorktreeShellTab: {
-    method: "POST",
-    path: apiPaths.createWorktreeShellTab,
-    pathParams: WorktreeNameParamsSchema,
-    body: c.noBody(),
-    responses: {
-      201: CreateTabResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  createWorktreeAgentTab: {
-    method: "POST",
-    path: apiPaths.createWorktreeAgentTab,
-    pathParams: WorktreeNameParamsSchema,
-    body: CreateAgentTabRequestSchema,
-    responses: {
-      201: CreateTabResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  selectWorktreeTab: {
-    method: "POST",
-    path: apiPaths.selectWorktreeTab,
-    pathParams: WorktreeTabParamsSchema,
-    body: c.noBody(),
-    responses: {
-      200: OkResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  deleteWorktreeTab: {
-    method: "DELETE",
-    path: apiPaths.deleteWorktreeTab,
-    pathParams: WorktreeTabParamsSchema,
-    responses: {
-      200: OkResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  mergeWorktree: {
-    method: "POST",
-    path: apiPaths.mergeWorktree,
-    pathParams: WorktreeNameParamsSchema,
-    body: c.noBody(),
-    responses: {
-      200: OkResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  fetchTracks: {
-    method: "GET",
-    path: apiPaths.fetchTracks,
-    pathParams: WorktreeNameParamsSchema,
-    responses: {
-      200: TracksSchema.nullable(),
-      ...commonErrorResponses,
-    },
-  },
-  fetchTrackFile: {
-    method: "GET",
-    path: apiPaths.fetchTrackFile,
-    pathParams: WorktreeNameParamsSchema,
-    query: TrackFileQuerySchema,
-    responses: {
-      200: TrackFileResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  fetchWorktreeDiff: {
-    method: "GET",
-    path: apiPaths.fetchWorktreeDiff,
-    pathParams: WorktreeNameParamsSchema,
-    responses: {
-      200: WorktreeDiffResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  fetchAutoNameConfig: {
-    method: "GET",
-    path: apiPaths.fetchAutoNameConfig,
-    responses: {
-      200: AutoNameConfigResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  setAutoRemoveOnMerge: {
-    method: "PUT",
-    path: apiPaths.setAutoRemoveOnMerge,
-    body: ToggleEnabledRequestSchema,
-    responses: {
-      200: EnabledResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  pullMain: {
-    method: "POST",
-    path: apiPaths.pullMain,
-    body: PullMainRequestSchema,
-    responses: {
-      200: PullMainResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  fetchCiLogs: {
-    method: "GET",
-    path: apiPaths.fetchCiLogs,
-    pathParams: RunIdParamsSchema,
-    responses: {
-      200: CiLogsResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  dismissNotification: {
-    method: "POST",
-    path: apiPaths.dismissNotification,
-    pathParams: NotificationIdParamsSchema,
-    body: c.noBody(),
-    responses: {
-      200: OkResponseSchema,
-      400: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-    },
-  },
-  fetchInstances: {
-    method: "GET",
-    path: apiPaths.fetchInstances,
-    responses: {
-      200: InstancesResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  fetchInboxDrafts: {
-    method: "GET",
-    path: apiPaths.fetchInboxDrafts,
-    query: z.object({
-      search: z.string().optional(),
-      includeDropped: z.boolean().optional(),
-    }),
-    responses: { 200: InboxDraftListSchema, 500: ErrorResponseSchema },
-  },
-  createInboxDraft: {
-    method: "POST",
-    path: apiPaths.createInboxDraft,
-    body: CreateInboxDraftRequestSchema,
-    responses: {
-      200: InboxDraftSchema,
-      401: ErrorResponseSchema,
-      403: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  fetchInboxDraft: {
-    method: "GET",
-    path: apiPaths.fetchInboxDraft,
-    responses: {
-      200: InboxDraftSchema,
-      400: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  saveInboxDraftBody: {
-    method: "PUT",
-    path: apiPaths.saveInboxDraftBody,
-    body: SaveInboxDraftBodyRequestSchema,
-    responses: {
-      200: InboxDraftSchema,
-      401: ErrorResponseSchema,
-      403: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      409: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  patchInboxDraft: {
-    method: "PATCH",
-    path: apiPaths.patchInboxDraft,
-    body: PatchInboxDraftRequestSchema,
-    responses: {
-      200: InboxDraftSchema,
-      400: ErrorResponseSchema,
-      401: ErrorResponseSchema,
-      403: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  deleteInboxDraft: {
-    method: "DELETE",
-    path: apiPaths.deleteInboxDraft,
-    query: z.object({ confirmed: z.boolean().optional() }),
-    body: z.object({}).optional(),
-    responses: {
-      200: OkResponseSchema,
-      401: ErrorResponseSchema,
-      403: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      409: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  convertInboxDraft: {
-    method: "POST",
-    path: apiPaths.convertInboxDraft,
-    body: ConvertDraftRequestSchema,
-    responses: {
-      200: ConvertDraftResponseSchema,
-      400: ErrorResponseSchema,
-      401: ErrorResponseSchema,
-      403: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  fetchConversionJob: {
-    method: "GET",
-    path: apiPaths.fetchConversionJob,
-    responses: {
-      200: ConversionJobSchema,
-      404: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  setInboxPriority: {
-    method: "PATCH",
-    path: apiPaths.setInboxPriority,
-    body: SetInboxPriorityRequestSchema,
-    responses: {
-      200: InboxDraftSchema,
-      400: ErrorResponseSchema,
-      401: ErrorResponseSchema,
-      403: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      422: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  fetchInboxComments: {
-    method: "GET",
-    path: apiPaths.fetchInboxComments,
-    responses: {
-      200: InboxCommentGroupsSchema,
-      400: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      422: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  postInboxComment: {
-    method: "POST",
-    path: apiPaths.postInboxComment,
-    body: PostInboxCommentRequestSchema,
-    responses: {
-      200: PostInboxCommentResponseSchema,
-      400: ErrorResponseSchema,
-      401: ErrorResponseSchema,
-      403: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      413: ErrorResponseSchema,
-      422: ErrorResponseSchema,
-      429: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  fetchInboxRequests: {
-    method: "GET",
-    path: apiPaths.fetchInboxRequests,
-    responses: {
-      200: InboxRequestListSchema,
-      400: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      422: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  fetchRegistry: {
-    method: "GET",
-    path: apiPaths.fetchRegistry,
-    responses: {
-      200: PortfolioSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  fetchRegistryFile: {
-    method: "GET",
-    path: apiPaths.fetchRegistryFile,
-    query: RegistryFileQuerySchema,
-    responses: {
-      200: TrackFileResponseSchema,
-      ...commonErrorResponses,
-    },
-  },
-  /** Hub-level: spans every loaded project, so it carries no project prefix. */
-  fetchActiveWorktrees: {
-    method: "GET",
-    path: apiPaths.fetchActiveWorktrees,
-    responses: {
-      200: ActiveWorktreesResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  fetchProjects: {
-    method: "GET",
-    path: apiPaths.fetchProjects,
-    responses: {
-      200: ProjectsResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  addProject: {
-    method: "POST",
-    path: apiPaths.addProject,
-    body: AddProjectRequestSchema,
-    responses: {
-      200: AddProjectResponseSchema,
-      400: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  projectInits: {
-    method: "GET",
-    path: apiPaths.projectInits,
-    responses: {
-      200: ProjectInitsResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  migrateProjects: {
-    method: "POST",
-    path: apiPaths.migrateProjects,
-    body: MigrateProjectsRequestSchema,
-    responses: {
-      200: MigrateProjectsResponseSchema,
-      400: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-  removeProject: {
-    method: "DELETE",
-    path: apiPaths.removeProject,
-    pathParams: ProjectPrefixParamsSchema,
-    body: c.noBody(),
-    responses: {
-      200: OkResponseSchema,
-      404: ErrorResponseSchema,
-      500: ErrorResponseSchema,
-    },
-  },
-}, {
-  strictStatusCodes: true,
-});
+);
