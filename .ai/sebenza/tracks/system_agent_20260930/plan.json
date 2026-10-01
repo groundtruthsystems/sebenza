@@ -123,7 +123,7 @@
     {
       "id": "phase-3",
       "name": "System agent runtime",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -194,21 +194,22 @@
           "id": "phase-3-task-8",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "doing"
+          "status": "done"
         }
-      ]
+      ],
+      "checkpoint_sha": "5c887be"
     },
     {
       "id": "phase-4",
       "name": "Triage, confirmation and delivery",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-4-task-1",
           "name": "Write tests for triage and resolution flow",
           "description": "Write failing tests for triage application, failure and retry, confirm, author, reject, redeliver, sanitising, scanning, and redaction.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-4-task-2",
