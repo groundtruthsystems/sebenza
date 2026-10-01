@@ -10,8 +10,8 @@ use crate::adapters::inbox_store::{
 };
 use crate::adapters::projects_registry::ProjectsRegistry;
 use crate::domain::inbox_events::{
-    AuthorKind, InboxEvent, InboxEventKind, RequestView, Thread, WorktreeKey, apply_redactions,
-    fold_requests,
+    AuthorKind, InboxEvent, InboxEventKind, RequestStatus, RequestView, Thread, WorktreeKey,
+    apply_redactions, fold_requests,
 };
 use crate::domain::model::{
     DraftStatus, InboxDraft, InboxDraftView, Priority, PrioritySource, ProjectRef, inbox_order,
@@ -160,6 +160,9 @@ pub struct AuditRecord {
     pub from: Option<Priority>,
     pub to: Option<Priority>,
     pub source: Option<PrioritySource>,
+    /// Why ingress was refused, as a fixed literal (`foreign_worktree`,
+    /// `rate_limited`, `too_many_open`, `too_large`).
+    pub refusal: Option<&'static str>,
 }
 
 impl AuditRecord {
@@ -177,7 +180,24 @@ impl AuditRecord {
             from: None,
             to: None,
             source: None,
+            refusal: None,
         }
+    }
+
+    fn with_caller(mut self, caller: &Option<String>) -> Self {
+        self.caller = caller.clone();
+        self
+    }
+
+    fn with_worktree(mut self, key: &WorktreeKey) -> Self {
+        self.project = Some(key.project.clone());
+        self.branch = Some(key.branch.clone());
+        self
+    }
+
+    fn with_event(mut self, event: &InboxEvent) -> Self {
+        self.event_id = Some(event.event_id.clone());
+        self
     }
 }
 
@@ -208,6 +228,7 @@ impl AuditSink for TracingAuditSink {
             from = %pri(r.from),
             to = %pri(r.to),
             source = %r.source.map(|s| format!("{s:?}")).unwrap_or_default(),
+            refusal = r.refusal.unwrap_or(""),
             "inbox audit"
         );
     }
@@ -611,10 +632,32 @@ impl InboxService {
         priority: Option<Priority>,
         caller: Option<String>,
     ) -> Result<InboxDraft, InboxServiceError> {
-        self.parsed(id)?;
-        self.store
-            .set_priority_by(id, PriorityWrite::Operator(priority), caller)?;
-        self.parsed(id)
+        let before = self.parsed(id)?.frontmatter;
+        let event =
+            self.store
+                .set_priority_by(id, PriorityWrite::Operator(priority), caller.clone())?;
+        let after = self.parsed(id)?;
+        let fm = &after.frontmatter;
+        let action = match (&event, fm.priority_source) {
+            (Some(_), _) => Some("inbox.priority.changed"),
+            // Same value, new owner: no `priority_changed` event, but the
+            // operator still made a decision worth recording.
+            _ if before.priority_source == fm.priority_source => None,
+            (None, PrioritySource::Operator) => Some("inbox.priority.override_set"),
+            (None, PrioritySource::Agent) => Some("inbox.priority.override_cleared"),
+        };
+        if let Some(action) = action {
+            let mut record =
+                AuditRecord::new(action, id, AuthorKind::Operator).with_caller(&caller);
+            record.from = Some(before.priority);
+            record.to = Some(fm.priority);
+            record.source = Some(fm.priority_source);
+            if let Some(e) = &event {
+                record = record.with_event(e);
+            }
+            self.audit.record(&record);
+        }
+        Ok(after)
     }
 
     /// The system agent's priority write. A no-op while an operator override
@@ -624,9 +667,21 @@ impl InboxService {
         id: &str,
         priority: Priority,
     ) -> Result<Option<InboxEvent>, InboxServiceError> {
-        Ok(self
+        let event = self
             .store
-            .set_priority(id, PriorityWrite::Agent(priority))?)
+            .set_priority(id, PriorityWrite::Agent(priority))?;
+        if let Some(e) = &event
+            && let InboxEventKind::PriorityChanged { from, to, source } = &e.kind
+        {
+            let mut record =
+                AuditRecord::new("inbox.priority.changed", id, AuthorKind::SystemAgent)
+                    .with_event(e);
+            record.from = Some(*from);
+            record.to = Some(*to);
+            record.source = Some(*source);
+            self.audit.record(&record);
+        }
+        Ok(event)
     }
 
     /// The item's event log with redactions applied.
@@ -690,6 +745,7 @@ impl InboxService {
                 "a comment needs a body".to_string(),
             ));
         }
+        self.cap("body", body.len(), self.limits.max_body_bytes)?;
         let draft = self.parsed(id)?;
         if let Thread::Worktree(key) = &thread
             && !worktree_keys(&draft).contains(key)
@@ -698,6 +754,25 @@ impl InboxService {
                 "{}:{} is not a worktree this item was converted into",
                 key.project, key.branch
             )));
+        }
+        let worktree = match &thread {
+            Thread::Worktree(key) => Some(key),
+            Thread::Overall => None,
+        };
+        if let Some(key) = rate_key(&author, worktree)
+            && !self.comment_rate.allow(&key)
+        {
+            return Err(InboxServiceError::RateLimited);
+        }
+        let mut record =
+            AuditRecord::new("inbox.comment.added", id, author.kind).with_caller(&author.caller);
+        record.thread = Some(if worktree.is_some() {
+            "worktree"
+        } else {
+            "overall"
+        });
+        if let Some(key) = worktree {
+            record = record.with_worktree(key);
         }
         let event = self.store.append_event(
             id,
@@ -709,6 +784,7 @@ impl InboxService {
                 warnings: secret_warnings(body),
             },
         )?;
+        self.audit.record(&record.with_event(&event));
         Ok(event)
     }
 
@@ -727,10 +803,30 @@ impl InboxService {
                 "a request needs a title and a body".to_string(),
             ));
         }
+        self.cap("title", title.chars().count(), self.limits.max_title_chars)?;
+        self.cap("body", body.len(), self.limits.max_body_bytes)?;
         let draft = self.parsed(id)?;
         if !worktree_keys(&draft).contains(&worktree) {
             return Err(InboxServiceError::ForeignWorktree(id.to_string()));
         }
+        // Depth bound: each open request will cost a triage turn, so an item
+        // stops accepting new ones until some are dealt with (TA-R1).
+        let open = fold_requests(&self.store.read_events(id)?)
+            .iter()
+            .filter(|r| r.status != RequestStatus::Resolved)
+            .count();
+        if open >= self.limits.max_open_requests {
+            return Err(InboxServiceError::TooManyOpenRequests(id.to_string()));
+        }
+        if let Some(key) = rate_key(&author, Some(&worktree))
+            && !self.request_rate.allow(&key)
+        {
+            return Err(InboxServiceError::RateLimited);
+        }
+        let mut record = AuditRecord::new("inbox.request.opened", id, author.kind)
+            .with_caller(&author.caller)
+            .with_worktree(&worktree);
+        record.thread = Some("worktree");
         let request_id = random_ulid();
         let event = self.store.append_event(
             id,
@@ -744,6 +840,8 @@ impl InboxService {
                 warnings: secret_warnings(&format!("{title}\n{body}")),
             },
         )?;
+        record.request_id = Some(request_id.clone());
+        self.audit.record(&record.with_event(&event));
         // Phase 3 hangs triage here. With no observer the request simply
         // waits, open, for the operator.
         let observer = self
@@ -765,6 +863,31 @@ impl InboxService {
     /// Apply a worktree agent's request or comment, after checking the
     /// claimed worktree is one this item was converted into (T-06, T-37).
     pub fn ingest(&self, ingress: &WorktreeIngress) -> Result<InboxEvent, InboxServiceError> {
+        let result = self.ingest_unaudited(ingress);
+        if let Err(err) = &result {
+            let refusal = match err {
+                InboxServiceError::ForeignWorktree(_) => Some("foreign_worktree"),
+                InboxServiceError::RateLimited => Some("rate_limited"),
+                InboxServiceError::TooManyOpenRequests(_) => Some("too_many_open"),
+                InboxServiceError::TooLarge { .. } => Some("too_large"),
+                _ => None,
+            };
+            if let Some(refusal) = refusal {
+                let author = EventAuthor::worktree_agent();
+                let mut record =
+                    AuditRecord::new("inbox.ingress.refused", &ingress.draft_id, author.kind)
+                        .with_caller(&author.caller);
+                // The claimed branch, not the path: the record is metadata
+                // about the refusal, not a copy of what was sent.
+                record.branch = Some(ingress.branch.clone());
+                record.refusal = Some(refusal);
+                self.audit.record(&record);
+            }
+        }
+        result
+    }
+
+    fn ingest_unaudited(&self, ingress: &WorktreeIngress) -> Result<InboxEvent, InboxServiceError> {
         let draft = self.parsed(&ingress.draft_id)?;
         let claimed = ingress.worktree_path.trim_end_matches('/');
         // Both halves must match one created conversion: the path from the
@@ -800,6 +923,13 @@ impl InboxService {
         }
     }
 
+    fn cap(&self, field: &'static str, len: usize, limit: usize) -> Result<(), InboxServiceError> {
+        if len > limit {
+            return Err(InboxServiceError::TooLarge { field, limit });
+        }
+        Ok(())
+    }
+
     /// The draft, or an error if it is missing or does not parse.
     fn parsed(&self, id: &str) -> Result<InboxDraft, InboxServiceError> {
         match self.store.get(id)? {
@@ -811,6 +941,23 @@ impl InboxService {
                 }))
             }
         }
+    }
+}
+
+/// Who a rate limit counts against. A worktree agent is limited per worktree
+/// (the only identity it has); an operator-route caller per declared marker.
+/// The system agent's writes are server-driven and not limited here.
+fn rate_key(author: &EventAuthor, worktree: Option<&WorktreeKey>) -> Option<String> {
+    match author.kind {
+        AuthorKind::SystemAgent => None,
+        AuthorKind::WorktreeAgent => Some(match worktree {
+            Some(k) => format!("worktree:{}:{}", k.project, k.branch),
+            None => "worktree:-".to_string(),
+        }),
+        AuthorKind::Operator => Some(format!(
+            "operator:{}",
+            author.caller.as_deref().unwrap_or("-")
+        )),
     }
 }
 

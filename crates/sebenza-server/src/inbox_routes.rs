@@ -11,8 +11,8 @@ use crate::domain::model::{
     DraftStatus, FileRevision, InboxDraft, InboxDraftView, Priority, PrioritySource,
 };
 use crate::domain::policies::{
-    InboxGuard, InboxGuardDenial, guard_inbox_request, is_safe_project_path, origin_is_acceptable,
-    sanitize_caller_marker,
+    InboxGuard, InboxGuardDenial, allowed_hosts_from_env, guard_inbox_request, host_is_allowed,
+    is_safe_project_path, origin_is_acceptable, sanitize_caller_marker,
 };
 use crate::inbox_runner::ServerConversionRunner;
 use crate::services::inbox_convert::{
@@ -206,6 +206,7 @@ fn check(headers: &HeaderMap, method: &str) -> Result<(), ApiError> {
     let origin = header(axum::http::header::ORIGIN);
     let referer = header(axum::http::header::REFERER);
     let host = header(axum::http::header::HOST).unwrap_or_default();
+    check_host(&host)?;
     let self_origin = format!("http://{host}");
 
     let expected =
@@ -227,6 +228,17 @@ fn check(headers: &HeaderMap, method: &str) -> Result<(), ApiError> {
             403,
             "Cross-origin request refused".to_string(),
         )),
+    }
+}
+
+/// Refuse a `Host` that is not this loopback daemon (T-10). The origin check
+/// trusts `Host` to say what "same origin" means, so on its own it waves
+/// through a DNS-rebinding page whose `Origin` and `Host` agree.
+fn check_host(host: &str) -> Result<(), ApiError> {
+    if host_is_allowed(Some(host), &allowed_hosts_from_env()) {
+        Ok(())
+    } else {
+        Err(ApiError::new(403, "Host not allowed".to_string()))
     }
 }
 
@@ -403,6 +415,7 @@ pub async fn inbox_session(headers: HeaderMap) -> Result<Json<serde_json::Value>
         headers.get(name)?.to_str().ok().map(str::to_string)
     };
     let host = header(axum::http::header::HOST).unwrap_or_default();
+    check_host(&host)?;
     let self_origin = format!("http://{host}");
     if !origin_is_acceptable(
         header(axum::http::header::ORIGIN).as_deref(),

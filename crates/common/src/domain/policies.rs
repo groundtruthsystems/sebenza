@@ -327,8 +327,30 @@ pub fn origin_is_acceptable(
 /// `SEBENZA_ALLOWED_HOSTS`) for a deliberately non-loopback bind. The port is
 /// ignored; an absent or empty `Host` is refused.
 pub fn host_is_allowed(host: Option<&str>, extra: &[String]) -> bool {
-    let _ = (host, extra);
-    todo!("host allowlist")
+    let Some(host) = host.map(str::trim).filter(|h| !h.is_empty()) else {
+        return false;
+    };
+    let name = host_name(&host.to_ascii_lowercase());
+    if name == "localhost" || name == "::1" {
+        return true;
+    }
+    if name
+        .parse::<std::net::Ipv4Addr>()
+        .is_ok_and(|ip| ip.is_loopback())
+    {
+        return true;
+    }
+    extra
+        .iter()
+        .any(|h| host_name(&h.to_ascii_lowercase()) == name)
+}
+
+/// The name part of a `Host` value: `[::1]:5111` -> `::1`, `a.b:80` -> `a.b`.
+fn host_name(host: &str) -> String {
+    if let Some(rest) = host.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or("").to_string();
+    }
+    host.split(':').next().unwrap_or("").to_string()
 }
 
 /// Hosts the operator allows beyond loopback, from `SEBENZA_ALLOWED_HOSTS`

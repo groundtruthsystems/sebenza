@@ -2139,6 +2139,11 @@ pub(crate) async fn runtime_event(
         return Err(ApiError::new(401, "Unauthorized".to_string()));
     }
 
+    // Every legitimate event is a few hundred bytes; an inbox request is
+    // capped well below this again (T-09).
+    if body.len() > crate::services::inbox_limits::MAX_INGRESS_BYTES {
+        return Err(ApiError::new(413, "Runtime event too large".to_string()));
+    }
     let raw: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|_| ApiError::new(400, "Invalid JSON".to_string()))?;
     // `sebenza-agentctl request|comment` share this channel (AA-D4).

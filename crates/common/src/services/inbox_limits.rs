@@ -76,7 +76,19 @@ impl RateLimiter {
 
     /// As [`Self::allow`], at an explicit instant.
     pub fn allow_at(&self, key: &str, now: Instant) -> bool {
-        todo!("rate limiter: {key} {now:?}")
+        let mut hits = self.hits.lock().unwrap_or_else(|e| e.into_inner());
+        let recent = hits.entry(key.to_string()).or_default();
+        while recent
+            .front()
+            .is_some_and(|&at| now.saturating_duration_since(at) >= self.limit.window)
+        {
+            recent.pop_front();
+        }
+        if recent.len() >= self.limit.max {
+            return false;
+        }
+        recent.push_back(now);
+        true
     }
 }
 
