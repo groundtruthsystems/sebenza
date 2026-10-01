@@ -14,18 +14,22 @@ pub mod isolation;
 pub mod output;
 pub mod prompt;
 
+#[allow(unused_imports)]
 pub use output::{
     ConvertOutput, ConvertTargetOutput, DraftHelpOutput, JobOutput, OutputError, Recommendation,
     TriageOutput,
 };
 
 use crate::domain::config::SystemAgentConfig;
+use crate::domain::inbox_events::{AgentSession, InboxEvent};
+use crate::domain::model::{InboxDraft, InboxDraftView};
 use crate::services::agent_stream::AgentStreamManager;
-use crate::services::inbox_service::{InboxService, RequestObserver};
+use crate::services::inbox_service::{InboxService, ListQuery, RequestObserver};
+use crate::util::id::random_ulid;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 
 /// What a job does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -193,6 +197,58 @@ pub struct SystemAgentService {
     stream: Arc<AgentStreamManager>,
     options: SystemAgentOptions,
     sink: RwLock<Arc<dyn JobResultSink>>,
+    /// Where jobs run; `None` when built outside a tokio runtime.
+    runtime: Option<tokio::runtime::Handle>,
+    /// Every queue decision is made under this one lock, so a check (is the
+    /// item busy? is there a free slot?) and the claim that follows it can
+    /// never interleave with another enqueue (TA-R2).
+    state: Mutex<QueueState>,
+    /// Bumped whenever a job finishes; `wait` watches it.
+    finished: tokio::sync::watch::Sender<u64>,
+    this: Weak<Self>,
+}
+
+#[derive(Default)]
+struct QueueState {
+    seq: u64,
+    /// Waiting jobs by `(lane, seq)`: lane 0 (interactive) before lane 1
+    /// (triage), FIFO within a lane.
+    queued: BTreeMap<(u8, u64), String>,
+    /// Items with a job running right now.
+    busy: HashSet<String>,
+    running: usize,
+    jobs: HashMap<String, (u64, JobRecord)>,
+    /// Finished job ids, oldest first, for bounded retention.
+    done: VecDeque<String>,
+    /// `(request_id, kind, attempt)` to job id (TD-2).
+    dedupe: HashMap<(String, JobKind, u32), String>,
+}
+
+/// A failed job: why, and whether its session had been re-seeded.
+struct Failure {
+    error: String,
+    reseeded: bool,
+}
+
+impl Failure {
+    fn new(error: impl Into<String>, reseeded: bool) -> Self {
+        Self {
+            error: error.into(),
+            reseeded,
+        }
+    }
+}
+
+/// Everything a job reads from the inbox, loaded off the async runtime.
+struct JobContext {
+    draft: InboxDraft,
+    events: Vec<InboxEvent>,
+    session: Option<AgentSession>,
+    digest: Vec<prompt::DigestEntry>,
+}
+
+fn now() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 impl SystemAgentService {
@@ -202,12 +258,16 @@ impl SystemAgentService {
         stream: Arc<AgentStreamManager>,
         options: SystemAgentOptions,
     ) -> Arc<Self> {
-        Arc::new(Self {
+        Arc::new_cyclic(|this| Self {
             config,
             inbox,
             stream,
             options,
             sink: RwLock::new(Arc::new(LoggingJobSink)),
+            runtime: tokio::runtime::Handle::try_current().ok(),
+            state: Mutex::new(QueueState::default()),
+            finished: tokio::sync::watch::channel(0).0,
+            this: this.clone(),
         })
     }
 
@@ -228,28 +288,345 @@ impl SystemAgentService {
     /// enqueues a triage. Holds the service weakly, so the inbox and the
     /// service do not keep each other alive.
     pub fn observer(self: &Arc<Self>) -> Arc<dyn RequestObserver> {
-        todo!("phase-3-task-4")
+        Arc::new(TriageOnRequest(Arc::downgrade(self)))
     }
 
     /// Queue a job and return its id. A triage already known for the same
     /// `(request_id, attempt)` returns the existing job's id instead (TD-2).
     pub fn enqueue(&self, draft_id: &str, input: JobInput) -> Result<String, EnqueueError> {
-        todo!("phase-3-task-4: {draft_id} {input:?}")
+        self.enqueue_new(draft_id, input).map(|(id, _)| id)
+    }
+
+    /// [`Self::enqueue`], also saying whether the job is new (not a dedupe hit).
+    fn enqueue_new(&self, draft_id: &str, input: JobInput) -> Result<(String, bool), EnqueueError> {
+        if !self.config.enabled {
+            return Err(EnqueueError::Disabled);
+        }
+        let runtime = self.runtime.as_ref().ok_or(EnqueueError::NoRuntime)?;
+        match &input {
+            JobInput::Triage {
+                request_id,
+                attempt,
+            } => {
+                if request_id.trim().is_empty() || *attempt == 0 {
+                    return Err(EnqueueError::Invalid(
+                        "a triage needs a request id and an attempt of 1 or more".to_string(),
+                    ));
+                }
+            }
+            JobInput::Convert { targets, .. } if targets.is_empty() => {
+                return Err(EnqueueError::Invalid(
+                    "a convert job needs at least one target".to_string(),
+                ));
+            }
+            _ => {}
+        }
+        match self.inbox.get(draft_id) {
+            Ok((InboxDraftView::Parsed(_), _)) => {}
+            _ => return Err(EnqueueError::Invalid(format!("unknown draft {draft_id}"))),
+        }
+
+        let kind = input.kind();
+        let (request_id, attempt) = match &input {
+            JobInput::Triage {
+                request_id,
+                attempt,
+            } => (Some(request_id.clone()), *attempt),
+            _ => (None, 1),
+        };
+        let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let key = request_id.clone().map(|r| (r, kind, attempt));
+        if let Some(existing) = key.as_ref().and_then(|k| st.dedupe.get(k)) {
+            return Ok((existing.clone(), false));
+        }
+        let waiting = st
+            .queued
+            .values()
+            .filter(|id| {
+                st.jobs
+                    .get(*id)
+                    .is_some_and(|(_, j)| j.draft_id == draft_id)
+            })
+            .count();
+        if waiting >= MAX_QUEUED_PER_ITEM {
+            return Err(EnqueueError::QueueFull(draft_id.to_string()));
+        }
+        st.seq += 1;
+        let seq = st.seq;
+        let job_id = random_ulid();
+        let record = JobRecord {
+            job_id: job_id.clone(),
+            draft_id: draft_id.to_string(),
+            kind,
+            request_id,
+            attempt,
+            status: JobStatus::Queued,
+            output: None,
+            error: None,
+            reseeded: false,
+            enqueued_at: now(),
+            started_at: None,
+            finished_at: None,
+            input,
+        };
+        st.jobs.insert(job_id.clone(), (seq, record));
+        let lane = if kind.is_interactive() { 0 } else { 1 };
+        st.queued.insert((lane, seq), job_id.clone());
+        if let Some(key) = key {
+            st.dedupe.insert(key, job_id.clone());
+        }
+        tracing::info!(
+            job_id = %job_id,
+            draft_id,
+            kind = kind.as_str(),
+            queue_depth = st.queued.len(),
+            "system agent job queued"
+        );
+        self.dispatch(&mut st, runtime);
+        Ok((job_id, true))
+    }
+
+    /// Start every waiting job that may run now: the oldest in the best lane
+    /// whose item is idle, while a global slot is free.
+    fn dispatch(&self, st: &mut QueueState, runtime: &tokio::runtime::Handle) {
+        let Some(this) = self.this.upgrade() else {
+            return;
+        };
+        while st.running < self.config.max_concurrent.max(1) {
+            let next = st
+                .queued
+                .iter()
+                .find(|(_, id)| {
+                    st.jobs
+                        .get(*id)
+                        .is_some_and(|(_, j)| !st.busy.contains(&j.draft_id))
+                })
+                .map(|(key, id)| (*key, id.clone()));
+            let Some((key, job_id)) = next else {
+                break;
+            };
+            st.queued.remove(&key);
+            let Some((_, record)) = st.jobs.get_mut(&job_id) else {
+                continue;
+            };
+            record.status = JobStatus::Running;
+            record.started_at = Some(now());
+            let draft_id = record.draft_id.clone();
+            st.busy.insert(draft_id);
+            st.running += 1;
+            let this = this.clone();
+            runtime.spawn(async move { this.run(job_id).await });
+        }
+    }
+
+    /// Run one claimed job to its end, record it, free its slot, and tell
+    /// the sink and any waiters.
+    async fn run(self: Arc<Self>, job_id: String) {
+        let Some(record) = self.job(&job_id) else {
+            return;
+        };
+        let started = std::time::Instant::now();
+        // Run on its own task so a panic fails the job instead of leaving its
+        // item marked busy forever.
+        let result = match tokio::spawn(self.clone().execute(record.clone())).await {
+            Ok(result) => result,
+            Err(_) => Err(Failure::new("the job panicked", false)),
+        };
+        let finished = {
+            let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            st.busy.remove(&record.draft_id);
+            st.running = st.running.saturating_sub(1);
+            let snapshot = st.jobs.get_mut(&job_id).map(|(_, job)| {
+                match result {
+                    Ok((output, reseeded)) => {
+                        job.status = JobStatus::Succeeded;
+                        job.output = Some(output);
+                        job.reseeded = reseeded;
+                    }
+                    Err(failure) => {
+                        job.status = JobStatus::Failed;
+                        job.error = Some(failure.error);
+                        job.reseeded = failure.reseeded;
+                    }
+                }
+                job.finished_at = Some(now());
+                job.clone()
+            });
+            st.done.push_back(job_id.clone());
+            while st.done.len() > FINISHED_JOBS_KEPT {
+                if let Some(old) = st.done.pop_front() {
+                    st.jobs.remove(&old);
+                }
+            }
+            if let Some(runtime) = &self.runtime {
+                self.dispatch(&mut st, runtime);
+            }
+            snapshot
+        };
+        if let Some(job) = finished {
+            tracing::info!(
+                job_id = %job.job_id,
+                draft_id = %job.draft_id,
+                kind = job.kind.as_str(),
+                status = ?job.status,
+                duration_ms = started.elapsed().as_millis() as u64,
+                timed_out = job.error.as_deref().is_some_and(|e| e.contains("timed out")),
+                "system agent job ran"
+            );
+            let sink = self.sink.read().unwrap_or_else(|e| e.into_inner()).clone();
+            sink.job_finished(&job);
+        }
+        self.finished.send_modify(|n| *n += 1);
+    }
+
+    /// Load the item, build the prompt, run the isolated child, and validate
+    /// what it said. Writes nothing but the session, and only on success.
+    async fn execute(self: Arc<Self>, record: JobRecord) -> Result<(JobOutput, bool), Failure> {
+        let inbox = self.inbox.clone();
+        let draft_id = record.draft_id.clone();
+        let kind = record.kind;
+        let ctx = tokio::task::spawn_blocking(move || load_context(&inbox, &draft_id, kind))
+            .await
+            .map_err(|_| Failure::new("loading the item failed", false))?
+            .map_err(|e| Failure::new(e, false))?;
+
+        let reseed = match &ctx.session {
+            None => true,
+            Some(s) => {
+                s.turns >= self.config.turn_cap
+                    || s.agent != self.config.agent.as_str()
+                    || s.session_id.trim().is_empty()
+            }
+        };
+        let prompt = prompt::build_job_prompt(
+            &prompt::PromptContext {
+                draft: &ctx.draft,
+                events: &ctx.events,
+                digest: &ctx.digest,
+                reseed,
+            },
+            &record.input,
+        )
+        .map_err(|e| Failure::new(e, reseed))?;
+        let cwd = isolation::prepare_scratch_dir(&self.options.scratch_root, &record.draft_id)
+            .map_err(|e| Failure::new(format!("cannot prepare the scratch dir: {e}"), reseed))?;
+        let parent = self
+            .options
+            .parent_env
+            .clone()
+            .unwrap_or_else(|| std::env::vars().collect());
+        let resume = (!reseed)
+            .then(|| ctx.session.as_ref().map(|s| s.session_id.clone()))
+            .flatten();
+        let input = isolation::build_run_input(
+            &self.config,
+            &record.draft_id,
+            &cwd,
+            prompt,
+            resume.clone(),
+            isolation::child_env(parent),
+        );
+        let outcome = self
+            .stream
+            .run_to_completion(input)
+            .await
+            .map_err(|e| Failure::new(e, reseed))?;
+
+        if outcome.timed_out {
+            return Err(Failure::new(
+                format!("the agent timed out after {}s", self.config.timeout_secs),
+                reseed,
+            ));
+        }
+        if let Some(e) = &outcome.error {
+            let short: String = e.chars().take(200).collect();
+            return Err(Failure::new(
+                format!("the agent run failed: {short}"),
+                reseed,
+            ));
+        }
+        match outcome.exit_code {
+            Some(0) => {}
+            Some(code) => {
+                return Err(Failure::new(
+                    format!("the agent exited with status {code}"),
+                    reseed,
+                ));
+            }
+            None => return Err(Failure::new("the agent was killed", reseed)),
+        }
+        let message = outcome
+            .final_message
+            .ok_or_else(|| Failure::new("the agent produced no final message", reseed))?;
+        let expected = match &record.input {
+            JobInput::Convert { targets, .. } => targets.clone(),
+            _ => Vec::new(),
+        };
+        let output = output::parse_job_output(kind, &message, &expected)
+            .map_err(|e| Failure::new(e.to_string(), reseed))?;
+
+        if let Some(session_id) = outcome.session_id.or(resume) {
+            let turns = match (&ctx.session, reseed) {
+                (Some(s), false) => s.turns.saturating_add(1),
+                _ => 1,
+            };
+            let session = AgentSession {
+                agent: self.config.agent.as_str().to_string(),
+                model: self.config.model.clone(),
+                session_id,
+                turns,
+            };
+            let inbox = self.inbox.clone();
+            let draft_id = record.draft_id.clone();
+            let written =
+                tokio::task::spawn_blocking(move || inbox.write_session(&draft_id, &session)).await;
+            if !matches!(written, Ok(Ok(()))) {
+                tracing::warn!(draft_id = %record.draft_id, "system agent: session not saved");
+            }
+        }
+        Ok((output, reseed))
     }
 
     /// One job by id.
     pub fn job(&self, job_id: &str) -> Option<JobRecord> {
-        todo!("phase-3-task-4: {job_id}")
+        let st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        st.jobs.get(job_id).map(|(_, job)| job.clone())
     }
 
     /// An item's known jobs, oldest first.
     pub fn jobs_for(&self, draft_id: &str) -> Vec<JobRecord> {
-        todo!("phase-3-task-4: {draft_id}")
+        let st = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut jobs: Vec<&(u64, JobRecord)> = st
+            .jobs
+            .values()
+            .filter(|(_, j)| j.draft_id == draft_id)
+            .collect();
+        jobs.sort_by_key(|(seq, _)| *seq);
+        jobs.into_iter().map(|(_, j)| j.clone()).collect()
+    }
+
+    /// Jobs waiting for a slot, across every item.
+    pub fn queue_depth(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .queued
+            .len()
     }
 
     /// Wait for a job to finish. `None` for an unknown id.
     pub async fn wait(&self, job_id: &str) -> Option<JobRecord> {
-        todo!("phase-3-task-4: {job_id}")
+        // Subscribe before looking, so a finish between the two is not missed.
+        let mut finished = self.finished.subscribe();
+        loop {
+            let job = self.job(job_id)?;
+            if job.status.is_terminal() {
+                return Some(job);
+            }
+            if finished.changed().await.is_err() {
+                return self.job(job_id);
+            }
+        }
     }
 
     /// Re-enqueue, once, every open request on a live item that was never
@@ -260,14 +637,61 @@ impl SystemAgentService {
     }
 }
 
+/// Load what a `kind` job needs. Blocking: reads the store.
+fn load_context(inbox: &InboxService, draft_id: &str, kind: JobKind) -> Result<JobContext, String> {
+    let draft = match inbox.get(draft_id) {
+        Ok((InboxDraftView::Parsed(draft), _)) => draft,
+        Ok(_) => return Err("the item does not parse".to_string()),
+        Err(e) => return Err(format!("cannot read the item: {e}")),
+    };
+    let events = inbox
+        .events(draft_id)
+        .map_err(|e| format!("cannot read the item's events: {e}"))?;
+    let session = inbox
+        .read_session(draft_id)
+        .map_err(|e| format!("cannot read the item's session: {e}"))?;
+    let digest = if kind == JobKind::Triage {
+        let items = inbox
+            .list(&ListQuery::default())
+            .map_err(|e| format!("cannot list the inbox: {e}"))?;
+        prompt::build_digest(&items, draft_id)
+    } else {
+        Vec::new()
+    };
+    Ok(JobContext {
+        draft,
+        events,
+        session,
+        digest,
+    })
+}
+
+/// Enqueues a triage for each new request.
+struct TriageOnRequest(Weak<SystemAgentService>);
+
+impl RequestObserver for TriageOnRequest {
+    fn request_opened(&self, draft_id: &str, request_id: &str) {
+        let Some(service) = self.0.upgrade() else {
+            return;
+        };
+        let input = JobInput::Triage {
+            request_id: request_id.to_string(),
+            attempt: 1,
+        };
+        match service.enqueue(draft_id, input) {
+            Ok(_) | Err(EnqueueError::Disabled) => {}
+            Err(e) => tracing::warn!(draft_id, request_id, "triage not queued: {e}"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapters::inbox_store::{EventAuthor, InboxStore};
     use crate::adapters::projects_registry::ProjectsRegistry;
-    use crate::domain::inbox_events::{AgentSession, InboxEventKind, WorktreeKey};
+    use crate::domain::inbox_events::{InboxEventKind, WorktreeKey};
     use crate::domain::model::{DraftStatus, Priority};
-    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 

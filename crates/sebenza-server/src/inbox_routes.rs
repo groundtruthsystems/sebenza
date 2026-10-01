@@ -787,18 +787,28 @@ mod tests {
         )
         .with_limits(limits)
         .with_audit_sink(audit.clone());
+        let inbox = Arc::new(inbox);
+        let agent_stream = Arc::new(crate::services::agent_stream::AgentStreamManager::new());
+        // Disabled: route tests never spawn an agent.
+        let system_agent = crate::services::system_agent::SystemAgentService::new(
+            Default::default(),
+            inbox.clone(),
+            agent_stream.clone(),
+            Default::default(),
+        );
         let state = AppState {
             manager: Arc::new(crate::services::project_manager::ProjectManager::new(
                 ProjectsRegistry::with_file(base.join("server-projects.json")),
                 "http://127.0.0.1:5111".into(),
             )),
             terminal: Arc::new(crate::adapters::terminal::TerminalManager::new(0)),
-            agent_stream: Arc::new(crate::services::agent_stream::AgentStreamManager::new()),
+            agent_stream,
             project_inits: Arc::new(
                 crate::services::project_init_service::ProjectInitTracker::new(),
             ),
-            inbox: Arc::new(inbox),
+            inbox,
             inbox_jobs: Arc::new(crate::services::inbox_jobs::ConversionJobManager::new()),
+            system_agent,
             frontend_dist: None,
         };
         Fixture {

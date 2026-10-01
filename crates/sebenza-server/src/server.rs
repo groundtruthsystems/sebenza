@@ -54,6 +54,8 @@ pub struct AppState {
     pub inbox: Arc<crate::services::inbox_service::InboxService>,
     /// In-flight and recent conversion fan-outs. Server-wide, like the inbox.
     pub inbox_jobs: Arc<crate::services::inbox_jobs::ConversionJobManager>,
+    /// The per-item inbox system agent (triage, draft-help, convert jobs).
+    pub system_agent: Arc<crate::services::system_agent::SystemAgentService>,
     pub frontend_dist: Option<PathBuf>,
 }
 

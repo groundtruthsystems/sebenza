@@ -139,16 +139,29 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         Err(e) => tracing::warn!("inbox: orphan sweep failed: {e}"),
     }
 
+    let inbox = Arc::new(services::inbox_service::InboxService::new(
+        inbox_store,
+        adapters::projects_registry::ProjectsRegistry::new(),
+    ));
+    // Chat and the system agent share one stream manager: their conversation
+    // ids never collide (`system-agent:<ulid>`), and one turn per id holds.
+    let agent_stream = Arc::new(services::agent_stream::AgentStreamManager::new());
+    let system_agent = services::system_agent::SystemAgentService::new(
+        system_agent_config,
+        inbox.clone(),
+        agent_stream.clone(),
+        services::system_agent::SystemAgentOptions::default(),
+    );
+    inbox.set_request_observer(system_agent.observer());
+
     let state = AppState {
         manager,
         terminal,
-        agent_stream: Arc::new(services::agent_stream::AgentStreamManager::new()),
+        agent_stream,
         project_inits: Arc::new(services::project_init_service::ProjectInitTracker::new()),
         inbox_jobs: Arc::new(services::inbox_jobs::ConversionJobManager::new()),
-        inbox: Arc::new(services::inbox_service::InboxService::new(
-            inbox_store,
-            adapters::projects_registry::ProjectsRegistry::new(),
-        )),
+        inbox,
+        system_agent,
         frontend_dist,
     };
 

@@ -10,8 +10,8 @@ use crate::adapters::inbox_store::{
 };
 use crate::adapters::projects_registry::ProjectsRegistry;
 use crate::domain::inbox_events::{
-    AuthorKind, InboxEvent, InboxEventKind, RequestStatus, RequestView, Thread, WorktreeKey,
-    apply_redactions, fold_requests,
+    AgentSession, AuthorKind, InboxEvent, InboxEventKind, RequestStatus, RequestView, Thread,
+    WorktreeKey, apply_redactions, fold_requests,
 };
 use crate::domain::model::{
     DraftStatus, InboxDraft, InboxDraftView, Priority, PrioritySource, ProjectRef, inbox_order,
@@ -682,6 +682,16 @@ impl InboxService {
             self.audit.record(&record);
         }
         Ok(event)
+    }
+
+    /// The item's system-agent session, if it has one.
+    pub fn read_session(&self, id: &str) -> Result<Option<AgentSession>, InboxServiceError> {
+        Ok(self.store.read_session(id)?)
+    }
+
+    /// Persist the item's system-agent session. Server-only: no route writes it.
+    pub fn write_session(&self, id: &str, session: &AgentSession) -> Result<(), InboxServiceError> {
+        Ok(self.store.write_session(id, session)?)
     }
 
     /// The item's event log with redactions applied.
