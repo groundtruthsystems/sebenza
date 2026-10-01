@@ -464,18 +464,39 @@ impl InboxStore {
 
     /// Every parseable event, in append order. A torn or foreign line is skipped.
     pub fn read_events(&self, id: &str) -> Result<Vec<InboxEvent>, InboxStoreError> {
-        let _ = id;
-        todo!("read_events")
+        let path = self.sidecar(id, "events.jsonl")?;
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        Ok(text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str::<InboxEvent>(l).ok())
+            .collect())
     }
 
     pub fn read_session(&self, id: &str) -> Result<Option<AgentSession>, InboxStoreError> {
-        let _ = id;
-        todo!("read_session")
+        let path = self.sidecar(id, "session.json")?;
+        match fs::read_to_string(&path) {
+            Ok(t) => Ok(serde_json::from_str(&t).ok()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub fn write_session(&self, id: &str, session: &AgentSession) -> Result<(), InboxStoreError> {
-        let _ = (id, session);
-        todo!("write_session")
+        let path = self.sidecar(id, "session.json")?;
+        self.ensure_dir()?;
+        let json = serde_json::to_string_pretty(session)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let tmp = self
+            .dir
+            .join(format!("{id}.session.{}.tmp", std::process::id()));
+        Self::write_owner_only(&tmp, &json)?;
+        fs::rename(&tmp, &path)?;
+        Ok(())
     }
 
     /// Remove sidecars whose draft no longer exists. Returns what was removed.

@@ -154,8 +154,100 @@ pub struct RequestView {
 /// Fold the log into one view per request, in the order requests were opened.
 /// Events naming an unknown request are ignored.
 pub fn fold_requests(events: &[InboxEvent]) -> Vec<RequestView> {
-    let _ = events;
-    todo!("fold_requests")
+    let mut views: Vec<RequestView> = Vec::new();
+    for e in events {
+        if let InboxEventKind::RequestOpened {
+            request_id,
+            worktree,
+            title,
+            body,
+            warnings,
+        } = &e.kind
+        {
+            if views.iter().all(|v| &v.request_id != request_id) {
+                views.push(RequestView {
+                    request_id: request_id.clone(),
+                    worktree: worktree.clone(),
+                    title: title.clone(),
+                    body: body.clone(),
+                    status: RequestStatus::Open,
+                    flagged: false,
+                    proposal_id: None,
+                    proposal: None,
+                    content_hash: None,
+                    confirmed_text: None,
+                    last_reason: None,
+                    last_error: None,
+                    attempts: 0,
+                    warnings: warnings.clone(),
+                    opened_at: e.ts.clone(),
+                });
+            }
+            continue;
+        }
+        let Some(rid) = request_id_of(&e.kind) else {
+            continue;
+        };
+        let Some(v) = views.iter_mut().find(|v| v.request_id == rid) else {
+            continue;
+        };
+        match &e.kind {
+            InboxEventKind::Proposal {
+                proposal_id, body, ..
+            } => {
+                v.status = RequestStatus::Proposed;
+                v.flagged = false;
+                v.proposal_id = Some(proposal_id.clone());
+                v.proposal = Some(body.clone());
+            }
+            InboxEventKind::TriageFailed { error, .. } => {
+                v.flagged = true;
+                v.last_error = Some(error.clone());
+            }
+            InboxEventKind::Rejected { reason, .. } => {
+                v.status = RequestStatus::Open;
+                v.proposal_id = None;
+                v.proposal = None;
+                v.last_reason = Some(reason.clone());
+            }
+            InboxEventKind::ResolutionConfirmed {
+                content_hash, text, ..
+            } => {
+                v.status = RequestStatus::Confirmed;
+                v.flagged = false;
+                v.content_hash = Some(content_hash.clone());
+                v.confirmed_text = Some(text.clone());
+            }
+            InboxEventKind::Delivered { attempt, .. } => {
+                v.status = RequestStatus::Resolved;
+                v.flagged = false;
+                v.attempts = v.attempts.max(*attempt);
+            }
+            InboxEventKind::DeliveryFailed { attempt, error, .. } => {
+                v.status = RequestStatus::DeliveryFailed;
+                v.flagged = true;
+                v.attempts = v.attempts.max(*attempt);
+                v.last_error = Some(error.clone());
+            }
+            _ => {}
+        }
+    }
+    views
+}
+
+/// The request an event belongs to, if any.
+pub fn request_id_of(kind: &InboxEventKind) -> Option<&str> {
+    match kind {
+        InboxEventKind::RequestOpened { request_id, .. }
+        | InboxEventKind::Proposal { request_id, .. }
+        | InboxEventKind::Advice { request_id, .. }
+        | InboxEventKind::TriageFailed { request_id, .. }
+        | InboxEventKind::Rejected { request_id, .. }
+        | InboxEventKind::ResolutionConfirmed { request_id, .. }
+        | InboxEventKind::Delivered { request_id, .. }
+        | InboxEventKind::DeliveryFailed { request_id, .. } => Some(request_id),
+        _ => None,
+    }
 }
 
 /// The text shown in place of a redacted body.
@@ -163,8 +255,22 @@ pub const REDACTED_BODY: &str = "[redacted]";
 
 /// Replace the body of every event targeted by a `redacted` tombstone.
 pub fn apply_redactions(events: &mut [InboxEvent]) {
-    let _ = events;
-    todo!("apply_redactions")
+    let targets: std::collections::HashSet<String> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            InboxEventKind::Redacted { target_event_id } => Some(target_event_id.clone()),
+            _ => None,
+        })
+        .collect();
+    for e in events.iter_mut().filter(|e| targets.contains(&e.event_id)) {
+        match &mut e.kind {
+            InboxEventKind::Comment { body, .. }
+            | InboxEventKind::RequestOpened { body, .. }
+            | InboxEventKind::Proposal { body, .. }
+            | InboxEventKind::Advice { body, .. } => *body = REDACTED_BODY.to_string(),
+            _ => {}
+        }
+    }
 }
 
 /// The item's system-agent session, stored server-side in `<ulid>.session.json`.
