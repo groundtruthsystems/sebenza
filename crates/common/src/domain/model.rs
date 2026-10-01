@@ -474,7 +474,31 @@ pub struct NotificationView {
     pub timestamp: i64,
 }
 
-pub const INBOX_DRAFT_SCHEMA_VERSION: i32 = 1;
+/// Version 2 adds `priority` and `priority_source`. Readers accept any version;
+/// the store refuses to write a draft whose version is newer than this.
+pub const INBOX_DRAFT_SCHEMA_VERSION: i32 = 2;
+
+/// Inbox item priority, `P0` most urgent. Orders `P0 < P1 < P2 < P3`.
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default,
+)]
+pub enum Priority {
+    P0,
+    P1,
+    #[default]
+    P2,
+    P3,
+}
+
+/// Who last set an item's priority. An operator value is sticky: the system
+/// agent may only write priority while the source is `Agent`.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PrioritySource {
+    #[default]
+    Agent,
+    Operator,
+}
 
 /// Inbox draft status in on-disk YAML (`Draft` / `Promoted` / `Dropped`).
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -517,6 +541,20 @@ pub struct InboxDraftFrontmatter {
     pub updated_at: String,
     #[serde(default)]
     pub conversions: Vec<serde_yaml::Value>,
+    #[serde(default)]
+    pub priority: Priority,
+    #[serde(default)]
+    pub priority_source: PrioritySource,
+    /// Keys this binary does not know, kept so a rewrite never drops them.
+    #[serde(flatten, default)]
+    pub extra: serde_yaml::Mapping,
+}
+
+/// Inbox list order: priority (`P0` first), then newest `created_at` first.
+/// Unparseable drafts sort after every parsed one, newest id first.
+pub fn inbox_order(a: &InboxDraftView, b: &InboxDraftView) -> std::cmp::Ordering {
+    let _ = (a, b);
+    todo!("inbox_order")
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -651,7 +689,7 @@ mod tests {
             panic!("expected parsed draft, got {view:?}");
         };
         assert_eq!(draft.id, SAMPLE_ID);
-        assert_eq!(draft.frontmatter.schema_version, INBOX_DRAFT_SCHEMA_VERSION);
+        assert_eq!(draft.frontmatter.schema_version, 1);
         assert_eq!(draft.frontmatter.title, "Design the inbox");
         assert_eq!(draft.frontmatter.status, DraftStatus::Draft);
         assert_eq!(
@@ -717,5 +755,74 @@ mod tests {
             }
             other => panic!("expected raw degradation, got {other:?}"),
         }
+    }
+
+    fn draft_with(id: &str, priority: Priority, created_at: &str) -> InboxDraftView {
+        let mut view = parse_inbox_file(SAMPLE_ID, &sample_source());
+        let InboxDraftView::Parsed(ref mut d) = view else {
+            panic!("sample must parse");
+        };
+        d.id = id.to_string();
+        d.frontmatter.priority = priority;
+        d.frontmatter.created_at = created_at.to_string();
+        view
+    }
+
+    fn ids(views: &[InboxDraftView]) -> Vec<String> {
+        views
+            .iter()
+            .map(|v| match v {
+                InboxDraftView::Parsed(d) => d.id.clone(),
+                InboxDraftView::Raw { id, .. } => id.clone(),
+            })
+            .collect()
+    }
+
+    // TS-07: priority first, then newest created_at; default is P2.
+    #[test]
+    fn inbox_order_is_priority_then_newest_created() {
+        let mut views = vec![
+            draft_with("a", Priority::P3, "2026-09-01T00:00:00Z"),
+            draft_with("b", Priority::P0, "2026-09-01T00:00:00Z"),
+            draft_with("c", Priority::P2, "2026-09-03T00:00:00Z"),
+            draft_with("d", Priority::P2, "2026-09-05T00:00:00Z"),
+            InboxDraftView::Raw {
+                id: "z".into(),
+                raw_text: String::new(),
+                error: "bad".into(),
+            },
+            draft_with("e", Priority::P0, "2026-09-02T00:00:00Z"),
+        ];
+        views.sort_by(inbox_order);
+        assert_eq!(ids(&views), ["e", "b", "d", "c", "a", "z"]);
+        assert_eq!(Priority::default(), Priority::P2);
+    }
+
+    // TS-53: a v1 file loads additively with defaults and keeps unknown keys.
+    #[test]
+    fn v1_draft_upgrades_additively_and_preserves_unknown_keys() {
+        let source = sample_source().replacen("title:", "future_key: kept\ntitle:", 1);
+        let InboxDraftView::Parsed(draft) = parse_inbox_file(SAMPLE_ID, &source) else {
+            panic!("v1 must parse");
+        };
+        assert_eq!(draft.frontmatter.priority, Priority::P2);
+        assert_eq!(draft.frontmatter.priority_source, PrioritySource::Agent);
+        let rendered = render_inbox_file(&draft);
+        assert!(rendered.contains("future_key: kept"), "{rendered}");
+        let InboxDraftView::Parsed(round) = parse_inbox_file(SAMPLE_ID, &rendered) else {
+            panic!("round trip must parse");
+        };
+        assert_eq!(round.frontmatter, draft.frontmatter);
+    }
+
+    #[test]
+    fn priority_wire_spelling() {
+        assert_eq!(serde_yaml::to_string(&Priority::P1).unwrap().trim(), "P1");
+        assert_eq!(
+            serde_yaml::to_string(&PrioritySource::Operator)
+                .unwrap()
+                .trim(),
+            "operator"
+        );
     }
 }
