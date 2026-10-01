@@ -137,13 +137,14 @@
           "id": "phase-3-task-2",
           "name": "Extend AgentStreamManager for final message, session id and model",
           "description": "Return the final message and session id from a run and pass the configured model, keeping chat behaviour unchanged.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "c156693"
         },
         {
           "id": "phase-3-task-3",
           "name": "Implement systemAgent config and claude-only validation",
           "description": "Add the systemAgent config block and reject agents other than claude at startup.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-4",
