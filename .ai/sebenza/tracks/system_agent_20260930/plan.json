@@ -357,13 +357,14 @@
           "id": "phase-6-task-3",
           "name": "Implement grouped comments and request card",
           "description": "Render sanitised comments grouped per worktree plus overall, and a request card with verbatim text, diff, and confirm, edit, reject, redeliver.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "259e875"
         },
         {
           "id": "phase-6-task-4",
           "name": "Implement draft-help merge view, convert dialog instructions and PHI warning",
           "description": "Show draft-help proposals with a conflict merge view, editable system instructions in the convert dialog, and the PHI and provider warning.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-6-task-5",
