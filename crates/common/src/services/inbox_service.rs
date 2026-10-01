@@ -6,14 +6,23 @@
 //! promoted draft destroys the only record of the prompts it produced.
 
 use crate::adapters::inbox_store::{
-    FrontmatterAuthor, FrontmatterPatch, InboxStore, InboxStoreError,
+    EventAuthor, FrontmatterAuthor, FrontmatterPatch, InboxStore, InboxStoreError, PriorityWrite,
 };
 use crate::adapters::projects_registry::ProjectsRegistry;
-use crate::domain::model::{DraftStatus, InboxDraft, InboxDraftView, ProjectRef};
+use crate::domain::inbox_events::{
+    AuthorKind, InboxEvent, InboxEventKind, RequestStatus, RequestView, Thread, WorktreeKey,
+    apply_redactions, fold_requests,
+};
+use crate::domain::model::{
+    DraftStatus, InboxDraft, InboxDraftView, Priority, PrioritySource, ProjectRef, inbox_order,
+};
 use crate::services::inbox_convert::{
     ConversionOutcome, ConversionRunner, ConversionTarget, TargetError, run_conversion,
-    status_after, validate_targets,
+    scan_for_secrets, status_after, validate_targets,
 };
+use crate::services::inbox_limits::{InboxLimits, RateLimiter};
+use serde::Serialize;
+use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
 /// Failures callers must distinguish. Everything else surfaces as the
@@ -28,6 +37,21 @@ pub enum InboxServiceError {
     /// the caller can mark all the bad targets at once.
     #[error("{} invalid target(s)", .0.len())]
     InvalidTargets(Vec<TargetError>),
+    /// A comment or request field is over its cap (T-09).
+    #[error("{field} is longer than {limit}")]
+    TooLarge { field: &'static str, limit: usize },
+    /// The caller is over its per-window allowance (T-09).
+    #[error("rate limit exceeded; try again shortly")]
+    RateLimited,
+    /// The item already holds as many open requests as it may (T-09).
+    #[error("draft {0} has too many open requests")]
+    TooManyOpenRequests(String),
+    /// The claimed worktree is not one this item was converted into (T-06).
+    #[error("worktree is not a conversion of draft {0}")]
+    ForeignWorktree(String),
+    /// A malformed comment or request.
+    #[error("{0}")]
+    Invalid(String),
     #[error(transparent)]
     Store(#[from] InboxStoreError),
 }
@@ -49,6 +73,8 @@ pub struct DraftSummary {
     pub status: DraftStatus,
     pub updated_at: String,
     pub project: Option<ProjectLink>,
+    pub priority: Priority,
+    pub priority_source: PrioritySource,
     /// True when the file did not parse; it still lists, so one bad draft
     /// cannot hide the rest.
     pub is_raw: bool,
@@ -62,16 +88,212 @@ pub struct ListQuery {
     pub include_dropped: bool,
 }
 
+/// What kind of entry a comment-thread row is. Requests, advice, proposals
+/// and resolutions are all shown in their worktree's thread alongside notes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentKind {
+    Note,
+    Request,
+    Advice,
+    Proposal,
+    Resolution,
+}
+
+/// One row of a comment thread, with redactions already applied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentView {
+    pub event_id: String,
+    pub ts: String,
+    pub author: AuthorKind,
+    /// Self-declared and unauthenticated (T-01).
+    pub caller: Option<String>,
+    pub kind: CommentKind,
+    pub body: String,
+    /// Set on a request row.
+    pub title: Option<String>,
+    /// Set on every row that belongs to a request.
+    pub request_id: Option<String>,
+    pub parent_event_id: Option<String>,
+    /// Secret-scan hits. Advisory only: the body is stored unchanged (FR-10).
+    pub warnings: Vec<String>,
+    /// True when an operator tombstoned this row; `body` is then masked.
+    pub redacted: bool,
+}
+
+/// One worktree's thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeGroup {
+    pub project: String,
+    pub branch: String,
+    pub comments: Vec<CommentView>,
+}
+
+/// Every thread on an item: the overall one plus one per worktree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentGroups {
+    pub overall: Vec<CommentView>,
+    pub worktrees: Vec<WorktreeGroup>,
+}
+
+/// A metadata-only audit record (T-08, FR-34). Ids, actors and actions —
+/// never a body, title or reason, which is why there is no field to hold one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AuditRecord {
+    /// A fixed literal, e.g. `inbox.priority.changed`.
+    pub action: &'static str,
+    pub draft_id: String,
+    pub event_id: Option<String>,
+    pub request_id: Option<String>,
+    /// Who the server believes acted. A worktree agent holding the control
+    /// token on an operator route is recorded as `operator` (T-01).
+    pub actor: AuthorKind,
+    /// The unauthenticated `caller` marker the request declared.
+    pub caller: Option<String>,
+    pub thread: Option<&'static str>,
+    pub project: Option<String>,
+    pub branch: Option<String>,
+    pub from: Option<Priority>,
+    pub to: Option<Priority>,
+    pub source: Option<PrioritySource>,
+}
+
+impl AuditRecord {
+    fn new(action: &'static str, draft_id: &str, actor: AuthorKind) -> Self {
+        Self {
+            action,
+            draft_id: draft_id.to_string(),
+            event_id: None,
+            request_id: None,
+            actor,
+            caller: None,
+            thread: None,
+            project: None,
+            branch: None,
+            from: None,
+            to: None,
+            source: None,
+        }
+    }
+}
+
+/// Where audit records go. The default writes structured `tracing` lines;
+/// tests capture them instead.
+pub trait AuditSink: Send + Sync {
+    fn record(&self, record: &AuditRecord);
+}
+
+/// Emits each record as one `tracing` line with an `audit=` field, the same
+/// shape as the existing `inbox.convert.target` line, so both grep together.
+pub struct TracingAuditSink;
+
+impl AuditSink for TracingAuditSink {
+    fn record(&self, r: &AuditRecord) {
+        let opt = |v: &Option<String>| v.clone().unwrap_or_default();
+        let pri = |v: Option<Priority>| v.map(|p| format!("{p:?}")).unwrap_or_default();
+        tracing::info!(
+            audit = r.action,
+            draft_id = %r.draft_id,
+            event_id = %opt(&r.event_id),
+            request_id = %opt(&r.request_id),
+            actor = ?r.actor,
+            caller = r.caller.as_deref().unwrap_or("none"),
+            thread = r.thread.unwrap_or(""),
+            project = %opt(&r.project),
+            branch = %opt(&r.branch),
+            from = %pri(r.from),
+            to = %pri(r.to),
+            source = %r.source.map(|s| format!("{s:?}")).unwrap_or_default(),
+            "inbox audit"
+        );
+    }
+}
+
+/// Told when a request opens. Phase 3's `SystemAgentService` implements this
+/// to enqueue triage; until then nothing is registered and a request simply
+/// waits, open, for the operator.
+pub trait RequestObserver: Send + Sync {
+    fn request_opened(&self, draft_id: &str, request_id: &str);
+}
+
+/// What a worktree agent sent through `sebenza-agentctl request|comment`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IngressKind {
+    Request { title: Option<String>, body: String },
+    Comment { body: String },
+}
+
+/// A worktree's inbox ingress, as claimed. Nothing here is authenticated
+/// beyond the shared control token: the draft id comes from the worktree's
+/// own `inbox-origin.json` and the path from its environment, which is why
+/// [`InboxService::ingest`] cross-checks both against `conversions[]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorktreeIngress {
+    pub draft_id: String,
+    pub worktree_path: String,
+    pub branch: String,
+    pub kind: IngressKind,
+}
+
+/// Runtime-event `type`s that carry inbox ingress.
+pub const INGRESS_REQUEST_TYPE: &str = "inbox.request";
+pub const INGRESS_COMMENT_TYPE: &str = "inbox.comment";
+
+/// Parse a `/api/runtime/events` body as inbox ingress. `None` when the
+/// `type` is not an inbox one (the caller handles it as a runtime event);
+/// `Some(Err)` when it is, but malformed.
+pub fn parse_worktree_ingress(raw: &serde_json::Value) -> Option<Result<WorktreeIngress, String>> {
+    let _ = raw;
+    todo!("parse inbox ingress")
+}
+
 /// Reads and writes drafts under the rules above.
 pub struct InboxService {
     store: InboxStore,
     projects: ProjectsRegistry,
+    limits: InboxLimits,
+    comment_rate: RateLimiter,
+    request_rate: RateLimiter,
+    audit: Arc<dyn AuditSink>,
+    observer: RwLock<Option<Arc<dyn RequestObserver>>>,
 }
 
 impl InboxService {
-    /// Build over an explicit store and registry.
+    /// Build over an explicit store and registry, with default limits and
+    /// `tracing` audit.
     pub fn new(store: InboxStore, projects: ProjectsRegistry) -> Self {
-        Self { store, projects }
+        let limits = InboxLimits::default();
+        Self {
+            store,
+            projects,
+            limits,
+            comment_rate: RateLimiter::new(limits.comments),
+            request_rate: RateLimiter::new(limits.requests),
+            audit: Arc::new(TracingAuditSink),
+            observer: RwLock::new(None),
+        }
+    }
+
+    /// Replace the ingress limits.
+    pub fn with_limits(mut self, limits: InboxLimits) -> Self {
+        self.limits = limits;
+        self.comment_rate = RateLimiter::new(limits.comments);
+        self.request_rate = RateLimiter::new(limits.requests);
+        self
+    }
+
+    /// Send audit records somewhere other than `tracing`.
+    pub fn with_audit_sink(mut self, sink: Arc<dyn AuditSink>) -> Self {
+        self.audit = sink;
+        self
+    }
+
+    /// Register the hook told about every newly opened request.
+    pub fn set_request_observer(&self, observer: Arc<dyn RequestObserver>) {
+        *self.observer.write().unwrap_or_else(|e| e.into_inner()) = Some(observer);
     }
 
     /// Resolve a stored project path against the registry. Matching is by exact
@@ -111,6 +333,8 @@ impl InboxService {
                         status: draft.frontmatter.status,
                         updated_at: draft.frontmatter.updated_at.clone(),
                         project: self.resolve_project(draft.frontmatter.project.as_ref()),
+                        priority: draft.frontmatter.priority,
+                        priority_source: draft.frontmatter.priority_source,
                         is_raw: false,
                     }
                 }
@@ -129,6 +353,8 @@ impl InboxService {
                         status: DraftStatus::Draft,
                         updated_at: String::new(),
                         project: None,
+                        priority: Priority::default(),
+                        priority_source: PrioritySource::default(),
                         is_raw: true,
                     }
                 }
@@ -337,6 +563,86 @@ impl InboxService {
         Ok(self
             .store
             .merge_frontmatter(id, FrontmatterAuthor::Editor, patch)?)
+    }
+}
+
+// --- Priority, comments and requests ----------------------------------------
+
+impl InboxService {
+    /// Operator sets (`Some`) or clears (`None`) the priority override.
+    /// Clearing keeps the value and hands control back to the agent.
+    /// `caller` is the unauthenticated marker the request declared.
+    pub fn set_priority(
+        &self,
+        id: &str,
+        priority: Option<Priority>,
+        caller: Option<String>,
+    ) -> Result<InboxDraft, InboxServiceError> {
+        let _ = (id, priority, caller, PriorityWrite::Operator(None));
+        todo!("operator priority")
+    }
+
+    /// The system agent's priority write. A no-op while an operator override
+    /// stands (BR-02); returns the `priority_changed` event when it moved.
+    pub fn set_agent_priority(
+        &self,
+        id: &str,
+        priority: Priority,
+    ) -> Result<Option<InboxEvent>, InboxServiceError> {
+        let _ = (id, priority);
+        todo!("agent priority")
+    }
+
+    /// The item's event log with redactions applied.
+    pub fn events(&self, id: &str) -> Result<Vec<InboxEvent>, InboxServiceError> {
+        let _ = id;
+        todo!("events")
+    }
+
+    /// Every thread: overall, then one group per converted worktree (in
+    /// conversion order) plus any worktree that only appears in the log.
+    pub fn list_comments(&self, id: &str) -> Result<CommentGroups, InboxServiceError> {
+        let _ = (id, apply_redactions, fold_requests);
+        todo!("list comments")
+    }
+
+    /// Append a comment. A worktree thread must name a worktree this item
+    /// was converted into.
+    pub fn add_comment(
+        &self,
+        id: &str,
+        author: EventAuthor,
+        thread: Thread,
+        body: &str,
+    ) -> Result<InboxEvent, InboxServiceError> {
+        let _ = (id, author, thread, body, scan_for_secrets);
+        todo!("add comment")
+    }
+
+    /// Open a request in `worktree`'s group and tell the observer.
+    pub fn open_request(
+        &self,
+        id: &str,
+        author: EventAuthor,
+        worktree: WorktreeKey,
+        title: &str,
+        body: &str,
+    ) -> Result<InboxEvent, InboxServiceError> {
+        let _ = (id, author, worktree, title, body, RequestStatus::Open);
+        todo!("open request")
+    }
+
+    /// Every request on the item, folded from the log, redactions applied.
+    pub fn list_requests(&self, id: &str) -> Result<Vec<RequestView>, InboxServiceError> {
+        let _ = id;
+        todo!("list requests")
+    }
+
+    /// Apply a worktree agent's request or comment, after checking the
+    /// claimed worktree is one this item was converted into (T-06, T-37).
+    pub fn ingest(&self, ingress: &WorktreeIngress) -> Result<InboxEvent, InboxServiceError> {
+        let _ = (ingress, InboxEventKind::Unknown);
+        todo!("ingest")
     }
 }
 
@@ -873,5 +1179,736 @@ mod tests {
         let history = s.conversion_history(&id).expect("history");
         assert_eq!(history.len(), 1, "the good entry still reads");
         assert_eq!(history[0].branch, "one");
+    }
+}
+
+#[cfg(test)]
+mod collaboration_tests {
+    use super::*;
+    use crate::domain::inbox_events::REDACTED_BODY;
+    use crate::services::inbox_limits::RateLimit;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Default)]
+    struct Captured(Mutex<Vec<AuditRecord>>);
+    impl AuditSink for Captured {
+        fn record(&self, r: &AuditRecord) {
+            self.0.lock().unwrap().push(r.clone());
+        }
+    }
+    impl Captured {
+        fn all(&self) -> Vec<AuditRecord> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    #[derive(Default)]
+    struct Observed(Mutex<Vec<(String, String)>>);
+    impl RequestObserver for Observed {
+        fn request_opened(&self, draft_id: &str, request_id: &str) {
+            self.0
+                .lock()
+                .unwrap()
+                .push((draft_id.to_string(), request_id.to_string()));
+        }
+    }
+
+    struct Fixture {
+        svc: InboxService,
+        store: InboxStore,
+        audit: Arc<Captured>,
+    }
+
+    fn fixture_with(limits: InboxLimits) -> Fixture {
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let base =
+            std::env::temp_dir().join(format!("sebenza-inbox-collab-{}-{}", std::process::id(), n));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("temp base");
+        let audit = Arc::new(Captured::default());
+        let svc = InboxService::new(
+            InboxStore::with_dir(base.join("inbox")),
+            ProjectsRegistry::with_file(base.join("projects.json")),
+        )
+        .with_limits(limits)
+        .with_audit_sink(audit.clone());
+        Fixture {
+            svc,
+            store: InboxStore::with_dir(base.join("inbox")),
+            audit,
+        }
+    }
+
+    fn fixture() -> Fixture {
+        fixture_with(InboxLimits::default())
+    }
+
+    /// Record a created conversion of `id` into `project`/`branch` at `path`.
+    fn convert_into(f: &Fixture, id: &str, project: &str, branch: &str, path: &str) {
+        let target = ConversionTarget {
+            project_path: project.into(),
+            branch: branch.into(),
+            base_branch: None,
+            agent_id: Some("claude".into()),
+            prompt: "go".into(),
+        };
+        let mut all = match f.store.get(id).expect("get") {
+            InboxDraftView::Parsed(d) => d.frontmatter.conversions,
+            _ => panic!("unparsed"),
+        };
+        all.push(
+            serde_yaml::to_value(ConversionOutcome::created(
+                &target,
+                path.into(),
+                "2026-09-30T00:00:00Z".into(),
+            ))
+            .unwrap(),
+        );
+        f.store
+            .merge_frontmatter(
+                id,
+                FrontmatterAuthor::Job,
+                FrontmatterPatch {
+                    conversions: Some(all),
+                    ..Default::default()
+                },
+            )
+            .expect("record conversion");
+    }
+
+    fn converted(f: &Fixture) -> String {
+        let d = f.svc.create("Idea").expect("create");
+        convert_into(
+            f,
+            &d.id,
+            "/code/acme-demo",
+            "feat-x",
+            "/wt/acme-demo/feat-x",
+        );
+        d.id
+    }
+
+    fn request_from(id: &str, path: &str, branch: &str, body: &str) -> WorktreeIngress {
+        WorktreeIngress {
+            draft_id: id.into(),
+            worktree_path: path.into(),
+            branch: branch.into(),
+            kind: IngressKind::Request {
+                title: Some("Need a decision".into()),
+                body: body.into(),
+            },
+        }
+    }
+
+    fn wt() -> WorktreeKey {
+        WorktreeKey {
+            project: "/code/acme-demo".into(),
+            branch: "feat-x".into(),
+        }
+    }
+
+    fn fm(f: &Fixture, id: &str) -> crate::domain::model::InboxDraftFrontmatter {
+        match f.store.get(id).expect("get") {
+            InboxDraftView::Parsed(d) => d.frontmatter,
+            _ => panic!("unparsed"),
+        }
+    }
+
+    // --- Priority (TS-06, TS-32) -------------------------------------------
+
+    // TS-06: P2 by agent; override to P0; clearing hands control back.
+    #[test]
+    fn an_override_is_sticky_until_cleared() {
+        let f = fixture();
+        let id = f.svc.create("Ranked").expect("create").id;
+        assert_eq!(fm(&f, &id).priority, Priority::P2);
+        assert_eq!(fm(&f, &id).priority_source, PrioritySource::Agent);
+
+        let d = f
+            .svc
+            .set_priority(&id, Some(Priority::P0), None)
+            .expect("set");
+        assert_eq!(d.frontmatter.priority, Priority::P0);
+        assert_eq!(d.frontmatter.priority_source, PrioritySource::Operator);
+
+        assert!(
+            f.svc
+                .set_agent_priority(&id, Priority::P3)
+                .expect("agent")
+                .is_none(),
+            "the agent may not move an operator override"
+        );
+        assert_eq!(fm(&f, &id).priority, Priority::P0);
+
+        let d = f.svc.set_priority(&id, None, None).expect("clear");
+        assert_eq!(
+            d.frontmatter.priority,
+            Priority::P0,
+            "clearing keeps the value"
+        );
+        assert_eq!(d.frontmatter.priority_source, PrioritySource::Agent);
+
+        assert!(
+            f.svc
+                .set_agent_priority(&id, Priority::P3)
+                .expect("agent")
+                .is_some()
+        );
+        assert_eq!(fm(&f, &id).priority, Priority::P3);
+    }
+
+    // TS-06 / TS-40: every operator priority change is audited, clear included.
+    #[test]
+    fn priority_changes_are_audited_as_operator() {
+        let f = fixture();
+        let id = f.svc.create("Ranked").expect("create").id;
+        f.svc
+            .set_priority(&id, Some(Priority::P1), None)
+            .expect("set");
+        f.svc.set_priority(&id, None, None).expect("clear");
+
+        let records = f.audit.all();
+        let actions: Vec<_> = records.iter().map(|r| r.action).collect();
+        assert_eq!(
+            actions,
+            ["inbox.priority.changed", "inbox.priority.override_cleared"]
+        );
+        assert!(records.iter().all(|r| r.actor == AuthorKind::Operator));
+        assert_eq!(records[0].from, Some(Priority::P2));
+        assert_eq!(records[0].to, Some(Priority::P1));
+        assert_eq!(records[0].source, Some(PrioritySource::Operator));
+        assert!(records[0].event_id.is_some());
+    }
+
+    // TS-32: a worktree holding the token succeeds (accepted T-01); the audit
+    // and the event both say operator, plus the unauthenticated marker.
+    #[test]
+    fn a_worktree_caller_on_priority_is_recorded_as_operator_with_its_marker() {
+        let f = fixture();
+        let id = f.svc.create("Ranked").expect("create").id;
+        f.svc
+            .set_priority(&id, Some(Priority::P0), Some("worktree".into()))
+            .expect("accepted residual: this succeeds");
+
+        let r = &f.audit.all()[0];
+        assert_eq!(r.actor, AuthorKind::Operator);
+        assert_eq!(r.caller.as_deref(), Some("worktree"));
+
+        let events = f.svc.events(&id).expect("events");
+        let last = events.last().expect("priority_changed");
+        assert_eq!(last.author, AuthorKind::Operator);
+        assert_eq!(last.caller.as_deref(), Some("worktree"));
+    }
+
+    #[test]
+    fn the_list_is_ordered_by_priority_then_newest() {
+        let f = fixture();
+        let older = f.svc.create("Older").expect("create").id;
+        f.svc.create("Newer").expect("create");
+        f.svc.create("Newest").expect("create");
+        // The oldest draft becomes the most urgent and jumps the queue.
+        f.svc
+            .set_priority(&older, Some(Priority::P0), None)
+            .expect("set");
+
+        let listed = f.svc.list(&ListQuery::default()).expect("list");
+        assert_eq!(listed[0].id, older);
+        assert_eq!(listed[0].priority, Priority::P0);
+        assert_eq!(listed[0].priority_source, PrioritySource::Operator);
+        assert!(listed[1..].iter().all(|d| d.priority == Priority::P2));
+    }
+
+    // --- Comments ------------------------------------------------------------
+
+    #[test]
+    fn comments_group_into_overall_and_per_worktree() {
+        let f = fixture();
+        let id = converted(&f);
+        f.svc
+            .add_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Overall,
+                "overall note",
+            )
+            .expect("overall");
+        f.svc
+            .add_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Worktree(wt()),
+                "worktree note",
+            )
+            .expect("worktree");
+        f.svc
+            .ingest(&WorktreeIngress {
+                draft_id: id.clone(),
+                worktree_path: "/wt/acme-demo/feat-x".into(),
+                branch: "feat-x".into(),
+                kind: IngressKind::Comment {
+                    body: "from the agent".into(),
+                },
+            })
+            .expect("agent comment");
+
+        let groups = f.svc.list_comments(&id).expect("groups");
+        assert_eq!(groups.overall.len(), 1);
+        assert_eq!(groups.overall[0].body, "overall note");
+        assert_eq!(groups.overall[0].kind, CommentKind::Note);
+        assert_eq!(groups.worktrees.len(), 1);
+        let g = &groups.worktrees[0];
+        assert_eq!(
+            (g.project.as_str(), g.branch.as_str()),
+            ("/code/acme-demo", "feat-x")
+        );
+        let bodies: Vec<_> = g.comments.iter().map(|c| c.body.as_str()).collect();
+        assert_eq!(bodies, ["worktree note", "from the agent"]);
+        assert_eq!(g.comments[1].author, AuthorKind::WorktreeAgent);
+        assert_eq!(g.comments[1].caller.as_deref(), Some("worktree"));
+    }
+
+    #[test]
+    fn a_converted_worktree_has_a_group_before_anyone_comments() {
+        let f = fixture();
+        let id = converted(&f);
+        let groups = f.svc.list_comments(&id).expect("groups");
+        assert_eq!(groups.worktrees.len(), 1);
+        assert!(groups.worktrees[0].comments.is_empty());
+    }
+
+    #[test]
+    fn a_worktree_comment_must_name_a_converted_worktree() {
+        let f = fixture();
+        let id = converted(&f);
+        let err = f
+            .svc
+            .add_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Worktree(WorktreeKey {
+                    project: "/code/elsewhere".into(),
+                    branch: "nope".into(),
+                }),
+                "stray",
+            )
+            .expect_err("unknown worktree");
+        assert!(matches!(err, InboxServiceError::Invalid(_)), "{err:?}");
+        assert!(f.svc.events(&id).expect("events").is_empty());
+    }
+
+    #[test]
+    fn a_blank_comment_is_refused() {
+        let f = fixture();
+        let id = f.svc.create("x").expect("create").id;
+        let err = f
+            .svc
+            .add_comment(&id, EventAuthor::operator(), Thread::Overall, "   ")
+            .expect_err("blank");
+        assert!(matches!(err, InboxServiceError::Invalid(_)), "{err:?}");
+    }
+
+    #[test]
+    fn a_redacted_comment_reads_back_masked() {
+        let f = fixture();
+        let id = f.svc.create("x").expect("create").id;
+        let e = f
+            .svc
+            .add_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Overall,
+                "oops a secret",
+            )
+            .expect("comment");
+        f.store
+            .append_event(
+                &id,
+                EventAuthor::operator(),
+                None,
+                InboxEventKind::Redacted {
+                    target_event_id: e.event_id.clone(),
+                },
+            )
+            .expect("redact");
+        let groups = f.svc.list_comments(&id).expect("groups");
+        assert_eq!(groups.overall.len(), 1, "the tombstone is not itself a row");
+        assert_eq!(groups.overall[0].body, REDACTED_BODY);
+        assert!(groups.overall[0].redacted);
+    }
+
+    #[test]
+    fn a_secret_in_a_comment_is_kept_and_flagged() {
+        let f = fixture();
+        let id = f.svc.create("x").expect("create").id;
+        let body = "token sk-TEST-0000000000000000000000000000";
+        f.svc
+            .add_comment(&id, EventAuthor::operator(), Thread::Overall, body)
+            .expect("comment");
+        let row = &f.svc.list_comments(&id).expect("groups").overall[0];
+        assert_eq!(row.body, body, "the scan warns; it never rewrites");
+        assert!(!row.warnings.is_empty());
+    }
+
+    // --- Requests (TS-11, TS-12, TS-37) -------------------------------------
+
+    // TS-11: a request from a converted worktree lands open in its group.
+    #[test]
+    fn a_request_from_a_converted_worktree_opens_in_its_group() {
+        let f = fixture();
+        let observed = Arc::new(Observed::default());
+        f.svc.set_request_observer(observed.clone());
+        let id = converted(&f);
+
+        let event = f
+            .svc
+            .ingest(&request_from(
+                &id,
+                "/wt/acme-demo/feat-x",
+                "feat-x",
+                "Which db?",
+            ))
+            .expect("ingest");
+        assert_eq!(event.author, AuthorKind::WorktreeAgent);
+
+        let requests = f.svc.list_requests(&id).expect("requests");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].status, RequestStatus::Open);
+        assert_eq!(requests[0].worktree, wt());
+        assert_eq!(requests[0].title, "Need a decision");
+
+        let groups = f.svc.list_comments(&id).expect("groups");
+        let row = &groups.worktrees[0].comments[0];
+        assert_eq!(row.kind, CommentKind::Request);
+        assert_eq!(
+            row.request_id.as_deref(),
+            Some(requests[0].request_id.as_str())
+        );
+
+        let seen = observed.0.lock().unwrap().clone();
+        assert_eq!(seen, vec![(id, requests[0].request_id.clone())]);
+    }
+
+    #[test]
+    fn a_trailing_slash_on_the_claimed_path_still_matches() {
+        let f = fixture();
+        let id = converted(&f);
+        f.svc
+            .ingest(&request_from(&id, "/wt/acme-demo/feat-x/", "feat-x", "b"))
+            .expect("ingest");
+    }
+
+    #[test]
+    fn a_request_without_a_title_takes_its_first_line() {
+        let f = fixture();
+        let id = converted(&f);
+        f.svc
+            .ingest(&WorktreeIngress {
+                draft_id: id.clone(),
+                worktree_path: "/wt/acme-demo/feat-x".into(),
+                branch: "feat-x".into(),
+                kind: IngressKind::Request {
+                    title: None,
+                    body: "Which database?\nDetails follow.".into(),
+                },
+            })
+            .expect("ingest");
+        assert_eq!(
+            f.svc.list_requests(&id).unwrap()[0].title,
+            "Which database?"
+        );
+    }
+
+    // TS-12: a worktree not in conversions[] is refused; nothing appended.
+    #[test]
+    fn a_request_from_a_foreign_worktree_is_refused() {
+        let f = fixture();
+        let id = converted(&f);
+        for (path, branch) in [
+            ("/wt/somewhere/else", "feat-x"),
+            // Right path, wrong branch: control.env and the record disagree.
+            ("/wt/acme-demo/feat-x", "other"),
+        ] {
+            let err = f
+                .svc
+                .ingest(&request_from(&id, path, branch, "b"))
+                .expect_err("foreign");
+            assert!(
+                matches!(err, InboxServiceError::ForeignWorktree(_)),
+                "{err:?}"
+            );
+        }
+        assert!(f.svc.events(&id).expect("events").is_empty());
+    }
+
+    #[test]
+    fn a_failed_conversion_does_not_vouch_for_a_worktree() {
+        let f = fixture();
+        let id = f.svc.create("Idea").expect("create").id;
+        let target = ConversionTarget {
+            project_path: "/code/acme-demo".into(),
+            branch: "feat-x".into(),
+            base_branch: None,
+            agent_id: None,
+            prompt: "go".into(),
+        };
+        let mut failed = ConversionOutcome::failed(&target, "boom".into(), "t".into());
+        failed.worktree_path = Some("/wt/acme-demo/feat-x".into());
+        f.store
+            .merge_frontmatter(
+                &id,
+                FrontmatterAuthor::Job,
+                FrontmatterPatch {
+                    conversions: Some(vec![serde_yaml::to_value(failed).unwrap()]),
+                    ..Default::default()
+                },
+            )
+            .expect("record");
+        assert!(matches!(
+            f.svc
+                .ingest(&request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b")),
+            Err(InboxServiceError::ForeignWorktree(_))
+        ));
+    }
+
+    // TS-37: a forged inbox-origin.json naming another item is refused by the
+    // path cross-check.
+    #[test]
+    fn a_forged_origin_naming_another_item_is_refused() {
+        let f = fixture();
+        let mine = converted(&f);
+        let theirs = f.svc.create("Someone else's").expect("create").id;
+        convert_into(&f, &theirs, "/code/beta", "feat-y", "/wt/beta/feat-y");
+
+        let err = f
+            .svc
+            .ingest(&request_from(
+                &theirs,
+                "/wt/acme-demo/feat-x",
+                "feat-x",
+                "b",
+            ))
+            .expect_err("forged origin");
+        assert!(
+            matches!(err, InboxServiceError::ForeignWorktree(_)),
+            "{err:?}"
+        );
+        assert!(f.svc.events(&theirs).expect("events").is_empty());
+        assert!(f.svc.events(&mine).expect("events").is_empty());
+    }
+
+    // --- Limits (TS-13) ------------------------------------------------------
+
+    fn tight(requests: usize, comments: usize, open: usize) -> InboxLimits {
+        InboxLimits {
+            max_open_requests: open,
+            requests: RateLimit {
+                max: requests,
+                window: Duration::from_secs(60),
+            },
+            comments: RateLimit {
+                max: comments,
+                window: Duration::from_secs(60),
+            },
+            ..InboxLimits::default()
+        }
+    }
+
+    #[test]
+    fn an_oversized_body_or_title_is_refused() {
+        let f = fixture();
+        let id = converted(&f);
+        let huge = "x".repeat(f.svc.limits.max_body_bytes + 1);
+        assert!(matches!(
+            f.svc
+                .ingest(&request_from(&id, "/wt/acme-demo/feat-x", "feat-x", &huge)),
+            Err(InboxServiceError::TooLarge { .. })
+        ));
+        assert!(matches!(
+            f.svc
+                .add_comment(&id, EventAuthor::operator(), Thread::Overall, &huge),
+            Err(InboxServiceError::TooLarge { .. })
+        ));
+        let long_title = WorktreeIngress {
+            kind: IngressKind::Request {
+                title: Some("t".repeat(f.svc.limits.max_title_chars + 1)),
+                body: "b".into(),
+            },
+            ..request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b")
+        };
+        assert!(matches!(
+            f.svc.ingest(&long_title),
+            Err(InboxServiceError::TooLarge { .. })
+        ));
+        assert!(f.svc.events(&id).expect("events").is_empty());
+    }
+
+    #[test]
+    fn a_request_flood_is_rate_limited_per_worktree() {
+        let f = fixture_with(tight(2, 100, 100));
+        let id = converted(&f);
+        convert_into(&f, &id, "/code/acme-demo", "feat-z", "/wt/acme-demo/feat-z");
+        let from_x = request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b");
+        f.svc.ingest(&from_x).expect("1");
+        f.svc.ingest(&from_x).expect("2");
+        assert!(matches!(
+            f.svc.ingest(&from_x),
+            Err(InboxServiceError::RateLimited)
+        ));
+        // Another worktree is not starved by the first one's flood.
+        f.svc
+            .ingest(&request_from(&id, "/wt/acme-demo/feat-z", "feat-z", "b"))
+            .expect("other worktree");
+        assert_eq!(f.svc.list_requests(&id).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn a_comment_flood_is_rate_limited() {
+        let f = fixture_with(tight(100, 2, 100));
+        let id = converted(&f);
+        let c = WorktreeIngress {
+            kind: IngressKind::Comment { body: "c".into() },
+            ..request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b")
+        };
+        f.svc.ingest(&c).expect("1");
+        f.svc.ingest(&c).expect("2");
+        assert!(matches!(
+            f.svc.ingest(&c),
+            Err(InboxServiceError::RateLimited)
+        ));
+    }
+
+    #[test]
+    fn open_requests_per_item_are_bounded() {
+        let f = fixture_with(tight(100, 100, 2));
+        let id = converted(&f);
+        let r = request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b");
+        f.svc.ingest(&r).expect("1");
+        f.svc.ingest(&r).expect("2");
+        assert!(matches!(
+            f.svc.ingest(&r),
+            Err(InboxServiceError::TooManyOpenRequests(_))
+        ));
+        assert_eq!(f.svc.list_requests(&id).unwrap().len(), 2, "depth bounded");
+    }
+
+    // --- Audit (TS-40, TS-32) -------------------------------------------------
+
+    #[test]
+    fn ingress_and_comments_are_audited_metadata_only() {
+        let f = fixture();
+        let id = converted(&f);
+        let secret = "sk-TEST-0000000000000000 PLEASE-DO-NOT-LOG";
+        f.svc
+            .add_comment(&id, EventAuthor::operator(), Thread::Overall, secret)
+            .expect("comment");
+        f.svc
+            .ingest(&request_from(&id, "/wt/acme-demo/feat-x", "feat-x", secret))
+            .expect("request");
+        f.svc
+            .ingest(&WorktreeIngress {
+                kind: IngressKind::Comment {
+                    body: secret.into(),
+                },
+                ..request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b")
+            })
+            .expect("agent comment");
+
+        let records = f.audit.all();
+        let actions: Vec<_> = records.iter().map(|r| r.action).collect();
+        assert_eq!(
+            actions,
+            [
+                "inbox.comment.added",
+                "inbox.request.opened",
+                "inbox.comment.added"
+            ]
+        );
+        for r in &records {
+            let json = serde_json::to_string(r).unwrap();
+            assert!(!json.contains("PLEASE-DO-NOT-LOG"), "body leaked: {json}");
+            assert!(!json.contains("Need a decision"), "title leaked: {json}");
+            assert!(r.event_id.is_some());
+        }
+        assert_eq!(records[0].actor, AuthorKind::Operator);
+        assert_eq!(records[0].thread, Some("overall"));
+        // The worktree path is accepted as declared: say so in the record.
+        assert_eq!(records[1].actor, AuthorKind::WorktreeAgent);
+        assert_eq!(records[1].caller.as_deref(), Some("worktree"));
+        assert_eq!(records[1].branch.as_deref(), Some("feat-x"));
+        assert!(records[1].request_id.is_some());
+        assert_eq!(records[2].thread, Some("worktree"));
+    }
+
+    #[test]
+    fn a_refused_ingress_is_not_audited_as_accepted() {
+        let f = fixture();
+        let id = converted(&f);
+        let _ = f
+            .svc
+            .ingest(&request_from(&id, "/wt/nowhere", "feat-x", "b"));
+        assert!(
+            f.audit
+                .all()
+                .iter()
+                .all(|r| r.action != "inbox.request.opened")
+        );
+    }
+
+    // --- Parsing ---------------------------------------------------------------
+
+    #[test]
+    fn non_inbox_runtime_events_are_not_ingress() {
+        let raw = serde_json::json!({"type": "agent_stopped", "worktreeId": "w", "branch": "b"});
+        assert!(parse_worktree_ingress(&raw).is_none());
+    }
+
+    #[test]
+    fn a_request_event_parses() {
+        let raw = serde_json::json!({
+            "type": "inbox.request", "worktreeId": "w", "branch": "feat-x",
+            "draftId": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "worktreePath": "/wt/x",
+            "title": "T", "body": "B",
+        });
+        let got = parse_worktree_ingress(&raw).expect("inbox").expect("valid");
+        assert_eq!(got.draft_id, "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(got.worktree_path, "/wt/x");
+        assert_eq!(got.branch, "feat-x");
+        assert_eq!(
+            got.kind,
+            IngressKind::Request {
+                title: Some("T".into()),
+                body: "B".into()
+            }
+        );
+    }
+
+    #[test]
+    fn a_comment_event_parses() {
+        let raw = serde_json::json!({
+            "type": "inbox.comment", "worktreeId": "w", "branch": "b",
+            "draftId": "01ARZ3NDEKTSV4RRFFQ69G5FAV", "worktreePath": "/wt/x", "body": "B",
+        });
+        let got = parse_worktree_ingress(&raw).expect("inbox").expect("valid");
+        assert_eq!(got.kind, IngressKind::Comment { body: "B".into() });
+    }
+
+    #[test]
+    fn a_malformed_inbox_event_is_an_error_not_a_runtime_event() {
+        for raw in [
+            serde_json::json!({"type": "inbox.request", "branch": "b", "worktreePath": "/x", "body": "B"}),
+            serde_json::json!({"type": "inbox.request", "branch": "b", "draftId": "D", "body": "B"}),
+            serde_json::json!({"type": "inbox.request", "draftId": "D", "worktreePath": "/x", "body": "B"}),
+            serde_json::json!({"type": "inbox.comment", "branch": "b", "draftId": "D", "worktreePath": "/x"}),
+            serde_json::json!({"type": "inbox.frobnicate", "branch": "b", "draftId": "D", "worktreePath": "/x", "body": "B"}),
+        ] {
+            assert!(
+                matches!(parse_worktree_ingress(&raw), Some(Err(_))),
+                "must reject {raw}"
+            );
+        }
     }
 }

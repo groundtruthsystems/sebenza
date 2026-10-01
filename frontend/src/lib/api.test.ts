@@ -252,3 +252,122 @@ describe("feedbackState reaches the store", () => {
     expect(worktree.agent).toBe("awaiting-permission");
   });
 });
+
+describe("inbox priority, comments and requests", () => {
+  type Seen = { url: string; method: string; body: string; auth: string | null };
+
+  function recordFetch(reply: unknown, status = 200) {
+    const seen: Seen[] = [];
+    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+      seen.push({
+        url: urlOf(input),
+        method: init?.method ?? (input instanceof Request ? input.method : "GET"),
+        body: await bodyOf(input, init),
+        auth: headers.get("authorization"),
+      });
+      return new Response(JSON.stringify(reply), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return seen;
+  }
+
+  const draft = {
+    id: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+    title: "Idea",
+    status: "Draft",
+    createdAt: "t",
+    updatedAt: "t",
+    body: "",
+    bodyHash: "h",
+    project: null,
+    priority: "P0",
+    prioritySource: "operator",
+    conversions: [],
+    raw: null,
+  };
+
+  afterEach(() => {
+    delete window.__SEBENZA_CONTROL_TOKEN__;
+  });
+
+  it("sets and clears the priority override with the control token", async () => {
+    const seen = recordFetch(draft);
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+
+    const set = await api.setInboxPriority(draft.id, "P0");
+    expect(set.priority).toBe("P0");
+    await api.setInboxPriority(draft.id, null);
+
+    expect(seen[0].url).toContain(`/api/inbox/${draft.id}/priority`);
+    expect(seen[0].method).toBe("PATCH");
+    expect(seen[0].auth).toBe("Bearer tok");
+    expect(JSON.parse(seen[0].body)).toEqual({ priority: "P0" });
+    // `null` must be sent explicitly: an absent key is refused, not a clear.
+    expect(JSON.parse(seen[1].body)).toEqual({ priority: null });
+  });
+
+  it("reads grouped comments and posts an operator comment", async () => {
+    const groups = {
+      overall: [],
+      worktrees: [{ project: "/code/acme-demo", branch: "feat-x", comments: [] }],
+    };
+    const seen = recordFetch(groups);
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+
+    const got = await api.fetchInboxComments(draft.id);
+    expect(got.worktrees[0].branch).toBe("feat-x");
+    expect(seen[0].url).toContain(`/api/inbox/${draft.id}/comments`);
+    expect(seen[0].method).toBe("GET");
+
+    await api.postInboxComment(draft.id, "looks good", {
+      project: "/code/acme-demo",
+      branch: "feat-x",
+    });
+    expect(seen[1].method).toBe("POST");
+    expect(seen[1].auth).toBe("Bearer tok");
+    expect(JSON.parse(seen[1].body)).toEqual({
+      body: "looks good",
+      worktree: { project: "/code/acme-demo", branch: "feat-x" },
+    });
+
+    await api.postInboxComment(draft.id, "overall note");
+    expect(JSON.parse(seen[2].body)).toEqual({ body: "overall note" });
+  });
+
+  it("lists an item's requests", async () => {
+    const seen = recordFetch({ requests: [] });
+    const api = await loadApiAt("/inbox");
+    const got = await api.fetchInboxRequests(draft.id);
+    expect(got.requests).toEqual([]);
+    expect(seen[0].url).toContain(`/api/inbox/${draft.id}/requests`);
+  });
+
+  it("surfaces a rate-limit refusal as the server's message", async () => {
+    recordFetch({ error: "rate limit exceeded; try again shortly" }, 429);
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+    await expect(api.postInboxComment(draft.id, "again")).rejects.toThrow(/rate limit/);
+  });
+});
+
+describe("inbox priority schema", () => {
+  it("defaults priority for a server that predates it", async () => {
+    const { InboxDraftSummarySchema } = await import("./api-contract");
+    const parsed = InboxDraftSummarySchema.parse({
+      id: "x",
+      title: "t",
+      status: "Draft",
+      updatedAt: "t",
+      project: null,
+      isRaw: false,
+    });
+    expect(parsed.priority).toBe("P2");
+    expect(parsed.prioritySource).toBe("agent");
+  });
+});

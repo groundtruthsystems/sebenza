@@ -839,4 +839,247 @@ mod tests {
 
         fs::remove_dir_all(&base).ok();
     }
+
+    // --- inbox ingress: `sebenza-agentctl request|comment` ------------------
+
+    /// A worktree as Sebenza lays it out: agentctl, control.env and
+    /// runtime.env under the git dir; inbox-origin.json under the worktree.
+    struct CtlWorktree {
+        base: PathBuf,
+        agentctl: PathBuf,
+        worktree: PathBuf,
+    }
+
+    fn ctl_worktree(port: u16, origin: Option<&str>) -> CtlWorktree {
+        let base = std::env::temp_dir().join(format!("sebenza-ctl-{}", random_hex(4)));
+        let git_dir = base.join("git");
+        let worktree = base.join("wt");
+        fs::create_dir_all(worktree.join(".ai/sebenza")).unwrap();
+        ensure_agent_runtime_artifacts(&git_dir.to_string_lossy(), &worktree.to_string_lossy())
+            .unwrap();
+        let control = crate::adapters::fs::build_control_env_map(
+            &format!("http://127.0.0.1:{port}/api/runtime/events"),
+            "tok-test",
+            "wt-id-1",
+            "feat-x",
+            &git_dir.to_string_lossy(),
+        );
+        crate::adapters::fs::write_control_env(&git_dir.to_string_lossy(), &control).unwrap();
+        let runtime = std::collections::HashMap::from([(
+            "SEBENZA_WORKTREE_PATH".to_string(),
+            worktree.to_string_lossy().to_string(),
+        )]);
+        fs::write(
+            git_dir.join(".ai/sebenza/runtime.env"),
+            crate::adapters::fs::render_env_file(&runtime),
+        )
+        .unwrap();
+        if let Some(draft) = origin {
+            fs::write(
+                worktree.join(".ai/sebenza/inbox-origin.json"),
+                json!({ "draftId": draft }).to_string(),
+            )
+            .unwrap();
+        }
+        CtlWorktree {
+            agentctl: git_dir.join(".ai/sebenza/sebenza-agentctl"),
+            base,
+            worktree,
+        }
+    }
+
+    fn have_python() -> bool {
+        std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    /// Accept one HTTP request, answer 200, and hand back its body. `None`
+    /// when nothing connects within a few seconds.
+    fn capture_one_post(
+        listener: std::net::TcpListener,
+    ) -> std::thread::JoinHandle<Option<(String, String)>> {
+        use std::io::{BufRead, BufReader, Read, Write};
+        std::thread::spawn(move || {
+            listener.set_nonblocking(true).ok()?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let (stream, _) = loop {
+                match listener.accept() {
+                    Ok(pair) => break pair,
+                    Err(_) if std::time::Instant::now() < deadline => {
+                        std::thread::sleep(std::time::Duration::from_millis(20))
+                    }
+                    Err(_) => return None,
+                }
+            };
+            stream.set_nonblocking(false).ok()?;
+            let mut reader = BufReader::new(stream.try_clone().ok()?);
+            let mut headers = String::new();
+            let mut len = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).ok()?;
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+                headers.push_str(&line);
+            }
+            let mut body = vec![0u8; len];
+            reader.read_exact(&mut body).ok()?;
+            let mut stream = stream;
+            let reply = "{\"ok\":true}";
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+            Some((headers, String::from_utf8_lossy(&body).to_string()))
+        })
+    }
+
+    fn run_ctl(ctl: &CtlWorktree, args: &[&str], stdin: &str) -> std::process::Output {
+        use std::io::Write;
+        let mut child = std::process::Command::new("python3")
+            .arg(&ctl.agentctl)
+            .args(args)
+            // The worktree path must come from Sebenza's own files, not
+            // whatever the test runner happened to export.
+            .env_remove("SEBENZA_WORKTREE_PATH")
+            .current_dir(&ctl.base)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn python3");
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    // TS-32: agentctl offers no operator decisions (accepted T-01).
+    #[test]
+    fn agentctl_can_ask_and_comment_but_never_decide() {
+        assert!(AGENTCTL_SCRIPT.contains("add_parser(\"request\""));
+        assert!(AGENTCTL_SCRIPT.contains("add_parser(\"comment\""));
+        for verb in ["confirm", "priority", "convert", "reject", "redeliver"] {
+            assert!(
+                !AGENTCTL_SCRIPT.contains(&format!("add_parser(\"{verb}\"")),
+                "agentctl must not offer `{verb}`"
+            );
+        }
+        if !have_python() {
+            eprintln!("python3 not found; skipping the --help half of this test");
+            return;
+        }
+        let ctl = ctl_worktree(1, None);
+        let out = run_ctl(&ctl, &["--help"], "");
+        let help = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            help.contains("request") && help.contains("comment"),
+            "{help}"
+        );
+        for verb in ["confirm", "priority", "convert"] {
+            assert!(!help.contains(verb), "help offers `{verb}`: {help}");
+        }
+        fs::remove_dir_all(&ctl.base).ok();
+    }
+
+    // TS-11: the request carries the origin item from inbox-origin.json and
+    // the worktree's own path, so the server can cross-check them.
+    #[test]
+    fn agentctl_request_posts_the_origin_item_and_worktree() {
+        if !have_python() {
+            eprintln!("python3 not found; skipping");
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = capture_one_post(listener);
+        let ctl = ctl_worktree(port, Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+
+        let out = run_ctl(
+            &ctl,
+            &[
+                "request",
+                "--title",
+                "Need a decision",
+                "--body",
+                "Which db?",
+            ],
+            "",
+        );
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let (headers, body) = server.join().unwrap().expect("a POST arrived");
+        assert!(headers.contains("Bearer tok-test"), "{headers}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["type"], "inbox.request");
+        assert_eq!(v["draftId"], "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        assert_eq!(v["worktreePath"], ctl.worktree.to_string_lossy().as_ref());
+        assert_eq!(v["branch"], "feat-x");
+        assert_eq!(v["worktreeId"], "wt-id-1");
+        assert_eq!(v["title"], "Need a decision");
+        assert_eq!(v["body"], "Which db?");
+        assert_eq!(v["caller"], "worktree");
+        fs::remove_dir_all(&ctl.base).ok();
+    }
+
+    #[test]
+    fn agentctl_comment_reads_its_body_from_stdin() {
+        if !have_python() {
+            eprintln!("python3 not found; skipping");
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = capture_one_post(listener);
+        let ctl = ctl_worktree(port, Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+
+        let out = run_ctl(&ctl, &["comment", "--body", "-"], "progress: half done\n");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+
+        let (_, body) = server.join().unwrap().expect("a POST arrived");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["type"], "inbox.comment");
+        assert_eq!(v["body"], "progress: half done");
+        fs::remove_dir_all(&ctl.base).ok();
+    }
+
+    #[test]
+    fn agentctl_request_outside_an_inbox_worktree_fails_without_posting() {
+        if !have_python() {
+            eprintln!("python3 not found; skipping");
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = capture_one_post(listener);
+        let ctl = ctl_worktree(port, None);
+
+        let out = run_ctl(&ctl, &["request", "--body", "help"], "");
+        assert!(!out.status.success());
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains("inbox"),
+            "the agent should learn why"
+        );
+        assert!(server.join().unwrap().is_none(), "nothing may be posted");
+        fs::remove_dir_all(&ctl.base).ok();
+    }
 }

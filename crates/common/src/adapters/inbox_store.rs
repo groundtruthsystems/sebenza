@@ -397,6 +397,18 @@ impl InboxStore {
         id: &str,
         write: PriorityWrite,
     ) -> Result<Option<InboxEvent>, InboxStoreError> {
+        self.set_priority_by(id, write, None)
+    }
+
+    /// As [`Self::set_priority`], stamping the event with the self-declared
+    /// `caller` marker. The marker is unauthenticated (T-01): it records what
+    /// the caller said it was, not what it is.
+    pub fn set_priority_by(
+        &self,
+        id: &str,
+        write: PriorityWrite,
+        caller: Option<String>,
+    ) -> Result<Option<InboxEvent>, InboxStoreError> {
         self.locked(id, || {
             let mut draft = self.require_writable(id)?;
             let fm = &mut draft.frontmatter;
@@ -425,6 +437,10 @@ impl InboxStore {
             if to == from {
                 return Ok(None);
             }
+            let author = EventAuthor {
+                caller: caller.or(author.caller),
+                ..author
+            };
             let event = self.append_event(
                 id,
                 author,

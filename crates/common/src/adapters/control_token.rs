@@ -39,6 +39,13 @@ pub fn load_control_token() -> Result<String, String> {
     Ok(token)
 }
 
+/// Use `token` as the control token for the rest of this process, without
+/// reading or writing `~/.config/sebenza/control-token`. For tests that drive
+/// guarded routes, which must never touch the operator's real token.
+pub fn pin_control_token(token: &str) {
+    *CACHED_TOKEN.lock().unwrap() = Some(token.to_string());
+}
+
 #[cfg(unix)]
 fn set_mode_600(path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;

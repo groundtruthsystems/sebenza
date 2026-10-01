@@ -130,6 +130,7 @@ pub enum RequestStatus {
 
 /// The current state of one request, folded from the log.
 #[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct RequestView {
     pub request_id: String,
     pub worktree: WorktreeKey,

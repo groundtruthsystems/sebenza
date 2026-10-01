@@ -318,6 +318,40 @@ pub fn origin_is_acceptable(
     }
 }
 
+/// True when the request's `Host` names this loopback daemon.
+///
+/// The origin check compares `Origin` against an origin derived from `Host`,
+/// so on its own it cannot see DNS rebinding: a page on `evil.test` that
+/// rebinds to 127.0.0.1 sends a matching `Host: evil.test`. Only loopback
+/// names pass, plus whatever the operator listed in `extra` (from
+/// `SEBENZA_ALLOWED_HOSTS`) for a deliberately non-loopback bind. The port is
+/// ignored; an absent or empty `Host` is refused.
+pub fn host_is_allowed(host: Option<&str>, extra: &[String]) -> bool {
+    let _ = (host, extra);
+    todo!("host allowlist")
+}
+
+/// Hosts the operator allows beyond loopback, from `SEBENZA_ALLOWED_HOSTS`
+/// (comma-separated, ports ignored).
+pub fn allowed_hosts_from_env() -> Vec<String> {
+    std::env::var("SEBENZA_ALLOWED_HOSTS")
+        .unwrap_or_default()
+        .split(',')
+        .map(|h| h.trim().to_ascii_lowercase())
+        .filter(|h| !h.is_empty())
+        .collect()
+}
+
+/// Normalise the self-declared `X-Sebenza-Caller` marker.
+///
+/// It is unauthenticated (T-01) and is written into audit records, so it is
+/// reduced to a short lowercase token: anything else is dropped rather than
+/// echoed, which keeps caller-chosen text out of the logs.
+pub fn sanitize_caller_marker(raw: Option<&str>) -> Option<String> {
+    let _ = raw;
+    todo!("caller marker")
+}
+
 /// True when `path` is safe to store as an inbox project link and later hand
 /// to git as a worktree location.
 ///
@@ -400,6 +434,58 @@ mod tests {
 
     fn guard(method: &str, bearer: Option<&str>, origin: Option<&str>) -> InboxGuard {
         guard_inbox_request(method, bearer, origin, None, TOKEN, SELF)
+    }
+
+    #[test]
+    fn loopback_hosts_are_allowed_with_or_without_a_port() {
+        for host in [
+            "localhost",
+            "localhost:5111",
+            "127.0.0.1:5111",
+            "127.0.0.2",
+            "[::1]:5111",
+            "LOCALHOST:5173",
+        ] {
+            assert!(host_is_allowed(Some(host), &[]), "{host}");
+        }
+    }
+
+    // TS-41: a rebinding page sends its own name as Host.
+    #[test]
+    fn a_foreign_or_missing_host_is_refused() {
+        for host in [
+            Some("evil.test"),
+            Some("evil.test:5111"),
+            Some("127.0.0.1.evil.test"),
+            Some("localhost.evil.test"),
+            Some(""),
+            None,
+        ] {
+            assert!(!host_is_allowed(host, &[]), "{host:?}");
+        }
+    }
+
+    #[test]
+    fn an_operator_listed_host_is_allowed() {
+        let extra = vec!["devbox.lan".to_string()];
+        assert!(host_is_allowed(Some("devbox.lan:5111"), &extra));
+        assert!(!host_is_allowed(Some("other.lan:5111"), &extra));
+    }
+
+    #[test]
+    fn a_caller_marker_is_a_short_lowercase_token_or_nothing() {
+        assert_eq!(
+            sanitize_caller_marker(Some("worktree")).as_deref(),
+            Some("worktree")
+        );
+        assert_eq!(
+            sanitize_caller_marker(Some(" CLI ")).as_deref(),
+            Some("cli")
+        );
+        assert_eq!(sanitize_caller_marker(None), None);
+        assert_eq!(sanitize_caller_marker(Some("")), None);
+        assert_eq!(sanitize_caller_marker(Some("a\nforged=line")), None);
+        assert_eq!(sanitize_caller_marker(Some(&"x".repeat(33))), None);
     }
 
     #[test]

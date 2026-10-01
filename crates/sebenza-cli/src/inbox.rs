@@ -37,6 +37,19 @@ enum InboxCommand {
         watch: bool,
     },
     Job(String),
+    /// `None` clears the override.
+    Priority {
+        id: String,
+        priority: Option<String>,
+    },
+    Comment {
+        id: String,
+        body: String,
+        /// `project:branch`; absent posts to the overall thread.
+        worktree: Option<(String, String)>,
+    },
+    Comments(String),
+    Requests(String),
 }
 
 fn usage() -> String {
@@ -147,6 +160,9 @@ fn parse(args: &[String]) -> Result<Option<InboxCommand>> {
             id: need(0, "draft id")?,
             yes: flag(args, "--yes") || flag(args, "-y"),
         })),
+        "priority" | "comment" | "comments" | "requests" => {
+            Err(anyhow!("{} is not implemented yet", args[0]))
+        }
         other => Err(anyhow!("Unknown inbox command: {other}")),
     }
 }
@@ -401,6 +417,10 @@ pub async fn run(args: &[String], port: u16) -> i32 {
                 }
             }
             InboxCommand::Job(job_id) => print_job(&http.inbox_job(&job_id).await?),
+            InboxCommand::Priority { .. }
+            | InboxCommand::Comment { .. }
+            | InboxCommand::Comments(_)
+            | InboxCommand::Requests(_) => todo!("inbox collaboration commands"),
             InboxCommand::Rm { id, yes } => {
                 http.inbox_delete(&id, yes).await?;
                 println!("Deleted {id}.");
@@ -591,6 +611,97 @@ mod tests {
                 assert_eq!(specs, vec!["/code/acme:b:go".to_string()]);
             }
             _ => panic!("expected Convert"),
+        }
+    }
+
+    #[test]
+    fn priority_takes_a_level_or_clear() {
+        let cmd = parse(&a(&["priority", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "p0"]))
+            .expect("parse")
+            .expect("command");
+        match cmd {
+            InboxCommand::Priority { priority, .. } => assert_eq!(priority.as_deref(), Some("P0")),
+            _ => panic!("expected Priority"),
+        }
+        let cmd = parse(&a(&["priority", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "clear"]))
+            .expect("parse")
+            .expect("command");
+        match cmd {
+            InboxCommand::Priority { priority, .. } => assert_eq!(priority, None),
+            _ => panic!("expected Priority"),
+        }
+        assert!(parse(&a(&["priority", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "P7"])).is_err());
+        assert!(parse(&a(&["priority", "01ARZ3NDEKTSV4RRFFQ69G5FAV"])).is_err());
+    }
+
+    #[test]
+    fn comment_posts_overall_or_to_a_worktree() {
+        let cmd = parse(&a(&["comment", "01ARZ3NDEKTSV4RRFFQ69G5FAV", "looks good"]))
+            .expect("parse")
+            .expect("command");
+        match cmd {
+            InboxCommand::Comment { body, worktree, .. } => {
+                assert_eq!(body, "looks good");
+                assert_eq!(worktree, None);
+            }
+            _ => panic!("expected Comment"),
+        }
+        let cmd = parse(&a(&[
+            "comment",
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "--worktree",
+            "/code/acme-demo:feat/x",
+            "try sqlite",
+        ]))
+        .expect("parse")
+        .expect("command");
+        match cmd {
+            InboxCommand::Comment { body, worktree, .. } => {
+                assert_eq!(body, "try sqlite", "the --worktree value is not the body");
+                assert_eq!(
+                    worktree,
+                    Some(("/code/acme-demo".to_string(), "feat/x".to_string()))
+                );
+            }
+            _ => panic!("expected Comment"),
+        }
+        assert!(parse(&a(&["comment", "01ARZ3NDEKTSV4RRFFQ69G5FAV"])).is_err());
+        assert!(
+            parse(&a(&[
+                "comment",
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                "--worktree",
+                "no-branch",
+                "x"
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn comments_and_requests_take_an_id() {
+        assert!(matches!(
+            parse(&a(&["comments", "01ARZ3NDEKTSV4RRFFQ69G5FAV"])).unwrap(),
+            Some(InboxCommand::Comments(_))
+        ));
+        assert!(matches!(
+            parse(&a(&["requests", "01ARZ3NDEKTSV4RRFFQ69G5FAV"])).unwrap(),
+            Some(InboxCommand::Requests(_))
+        ));
+        assert!(parse(&a(&["requests"])).is_err());
+    }
+
+    // FR-33: the CLI reaches every new route.
+    #[test]
+    fn usage_lists_the_collaboration_commands() {
+        let u = usage();
+        for cmd in [
+            "inbox priority",
+            "inbox comment ",
+            "inbox comments",
+            "inbox requests",
+        ] {
+            assert!(u.contains(cmd), "usage is missing {cmd}");
         }
     }
 }

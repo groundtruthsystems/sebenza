@@ -192,6 +192,7 @@ pub fn spawn_background_loops(state: AppState) {
 
 /// A JSON error body `{ "error": "..." }` with an HTTP status (mirrors
 /// `ErrorResponseSchema`).
+#[derive(Debug)]
 pub struct ApiError {
     pub status: StatusCode,
     pub message: String,
@@ -2109,7 +2110,7 @@ async fn remove_project(
 
 /// Agent → backend control channel. Applies a runtime event to whichever
 /// project owns the worktree id, recording a notification. Bearer-token authed.
-async fn runtime_event(
+pub(crate) async fn runtime_event(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,

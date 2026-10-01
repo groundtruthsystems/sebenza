@@ -5,7 +5,10 @@
 //! [`guard_inbox_request`] — a control token *and* a same-origin check, neither
 //! substituting for the other.
 
-use crate::domain::model::{DraftStatus, FileRevision, InboxDraft, InboxDraftView};
+use crate::domain::inbox_events::{Thread, WorktreeKey};
+use crate::domain::model::{
+    DraftStatus, FileRevision, InboxDraft, InboxDraftView, Priority, PrioritySource,
+};
 use crate::domain::policies::{
     InboxGuard, InboxGuardDenial, guard_inbox_request, is_safe_project_path, origin_is_acceptable,
 };
@@ -15,7 +18,7 @@ use crate::services::inbox_convert::{
 };
 use crate::services::inbox_jobs::{JobEvent, JobSnapshot, JobSubscription};
 use crate::services::inbox_service::{
-    DraftSummary, InboxService, InboxServiceError, ListQuery, ProjectLink,
+    CommentGroups, DraftSummary, InboxService, InboxServiceError, ListQuery, ProjectLink,
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -63,6 +66,8 @@ pub struct DraftSummaryWire {
     pub status: DraftStatus,
     pub updated_at: String,
     pub project: Option<ProjectLinkWire>,
+    pub priority: Priority,
+    pub priority_source: PrioritySource,
     pub is_raw: bool,
 }
 
@@ -74,6 +79,8 @@ impl From<DraftSummary> for DraftSummaryWire {
             status: s.status,
             updated_at: s.updated_at,
             project: s.project.map(Into::into),
+            priority: s.priority,
+            priority_source: s.priority_source,
             is_raw: s.is_raw,
         }
     }
@@ -93,6 +100,9 @@ pub struct DraftWire {
     pub body: String,
     pub body_hash: String,
     pub project: Option<ProjectLinkWire>,
+    pub priority: Priority,
+    /// `operator` while an override stands; the agent may not move it then.
+    pub priority_source: PrioritySource,
     /// Every wave this draft has produced, so a second conversion can start
     /// from the last one rather than a blank form.
     pub conversions: Vec<serde_yaml::Value>,
@@ -118,6 +128,8 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
             updated_at: d.frontmatter.updated_at,
             body: d.body,
             project: link.map(Into::into),
+            priority: d.frontmatter.priority,
+            priority_source: d.frontmatter.priority_source,
             conversions: d.frontmatter.conversions,
             raw: None,
         },
@@ -134,6 +146,8 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
             body: String::new(),
             body_hash: String::new(),
             project: None,
+            priority: Priority::default(),
+            priority_source: PrioritySource::default(),
             conversions: Vec::new(),
             raw: Some(RawWire {
                 text: raw_text,
@@ -581,5 +595,647 @@ async fn conversion_job_socket(mut socket: WebSocket, subscription: JobSubscript
             // stream a gap the client would silently treat as complete.
             Err(_) => return,
         }
+    }
+}
+
+// --- Priority, comments and requests ---------------------------------------
+
+/// The unauthenticated `X-Sebenza-Caller` marker (T-01), normalised.
+fn caller_marker(headers: &HeaderMap) -> Option<String> {
+    let _ = headers;
+    todo!("caller marker")
+}
+
+/// `PATCH /api/inbox/{id}/priority` — `{"priority": "P0"}` sets the operator
+/// override; `{"priority": null}` clears it and hands control back to the
+/// agent. The key is required, so an empty body cannot clear by accident.
+pub async fn patch_priority(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<DraftWire>, ApiError> {
+    let _ = (state, id, headers, body);
+    todo!("patch priority")
+}
+
+/// `GET /api/inbox/{id}/comments` — the overall thread plus one per worktree.
+pub async fn list_comments(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<CommentGroups>, ApiError> {
+    let _ = (state, id);
+    todo!("list comments")
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostCommentBody {
+    pub body: String,
+    /// A worktree thread; absent or null posts to the overall thread.
+    #[serde(default)]
+    pub worktree: Option<WorktreeKey>,
+}
+
+/// `POST /api/inbox/{id}/comments` — an operator comment.
+pub async fn post_comment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<PostCommentBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = (state, id, headers, body, Thread::Overall);
+    todo!("post comment")
+}
+
+/// `GET /api/inbox/{id}/requests` — every request, folded from the log.
+pub async fn list_requests(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = (state, id);
+    todo!("list requests")
+}
+
+/// Handle a `/api/runtime/events` body if it is inbox ingress
+/// (`sebenza-agentctl request|comment`). `None` when it is an ordinary
+/// runtime event. The bearer check has already happened.
+pub async fn inbox_runtime_event(
+    state: &AppState,
+    raw: &serde_json::Value,
+) -> Option<Result<Json<serde_json::Value>, ApiError>> {
+    let _ = (state, raw);
+    todo!("inbox ingress")
+}
+
+#[cfg(test)]
+mod tests {
+    //! Route-level tests: each handler is driven directly with a tempdir
+    //! store, a pinned control token, and a capturing audit sink, so nothing
+    //! touches `~/.ai/sebenza` or the operator's real token.
+
+    use super::*;
+    use crate::adapters::inbox_store::{FrontmatterAuthor, FrontmatterPatch, InboxStore};
+    use crate::adapters::projects_registry::ProjectsRegistry;
+    use crate::domain::inbox_events::{AuthorKind, InboxEventKind};
+    use crate::services::inbox_convert::ConversionOutcome;
+    use crate::services::inbox_limits::{InboxLimits, RateLimit};
+    use crate::services::inbox_service::{AuditRecord, AuditSink};
+    use axum::http::HeaderValue;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TOKEN: &str = "route-test-token";
+    const HOST: &str = "127.0.0.1:5111";
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Default)]
+    struct Captured(Mutex<Vec<AuditRecord>>);
+    impl AuditSink for Captured {
+        fn record(&self, r: &AuditRecord) {
+            self.0.lock().unwrap().push(r.clone());
+        }
+    }
+
+    struct Fixture {
+        state: AppState,
+        store: InboxStore,
+        audit: Arc<Captured>,
+    }
+
+    fn fixture_with(limits: InboxLimits) -> Fixture {
+        crate::adapters::control_token::pin_control_token(TOKEN);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let base =
+            std::env::temp_dir().join(format!("sebenza-inbox-routes-{}-{}", std::process::id(), n));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("temp base");
+        let audit = Arc::new(Captured::default());
+        let inbox = InboxService::new(
+            InboxStore::with_dir(base.join("inbox")),
+            ProjectsRegistry::with_file(base.join("projects.json")),
+        )
+        .with_limits(limits)
+        .with_audit_sink(audit.clone());
+        let state = AppState {
+            manager: Arc::new(crate::services::project_manager::ProjectManager::new(
+                ProjectsRegistry::with_file(base.join("server-projects.json")),
+                "http://127.0.0.1:5111".into(),
+            )),
+            terminal: Arc::new(crate::adapters::terminal::TerminalManager::new(0)),
+            agent_stream: Arc::new(crate::services::agent_stream::AgentStreamManager::new()),
+            project_inits: Arc::new(
+                crate::services::project_init_service::ProjectInitTracker::new(),
+            ),
+            inbox: Arc::new(inbox),
+            inbox_jobs: Arc::new(crate::services::inbox_jobs::ConversionJobManager::new()),
+            frontend_dist: None,
+        };
+        Fixture {
+            state,
+            store: InboxStore::with_dir(base.join("inbox")),
+            audit,
+        }
+    }
+
+    fn fixture() -> Fixture {
+        fixture_with(InboxLimits::default())
+    }
+
+    /// A same-origin, token-bearing request, as the SPA sends it.
+    fn good_headers() -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer route-test-token"),
+        );
+        h.insert("host", HeaderValue::from_static(HOST));
+        h.insert("origin", HeaderValue::from_static("http://127.0.0.1:5111"));
+        h
+    }
+
+    fn without(mut h: HeaderMap, name: &str) -> HeaderMap {
+        h.remove(name);
+        h
+    }
+
+    fn with(mut h: HeaderMap, name: &'static str, value: &'static str) -> HeaderMap {
+        h.insert(name, HeaderValue::from_static(value));
+        h
+    }
+
+    fn new_draft(f: &Fixture) -> String {
+        f.state.inbox.create("Idea").expect("create").id
+    }
+
+    fn convert_into(f: &Fixture, id: &str, project: &str, branch: &str, path: &str) {
+        let target = crate::services::inbox_convert::ConversionTarget {
+            project_path: project.into(),
+            branch: branch.into(),
+            base_branch: None,
+            agent_id: None,
+            prompt: "go".into(),
+        };
+        let mut all = match f.store.get(id).expect("get") {
+            InboxDraftView::Parsed(d) => d.frontmatter.conversions,
+            _ => panic!("unparsed"),
+        };
+        all.push(
+            serde_yaml::to_value(ConversionOutcome::created(&target, path.into(), "t".into()))
+                .unwrap(),
+        );
+        f.store
+            .merge_frontmatter(
+                id,
+                FrontmatterAuthor::Job,
+                FrontmatterPatch {
+                    conversions: Some(all),
+                    ..Default::default()
+                },
+            )
+            .expect("record conversion");
+    }
+
+    fn converted(f: &Fixture) -> String {
+        let id = new_draft(f);
+        convert_into(f, &id, "/code/acme-demo", "feat-x", "/wt/acme-demo/feat-x");
+        id
+    }
+
+    async fn patch(
+        f: &Fixture,
+        id: &str,
+        h: HeaderMap,
+        body: serde_json::Value,
+    ) -> Result<DraftWire, ApiError> {
+        patch_priority(State(f.state.clone()), Path(id.to_string()), h, Json(body))
+            .await
+            .map(|Json(w)| w)
+    }
+
+    async fn comment(
+        f: &Fixture,
+        id: &str,
+        h: HeaderMap,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ApiError> {
+        let body: PostCommentBody = serde_json::from_value(body).expect("comment body");
+        post_comment(State(f.state.clone()), Path(id.to_string()), h, Json(body))
+            .await
+            .map(|Json(v)| v)
+    }
+
+    /// POST a raw body to `/api/runtime/events`, as agentctl does.
+    async fn runtime(
+        f: &Fixture,
+        bearer: Option<&str>,
+        raw: Vec<u8>,
+    ) -> Result<serde_json::Value, ApiError> {
+        let mut h = HeaderMap::new();
+        if let Some(t) = bearer {
+            h.insert(
+                "authorization",
+                HeaderValue::from_str(&format!("Bearer {t}")).unwrap(),
+            );
+        }
+        crate::server::runtime_event(State(f.state.clone()), h, axum::body::Bytes::from(raw))
+            .await
+            .map(|Json(v)| v)
+    }
+
+    fn request_payload(id: &str, path: &str, branch: &str, body: &str) -> Vec<u8> {
+        serde_json::json!({
+            "type": "inbox.request",
+            "worktreeId": "wt-id-1",
+            "branch": branch,
+            "draftId": id,
+            "worktreePath": path,
+            "title": "Need a decision",
+            "body": body,
+            "caller": "worktree",
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    fn status(r: Result<impl Sized, ApiError>) -> u16 {
+        match r {
+            Ok(_) => 200,
+            Err(e) => e.status.as_u16(),
+        }
+    }
+
+    // --- TS-06: priority ------------------------------------------------------
+
+    #[tokio::test]
+    async fn priority_override_then_clear() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let w = patch(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"priority": "P0"}),
+        )
+        .await
+        .expect("set");
+        assert_eq!(w.priority, Priority::P0);
+        assert_eq!(w.priority_source, PrioritySource::Operator);
+
+        let w = patch(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"priority": null}),
+        )
+        .await
+        .expect("clear");
+        assert_eq!(w.priority, Priority::P0);
+        assert_eq!(
+            w.priority_source,
+            PrioritySource::Agent,
+            "control is back with the agent"
+        );
+
+        let (view, _) = f.state.inbox.get(&id).expect("get");
+        let InboxDraftView::Parsed(d) = view else {
+            panic!("parsed")
+        };
+        assert_eq!(d.frontmatter.priority_source, PrioritySource::Agent);
+
+        let actions: Vec<_> = f.audit.0.lock().unwrap().iter().map(|r| r.action).collect();
+        assert_eq!(
+            actions,
+            ["inbox.priority.changed", "inbox.priority.override_cleared"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_priority_patch_without_the_key_or_with_a_bad_value_is_a_400() {
+        let f = fixture();
+        let id = new_draft(&f);
+        assert_eq!(
+            status(patch(&f, &id, good_headers(), serde_json::json!({})).await),
+            400
+        );
+        assert_eq!(
+            status(
+                patch(
+                    &f,
+                    &id,
+                    good_headers(),
+                    serde_json::json!({"priority": "P9"})
+                )
+                .await
+            ),
+            400
+        );
+    }
+
+    #[tokio::test]
+    async fn the_list_and_the_item_carry_priority_and_sort_by_it() {
+        let f = fixture();
+        let first = new_draft(&f);
+        let _second = new_draft(&f);
+        patch(
+            &f,
+            &first,
+            good_headers(),
+            serde_json::json!({"priority": "P0"}),
+        )
+        .await
+        .expect("set");
+
+        let Json(list) = list_drafts(State(f.state.clone()), Query(ListParams::default()))
+            .await
+            .expect("list");
+        let drafts = list["drafts"].as_array().expect("drafts");
+        assert_eq!(drafts[0]["id"], first.as_str(), "P0 sorts first");
+        assert_eq!(drafts[0]["priority"], "P0");
+        assert_eq!(drafts[0]["prioritySource"], "operator");
+        assert_eq!(drafts[1]["priority"], "P2");
+
+        let Json(item) = get_draft(State(f.state.clone()), Path(first.clone()))
+            .await
+            .expect("get");
+        assert_eq!(item.priority, Priority::P0);
+    }
+
+    // --- TS-32: the token in a worktree's hands (accepted T-01) --------------
+
+    #[tokio::test]
+    async fn a_worktree_caller_with_the_token_can_set_priority_and_is_marked() {
+        let f = fixture();
+        let id = new_draft(&f);
+        // What a worktree agent could do with the token it holds: no Origin,
+        // its own marker. Accepted residual risk, so this succeeds.
+        let h = with(
+            without(good_headers(), "origin"),
+            "x-sebenza-caller",
+            "worktree",
+        );
+        patch(&f, &id, h, serde_json::json!({"priority": "P0"}))
+            .await
+            .expect("accepted: succeeds");
+
+        let records = f.audit.0.lock().unwrap().clone();
+        assert_eq!(records[0].actor, AuthorKind::Operator);
+        assert_eq!(records[0].caller.as_deref(), Some("worktree"));
+        let events = f.state.inbox.events(&id).expect("events");
+        assert_eq!(events.last().unwrap().caller.as_deref(), Some("worktree"));
+    }
+
+    // --- TS-41: guard on every new mutating route ----------------------------
+
+    #[tokio::test]
+    async fn new_routes_refuse_a_missing_token_a_foreign_origin_and_a_bad_host() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let cases = [
+            (without(good_headers(), "authorization"), 401),
+            (with(good_headers(), "authorization", "Bearer wrong"), 401),
+            (with(good_headers(), "origin", "http://evil.test"), 403),
+            // DNS rebinding: Host and Origin agree, but neither is us.
+            (
+                with(
+                    with(good_headers(), "host", "evil.test:5111"),
+                    "origin",
+                    "http://evil.test:5111",
+                ),
+                403,
+            ),
+            (without(good_headers(), "host"), 403),
+        ];
+        for (h, want) in cases {
+            assert_eq!(
+                status(patch(&f, &id, h.clone(), serde_json::json!({"priority": "P0"})).await),
+                want,
+                "PATCH priority {h:?}"
+            );
+            assert_eq!(
+                status(comment(&f, &id, h.clone(), serde_json::json!({"body": "hi"})).await),
+                want,
+                "POST comments {h:?}"
+            );
+        }
+        assert!(
+            f.state.inbox.events(&id).expect("events").is_empty(),
+            "nothing written"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_token_route_refuses_a_rebinding_host() {
+        let _f = fixture();
+        let h = with(
+            with(HeaderMap::new(), "host", "evil.test:5111"),
+            "origin",
+            "http://evil.test:5111",
+        );
+        assert_eq!(status(inbox_session(h).await), 403);
+        let ok = with(HeaderMap::new(), "host", HOST);
+        assert_eq!(status(inbox_session(ok).await), 200);
+    }
+
+    // --- comments -------------------------------------------------------------
+
+    #[tokio::test]
+    async fn an_operator_comment_round_trips_into_its_group() {
+        let f = fixture();
+        let id = converted(&f);
+        comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "overall"}),
+        )
+        .await
+        .expect("overall");
+        let v = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "here", "worktree": {"project": "/code/acme-demo", "branch": "feat-x"}}),
+        )
+        .await
+        .expect("worktree");
+        assert_eq!(v["comment"]["body"], "here");
+
+        let Json(groups) = list_comments(State(f.state.clone()), Path(id.clone()))
+            .await
+            .expect("groups");
+        assert_eq!(groups.overall.len(), 1);
+        assert_eq!(groups.worktrees[0].comments[0].body, "here");
+
+        let stray = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "x", "worktree": {"project": "/nope", "branch": "b"}}),
+        )
+        .await;
+        assert_eq!(status(stray), 400);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_comment_is_a_413() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let huge = "x".repeat(crate::services::inbox_limits::MAX_BODY_BYTES + 1);
+        assert_eq!(
+            status(comment(&f, &id, good_headers(), serde_json::json!({"body": huge})).await),
+            413
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_draft_is_a_404() {
+        let f = fixture();
+        let missing = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        assert_eq!(
+            status(list_comments(State(f.state.clone()), Path(missing.into())).await),
+            404
+        );
+        assert_eq!(
+            status(list_requests(State(f.state.clone()), Path(missing.into())).await),
+            404
+        );
+    }
+
+    // --- TS-11 / TS-12 / TS-37 / TS-13: agentctl ingress ----------------------
+
+    #[tokio::test]
+    async fn an_agentctl_request_lands_open_in_its_worktree_group() {
+        let f = fixture();
+        let id = converted(&f);
+        let v = runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", "Which db?"),
+        )
+        .await
+        .expect("accepted");
+        assert_eq!(v["ok"], true);
+        assert!(v["requestId"].is_string());
+
+        let Json(list) = list_requests(State(f.state.clone()), Path(id.clone()))
+            .await
+            .expect("requests");
+        let r = &list["requests"][0];
+        assert_eq!(r["status"], "open");
+        assert_eq!(r["worktree"]["project"], "/code/acme-demo");
+        assert_eq!(r["worktree"]["branch"], "feat-x");
+
+        let events = f.state.inbox.events(&id).expect("events");
+        assert_eq!(events[0].author, AuthorKind::WorktreeAgent);
+        assert!(matches!(
+            events[0].kind,
+            InboxEventKind::RequestOpened { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_agentctl_comment_lands_in_its_worktree_group() {
+        let f = fixture();
+        let id = converted(&f);
+        let raw = serde_json::json!({
+            "type": "inbox.comment", "worktreeId": "wt-id-1", "branch": "feat-x",
+            "draftId": id, "worktreePath": "/wt/acme-demo/feat-x", "body": "progress",
+        });
+        runtime(&f, Some(TOKEN), raw.to_string().into_bytes())
+            .await
+            .expect("accepted");
+        let groups = f.state.inbox.list_comments(&id).expect("groups");
+        assert_eq!(groups.worktrees[0].comments[0].body, "progress");
+    }
+
+    #[tokio::test]
+    async fn ingress_without_the_token_is_a_401() {
+        let f = fixture();
+        let id = converted(&f);
+        let r = runtime(
+            &f,
+            None,
+            request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", "b"),
+        )
+        .await;
+        assert_eq!(status(r), 401);
+        assert!(f.state.inbox.events(&id).expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_request_from_a_worktree_not_in_conversions_is_refused() {
+        let f = fixture();
+        let id = converted(&f);
+        let r = runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/rogue", "feat-x", "b"),
+        )
+        .await;
+        assert_eq!(status(r), 403);
+        assert!(f.state.inbox.events(&id).expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_forged_origin_naming_another_item_is_refused() {
+        let f = fixture();
+        let _mine = converted(&f);
+        let theirs = new_draft(&f);
+        convert_into(&f, &theirs, "/code/beta", "feat-y", "/wt/beta/feat-y");
+        let r = runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&theirs, "/wt/acme-demo/feat-x", "feat-x", "b"),
+        )
+        .await;
+        assert_eq!(status(r), 403);
+        assert!(f.state.inbox.events(&theirs).expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_flood_is_capped_by_size_rate_and_depth() {
+        let f = fixture_with(InboxLimits {
+            requests: RateLimit {
+                max: 2,
+                window: std::time::Duration::from_secs(60),
+            },
+            ..InboxLimits::default()
+        });
+        let id = converted(&f);
+        let ok = || request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", "b");
+
+        let huge = "x".repeat(crate::services::inbox_limits::MAX_INGRESS_BYTES + 1);
+        let r = runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", &huge),
+        )
+        .await;
+        assert_eq!(status(r), 413, "raw payload over the ingress cap");
+
+        let body_over = "x".repeat(crate::services::inbox_limits::MAX_BODY_BYTES + 1);
+        let r = runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", &body_over),
+        )
+        .await;
+        assert_eq!(status(r), 413, "body over the field cap");
+
+        assert_eq!(status(runtime(&f, Some(TOKEN), ok()).await), 200);
+        assert_eq!(status(runtime(&f, Some(TOKEN), ok()).await), 200);
+        assert_eq!(status(runtime(&f, Some(TOKEN), ok()).await), 429);
+        assert_eq!(f.state.inbox.list_requests(&id).unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_malformed_inbox_event_is_a_400() {
+        let f = fixture();
+        let raw = serde_json::json!({"type": "inbox.request", "branch": "b"});
+        assert_eq!(
+            status(runtime(&f, Some(TOKEN), raw.to_string().into_bytes()).await),
+            400
+        );
     }
 }
