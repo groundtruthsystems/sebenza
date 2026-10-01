@@ -10,6 +10,7 @@
 //! validated, typed [`JobOutput`] handed to a [`JobResultSink`]; applying it
 //! (priority, proposal, advice, flags) is the sink's business (AA-D2).
 
+pub mod apply;
 pub mod isolation;
 pub mod output;
 pub mod prompt;
@@ -149,6 +150,10 @@ pub enum EnqueueError {
     /// The item already has as many jobs waiting as it may (TA-R1).
     QueueFull(String),
     Invalid(String),
+    /// No such request on the item.
+    UnknownRequest(String),
+    /// The request is past triage (proposed, confirmed or resolved).
+    NotRetryable(String),
 }
 
 impl std::fmt::Display for EnqueueError {
@@ -160,6 +165,13 @@ impl std::fmt::Display for EnqueueError {
                 write!(f, "too many system agent jobs are queued for draft {id}")
             }
             EnqueueError::Invalid(e) => write!(f, "{e}"),
+            EnqueueError::UnknownRequest(id) => write!(f, "unknown request {id}"),
+            EnqueueError::NotRetryable(status) => {
+                write!(
+                    f,
+                    "request is {status}; only an open request can be re-triaged"
+                )
+            }
         }
     }
 }
@@ -205,6 +217,9 @@ pub struct SystemAgentService {
     state: Mutex<QueueState>,
     /// Bumped whenever a job finishes; `wait` watches it.
     finished: tokio::sync::watch::Sender<u64>,
+    /// Every job state change (queued, running, finished), for the
+    /// `inbox.job` WebSocket event (FR-20).
+    updates: tokio::sync::broadcast::Sender<JobRecord>,
     this: Weak<Self>,
 }
 
@@ -267,6 +282,7 @@ impl SystemAgentService {
             runtime: tokio::runtime::Handle::try_current().ok(),
             state: Mutex::new(QueueState::default()),
             finished: tokio::sync::watch::channel(0).0,
+            updates: tokio::sync::broadcast::channel(256).0,
             this: this.clone(),
         })
     }
@@ -587,6 +603,25 @@ impl SystemAgentService {
             }
         }
         Ok((output, reseed))
+    }
+
+    /// Follow every job state change. Lagging receivers miss updates; the
+    /// job-status route is authoritative.
+    pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<JobRecord> {
+        self.updates.subscribe()
+    }
+
+    /// Tell subscribers a job changed. No subscriber is not an error.
+    fn publish(&self, job: &JobRecord) {
+        let _ = job;
+    }
+
+    /// Re-run triage for an open request as its next attempt (UC-05a, TS-63):
+    /// one more than any attempt this run has seen for it, or than the
+    /// triage outcomes its log records, so the dedupe key is fresh.
+    pub fn retry_triage(&self, draft_id: &str, request_id: &str) -> Result<String, EnqueueError> {
+        let _ = (draft_id, request_id);
+        todo!("phase-4-task-2")
     }
 
     /// One job by id.
@@ -1413,6 +1448,7 @@ mod tests {
                     proposal_id: "P1".into(),
                     body: "b".into(),
                     rationale: "r".into(),
+                    warnings: vec![],
                 },
             )
             .unwrap();
@@ -1457,5 +1493,266 @@ mod tests {
         for job in a_jobs.iter().chain(h.svc.jobs_for(&b).iter()) {
             h.finish(&job.job_id).await;
         }
+    }
+
+    // --- Triage application (phase 4) ---------------------------------------
+
+    /// A harness whose finished jobs are applied to the inbox, as in production.
+    fn applied(mode: &str) -> Harness {
+        let h = harness(mode, |_| {});
+        h.svc
+            .set_sink(Arc::new(apply::TriageApplier::new(h.inbox.clone())));
+        h
+    }
+
+    fn view(h: &Harness, draft: &str, rid: &str) -> crate::domain::inbox_events::RequestView {
+        h.inbox.request(draft, rid).expect("request")
+    }
+
+    fn priority_of(h: &Harness, draft: &str) -> (Priority, crate::domain::model::PrioritySource) {
+        match h.inbox.get(draft).expect("get").0 {
+            InboxDraftView::Parsed(d) => (d.frontmatter.priority, d.frontmatter.priority_source),
+            _ => panic!("unparsed"),
+        }
+    }
+
+    fn event_types(h: &Harness, draft: &str) -> Vec<String> {
+        h.store
+            .read_events(draft)
+            .unwrap()
+            .iter()
+            .map(|e| {
+                serde_json::to_value(e).unwrap()["type"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    // TS-14: the stub proposes; priority is set, the proposal is recorded
+    // with a server-issued id, and the request is proposed.
+    #[tokio::test]
+    async fn a_triage_proposal_sets_priority_and_proposes() {
+        let h = applied("ok");
+        let draft = h.item("Importer");
+        h.request(&draft, "R1");
+        let done = h.finish(&h.triage(&draft, "R1")).await;
+        assert_eq!(done.status, JobStatus::Succeeded, "{:?}", done.error);
+        let r = view(&h, &draft, "R1");
+        assert_eq!(r.status, RequestStatus::Proposed);
+        assert_eq!(
+            r.proposal.as_deref(),
+            Some("Use the existing fixture loader in tests/helpers.")
+        );
+        let pid = r.proposal_id.expect("proposal id");
+        assert!(!pid.is_empty() && pid != "R1");
+        assert_eq!(
+            priority_of(&h, &draft),
+            (Priority::P1, crate::domain::model::PrioritySource::Agent)
+        );
+        assert_eq!(
+            event_types(&h, &draft),
+            ["request_opened", "priority_changed", "proposal"]
+        );
+    }
+
+    // TS-23: advice is a comment and nothing else; the request stays open.
+    #[tokio::test]
+    async fn triage_advice_is_only_a_comment() {
+        let h = applied("fixture:triage_advice");
+        let draft = h.item("Importer");
+        h.request(&draft, "R1");
+        let done = h.finish(&h.triage(&draft, "R1")).await;
+        assert_eq!(done.status, JobStatus::Succeeded, "{:?}", done.error);
+        let r = view(&h, &draft, "R1");
+        assert_eq!(r.status, RequestStatus::Open);
+        assert!(r.proposal.is_none());
+        assert!(!r.flagged);
+        assert_eq!(priority_of(&h, &draft).0, Priority::P0);
+        assert_eq!(
+            event_types(&h, &draft),
+            ["request_opened", "priority_changed", "advice"]
+        );
+        let groups = h.inbox.list_comments(&draft).unwrap();
+        let advice = groups
+            .worktrees
+            .iter()
+            .flat_map(|g| g.comments.iter())
+            .find(|c| c.kind == crate::services::inbox_service::CommentKind::Advice)
+            .expect("advice row in the worktree thread");
+        assert_eq!(advice.body, "Ask the data team which loader they maintain.");
+    }
+
+    // TS-23: no recommendation — priority only.
+    #[tokio::test]
+    async fn triage_with_no_recommendation_sets_priority_only() {
+        let h = applied("fixture:triage_none");
+        let draft = h.item("Importer");
+        h.request(&draft, "R1");
+        let done = h.finish(&h.triage(&draft, "R1")).await;
+        assert_eq!(done.status, JobStatus::Succeeded, "{:?}", done.error);
+        assert_eq!(view(&h, &draft, "R1").status, RequestStatus::Open);
+        assert_eq!(priority_of(&h, &draft).0, Priority::P3);
+        assert_eq!(
+            event_types(&h, &draft),
+            ["request_opened", "priority_changed"]
+        );
+    }
+
+    // TS-24: an operator override survives triage.
+    #[tokio::test]
+    async fn triage_never_overrides_the_operator() {
+        let h = applied("ok");
+        let draft = h.item("Importer");
+        h.inbox
+            .set_priority(&draft, Some(Priority::P3), None)
+            .unwrap();
+        h.request(&draft, "R1");
+        let done = h.finish(&h.triage(&draft, "R1")).await;
+        assert_eq!(done.status, JobStatus::Succeeded, "{:?}", done.error);
+        assert_eq!(
+            priority_of(&h, &draft),
+            (Priority::P3, crate::domain::model::PrioritySource::Operator)
+        );
+        assert_eq!(view(&h, &draft, "R1").status, RequestStatus::Proposed);
+    }
+
+    // TS-20: a failing agent flags the request open; the queue continues.
+    #[tokio::test]
+    async fn a_failed_triage_flags_the_request_and_the_queue_continues() {
+        let h = applied("exit");
+        let draft = h.item("Importer");
+        h.request(&draft, "R1");
+        h.request(&draft, "R2");
+        let first = h.triage(&draft, "R1");
+        let done = h.finish(&first).await;
+        assert_eq!(done.status, JobStatus::Failed);
+        let r = view(&h, &draft, "R1");
+        assert_eq!(r.status, RequestStatus::Open);
+        assert!(r.flagged);
+        assert!(r.last_error.as_deref().unwrap_or("").contains("status 3"));
+        std::fs::write(h.stub_dir.join("stub.mode"), "ok").unwrap();
+        let next = h.finish(&h.triage(&draft, "R2")).await;
+        assert_eq!(next.status, JobStatus::Succeeded, "{:?}", next.error);
+        assert_eq!(view(&h, &draft, "R2").status, RequestStatus::Proposed);
+    }
+
+    // TS-22 applied: unparseable output fails the job and flags the request
+    // without a proposal.
+    #[tokio::test]
+    async fn bad_agent_output_flags_without_a_proposal() {
+        let h = applied("fixture:triage_bad_json");
+        let draft = h.item("Importer");
+        h.request(&draft, "R1");
+        h.finish(&h.triage(&draft, "R1")).await;
+        let r = view(&h, &draft, "R1");
+        assert!(r.flagged);
+        assert!(r.proposal.is_none());
+        assert_eq!(event_types(&h, &draft), ["request_opened", "triage_failed"]);
+    }
+
+    // TS-63: a flagged request is re-triaged as attempt 2 and proposed.
+    #[tokio::test]
+    async fn retry_triage_reruns_a_flagged_request() {
+        let h = applied("exit");
+        let draft = h.item("Importer");
+        h.request(&draft, "R1");
+        h.finish(&h.triage(&draft, "R1")).await;
+        assert!(view(&h, &draft, "R1").flagged);
+        std::fs::write(h.stub_dir.join("stub.mode"), "ok").unwrap();
+        let retry = h.svc.retry_triage(&draft, "R1").expect("retry");
+        let done = h.finish(&retry).await;
+        assert_eq!(done.attempt, 2);
+        assert_eq!(done.status, JobStatus::Succeeded, "{:?}", done.error);
+        let r = view(&h, &draft, "R1");
+        assert_eq!(r.status, RequestStatus::Proposed);
+        assert!(!r.flagged);
+        assert!(matches!(
+            h.svc.retry_triage(&draft, "R1"),
+            Err(EnqueueError::NotRetryable(_))
+        ));
+        assert!(matches!(
+            h.svc.retry_triage(&draft, "ghost"),
+            Err(EnqueueError::UnknownRequest(_))
+        ));
+    }
+
+    // TS-63: a retry after a restart (no job memory) still takes a fresh
+    // attempt, from the log's triage_failed count.
+    #[tokio::test]
+    async fn retry_attempts_survive_a_restart() {
+        let h = applied("ok");
+        let draft = h.item("Importer");
+        h.request(&draft, "R1");
+        h.inbox
+            .record_triage_failed(&draft, "R1", "timed out")
+            .unwrap();
+        let retry = h.svc.retry_triage(&draft, "R1").expect("retry");
+        assert_eq!(h.finish(&retry).await.attempt, 2);
+    }
+
+    #[tokio::test]
+    async fn retry_triage_respects_the_kill_switch() {
+        let h = harness("ok", |c| c.enabled = false);
+        let draft = h.item("Importer");
+        h.request(&draft, "R1");
+        assert_eq!(
+            h.svc.retry_triage(&draft, "R1"),
+            Err(EnqueueError::Disabled)
+        );
+    }
+
+    // FR-20: subscribers see each job move through its states.
+    #[tokio::test]
+    async fn job_updates_are_published() {
+        let h = applied("ok");
+        let draft = h.item("Importer");
+        h.request(&draft, "R1");
+        let mut rx = h.svc.subscribe();
+        let job = h.triage(&draft, "R1");
+        let mut seen = Vec::new();
+        while let Ok(Ok(update)) = tokio::time::timeout(Duration::from_secs(30), rx.recv()).await {
+            assert_eq!(update.job_id, job);
+            seen.push(update.status);
+            if update.status.is_terminal() {
+                break;
+            }
+        }
+        assert_eq!(
+            seen,
+            [JobStatus::Queued, JobStatus::Running, JobStatus::Succeeded]
+        );
+    }
+
+    // TS-36: item B's triage prompt shows item A's title and priority only.
+    #[tokio::test]
+    async fn another_items_body_and_comments_never_reach_the_prompt() {
+        use crate::adapters::inbox_store::EventAuthor;
+        use crate::domain::inbox_events::Thread;
+        let h = applied("ok");
+        let a = h.item("Item A rollout");
+        let hash = match h.inbox.get(&a).unwrap().0 {
+            InboxDraftView::Parsed(d) => {
+                crate::domain::model::FileRevision::of_body(&d.body).body_hash
+            }
+            _ => panic!(),
+        };
+        h.inbox.save_body(&a, &hash, "A-PRIVATE-BODY").unwrap();
+        h.inbox
+            .add_comment(
+                &a,
+                EventAuthor::operator(),
+                Thread::Overall,
+                "A-PRIVATE-COMMENT",
+            )
+            .unwrap();
+        let b = h.item("Item B");
+        h.request(&b, "R1");
+        h.finish(&h.triage(&b, "R1")).await;
+        let prompt = h.logged("prompt").pop().expect("prompt");
+        assert!(prompt.contains("Item A rollout"), "digest lists A's title");
+        assert!(!prompt.contains("A-PRIVATE-BODY"), "{prompt}");
+        assert!(!prompt.contains("A-PRIVATE-COMMENT"), "{prompt}");
     }
 }

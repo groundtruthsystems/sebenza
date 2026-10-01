@@ -75,7 +75,10 @@ function urlOf(input: string | URL | Request): string {
   return input.url;
 }
 
-async function bodyOf(input: string | URL | Request, init?: RequestInit): Promise<string> {
+async function bodyOf(
+  input: string | URL | Request,
+  init?: RequestInit,
+): Promise<string> {
   if (typeof init?.body === "string") return init.body;
   if (input instanceof Request) return input.text();
   return "";
@@ -84,28 +87,31 @@ async function bodyOf(input: string | URL | Request, init?: RequestInit): Promis
 describe("createWorktreeAgentTab", () => {
   it("posts the chosen agent to the agent-tabs route under the active prefix", async () => {
     const seen: { url: string; method: string; body: string }[] = [];
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      seen.push({
-        url: urlOf(input),
-        method: init?.method ?? (input instanceof Request ? input.method : "GET"),
-        body: await bodyOf(input, init),
-      });
-      // The contract declares 201 for tab creation, not 200.
-      return new Response(
-        JSON.stringify({
-          tab: {
-            tabId: "agent-codex-1",
-            kind: "agent",
-            label: "Codex",
-            seq: 1,
-            sessionId: null,
-            agent: "codex",
-            createdAt: "2026-01-01T00:00:00Z",
-          },
-        }),
-        { status: 201, headers: { "content-type": "application/json" } },
-      );
-    });
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        seen.push({
+          url: urlOf(input),
+          method:
+            init?.method ?? (input instanceof Request ? input.method : "GET"),
+          body: await bodyOf(input, init),
+        });
+        // The contract declares 201 for tab creation, not 200.
+        return new Response(
+          JSON.stringify({
+            tab: {
+              tabId: "agent-codex-1",
+              kind: "agent",
+              label: "Codex",
+              seq: 1,
+              sessionId: null,
+              agent: "codex",
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+          }),
+          { status: 201, headers: { "content-type": "application/json" } },
+        );
+      },
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const api = await loadApiAt("/myproject/");
@@ -113,7 +119,9 @@ describe("createWorktreeAgentTab", () => {
 
     expect(seen).toHaveLength(1);
     // Branch names contain slashes, so the path segment must be encoded.
-    expect(seen[0].url).toContain("/myproject/api/worktrees/feat%2Fx/agent-tabs");
+    expect(seen[0].url).toContain(
+      "/myproject/api/worktrees/feat%2Fx/agent-tabs",
+    );
     expect(seen[0].method).toBe("POST");
     expect(JSON.parse(seen[0].body)).toEqual({ agent: "codex" });
     expect(tab.kind).toBe("agent");
@@ -123,61 +131,98 @@ describe("createWorktreeAgentTab", () => {
 
 describe("setUpProject", () => {
   it("returns the prefix immediately when the repo is already a project", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () =>
-      jsonResponse({
-        initializing: false,
-        path: "/repo/y",
-        project: { prefix: "y", name: "Y", path: "/repo/y", active: false },
-      }),
-    ));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          initializing: false,
+          path: "/repo/y",
+          project: { prefix: "y", name: "Y", path: "/repo/y", active: false },
+        }),
+      ),
+    );
 
     const api = await loadApiAt("/y/");
     const phases: string[] = [];
-    const result = await api.setUpProject("/repo/y", (phase) => phases.push(phase));
+    const result = await api.setUpProject("/repo/y", (phase) =>
+      phases.push(phase),
+    );
 
     expect(result).toEqual({ prefix: "y" });
     expect(phases).toEqual([]); // no setup needed → no phases
   });
 
   it("polls the setup tracker and resolves with the prefix when ready", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = urlOf(input);
-      const method = init?.method ?? "GET";
-      if (url.endsWith("/api/projects") && method === "POST") {
-        return jsonResponse({ initializing: true, path: "/repo/x", project: null });
-      }
-      if (url.endsWith("/api/projects/init")) {
-        return jsonResponse({
-          inits: [{ path: "/repo/x", phase: "ready", prefix: "x", name: "X", error: null }],
-        });
-      }
-      throw new Error(`unexpected ${method} ${url}`);
-    });
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = urlOf(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/api/projects") && method === "POST") {
+          return jsonResponse({
+            initializing: true,
+            path: "/repo/x",
+            project: null,
+          });
+        }
+        if (url.endsWith("/api/projects/init")) {
+          return jsonResponse({
+            inits: [
+              {
+                path: "/repo/x",
+                phase: "ready",
+                prefix: "x",
+                name: "X",
+                error: null,
+              },
+            ],
+          });
+        }
+        throw new Error(`unexpected ${method} ${url}`);
+      },
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const api = await loadApiAt("/x/");
     const phases: string[] = [];
-    const result = await api.setUpProject("/repo/x", (phase) => phases.push(phase));
+    const result = await api.setUpProject("/repo/x", (phase) =>
+      phases.push(phase),
+    );
 
     expect(result).toEqual({ prefix: "x" });
     expect(phases).toEqual(["ready"]);
   });
 
   it("rejects with the server error when setup fails", async () => {
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = urlOf(input);
-      const method = init?.method ?? "GET";
-      if (url.endsWith("/api/projects") && method === "POST") {
-        return jsonResponse({ initializing: true, path: "/repo/z", project: null });
-      }
-      return jsonResponse({
-        inits: [{ path: "/repo/z", phase: "failed", prefix: null, name: null, error: "not a git repo" }],
-      });
-    });
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = urlOf(input);
+        const method = init?.method ?? "GET";
+        if (url.endsWith("/api/projects") && method === "POST") {
+          return jsonResponse({
+            initializing: true,
+            path: "/repo/z",
+            project: null,
+          });
+        }
+        return jsonResponse({
+          inits: [
+            {
+              path: "/repo/z",
+              phase: "failed",
+              prefix: null,
+              name: null,
+              error: "not a git repo",
+            },
+          ],
+        });
+      },
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     const api = await loadApiAt("/x/");
-    await expect(api.setUpProject("/repo/z", () => {})).rejects.toThrow("not a git repo");
+    await expect(api.setUpProject("/repo/z", () => {})).rejects.toThrow(
+      "not a git repo",
+    );
   });
 });
 
@@ -217,15 +262,25 @@ describe("feedbackState reaches the store", () => {
   it("accepts the three feedback states and rejects anything else", async () => {
     const { ProjectWorktreeSnapshotSchema } = await import("./api-contract");
 
-    for (const feedbackState of ["none", "permission_request", "user_question"]) {
-      const parsed = ProjectWorktreeSnapshotSchema.parse({ ...snapshot, feedbackState });
+    for (const feedbackState of [
+      "none",
+      "permission_request",
+      "user_question",
+    ]) {
+      const parsed = ProjectWorktreeSnapshotSchema.parse({
+        ...snapshot,
+        feedbackState,
+      });
       expect(parsed.feedbackState).toBe(feedbackState);
     }
 
     // A typo or a state this client does not know must fail loudly here rather than
     // reaching the ticker as an unhandled value.
     expect(() =>
-      ProjectWorktreeSnapshotSchema.parse({ ...snapshot, feedbackState: "needs_attention" }),
+      ProjectWorktreeSnapshotSchema.parse({
+        ...snapshot,
+        feedbackState: "needs_attention",
+      }),
     ).toThrow();
   });
 
@@ -233,7 +288,9 @@ describe("feedbackState reaches the store", () => {
     const { ProjectWorktreeSnapshotSchema } = await import("./api-contract");
     const { feedbackState: _omitted, ...withoutField } = snapshot;
 
-    expect(ProjectWorktreeSnapshotSchema.parse(withoutField).feedbackState).toBe("none");
+    expect(
+      ProjectWorktreeSnapshotSchema.parse(withoutField).feedbackState,
+    ).toBe("none");
   });
 
   it("carries feedbackState through mapWorktree onto WorktreeInfo", async () => {
@@ -254,23 +311,34 @@ describe("feedbackState reaches the store", () => {
 });
 
 describe("inbox priority, comments and requests", () => {
-  type Seen = { url: string; method: string; body: string; auth: string | null };
+  type Seen = {
+    url: string;
+    method: string;
+    body: string;
+    auth: string | null;
+  };
 
   function recordFetch(reply: unknown, status = 200) {
     const seen: Seen[] = [];
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-      seen.push({
-        url: urlOf(input),
-        method: init?.method ?? (input instanceof Request ? input.method : "GET"),
-        body: await bodyOf(input, init),
-        auth: headers.get("authorization"),
-      });
-      return new Response(JSON.stringify(reply), {
-        status,
-        headers: { "content-type": "application/json" },
-      });
-    });
+    const fetchMock = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const headers = new Headers(
+          init?.headers ??
+            (input instanceof Request ? input.headers : undefined),
+        );
+        seen.push({
+          url: urlOf(input),
+          method:
+            init?.method ?? (input instanceof Request ? input.method : "GET"),
+          body: await bodyOf(input, init),
+          auth: headers.get("authorization"),
+        });
+        return new Response(JSON.stringify(reply), {
+          status,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    );
     vi.stubGlobal("fetch", fetchMock);
     return seen;
   }
@@ -314,7 +382,9 @@ describe("inbox priority, comments and requests", () => {
   it("reads grouped comments and posts an operator comment", async () => {
     const groups = {
       overall: [],
-      worktrees: [{ project: "/code/acme-demo", branch: "feat-x", comments: [] }],
+      worktrees: [
+        { project: "/code/acme-demo", branch: "feat-x", comments: [] },
+      ],
     };
     const seen = recordFetch(groups);
     window.__SEBENZA_CONTROL_TOKEN__ = "tok";
@@ -348,11 +418,192 @@ describe("inbox priority, comments and requests", () => {
     expect(seen[0].url).toContain(`/api/inbox/${draft.id}/requests`);
   });
 
+  const request = {
+    requestId: "01REQ",
+    worktree: { project: "/code/acme-demo", branch: "feat-x" },
+    title: "Need a decision",
+    body: "Which loader?",
+    status: "resolved",
+    flagged: false,
+    proposalId: "01PROP",
+    proposal: "Use the loader.",
+    proposalHash: "abc",
+    proposalWarnings: ["OpenAI-style key"],
+    contentHash: "abc",
+    confirmedText: "Use the loader.",
+    lastReason: null,
+    lastError: null,
+    attempts: 1,
+    warnings: [],
+    openedAt: "t",
+  };
+
+  it("confirms a proposal with the hash of the text shown", async () => {
+    const seen = recordFetch({ request });
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+
+    const got = await api.confirmInboxRequest(draft.id, "01REQ", {
+      contentHash: "abc",
+    });
+    expect(got.request.status).toBe("resolved");
+    expect(got.request.proposalWarnings).toEqual(["OpenAI-style key"]);
+    expect(seen[0].url).toContain(
+      `/api/inbox/${draft.id}/requests/01REQ/confirm`,
+    );
+    expect(seen[0].method).toBe("POST");
+    expect(seen[0].auth).toBe("Bearer tok");
+    expect(JSON.parse(seen[0].body)).toEqual({ contentHash: "abc" });
+
+    await api.confirmInboxRequest(draft.id, "01REQ", {
+      contentHash: "abc",
+      body: "edited",
+    });
+    expect(JSON.parse(seen[1].body)).toEqual({
+      contentHash: "abc",
+      body: "edited",
+    });
+  });
+
+  it("surfaces a stale-hash 409 as the server's message", async () => {
+    recordFetch(
+      {
+        error: "the text changed since it was shown; reload and confirm again",
+      },
+      409,
+    );
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+    await expect(
+      api.confirmInboxRequest(draft.id, "01REQ", { contentHash: "old" }),
+    ).rejects.toThrow(/changed since it was shown/);
+  });
+
+  it("rejects, redelivers and retries triage with the control token", async () => {
+    const seen = recordFetch({
+      request: { ...request, status: "open" },
+      jobId: "01JOB",
+    });
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+
+    await api.rejectInboxRequest(draft.id, "01REQ", "wrong loader");
+    expect(seen[0].url).toContain(
+      `/api/inbox/${draft.id}/requests/01REQ/reject`,
+    );
+    expect(JSON.parse(seen[0].body)).toEqual({ reason: "wrong loader" });
+
+    await api.redeliverInboxRequest(draft.id, "01REQ");
+    expect(seen[1].url).toContain(
+      `/api/inbox/${draft.id}/requests/01REQ/redeliver`,
+    );
+    expect(seen[1].method).toBe("POST");
+
+    const retried = await api.retryInboxTriage(draft.id, "01REQ");
+    expect(retried.jobId).toBe("01JOB");
+    expect(seen[2].url).toContain(
+      `/api/inbox/${draft.id}/requests/01REQ/retry-triage`,
+    );
+    expect(seen.every((s) => s.auth === "Bearer tok")).toBe(true);
+  });
+
+  it("reads one system-agent job", async () => {
+    const job = {
+      jobId: "01JOB",
+      draftId: draft.id,
+      kind: "triage",
+      requestId: "01REQ",
+      attempt: 2,
+      status: "succeeded",
+      output: {
+        jobKind: "triage",
+        priority: "P1",
+        rationale: "r",
+        recommendation: "proposal",
+        body: "b",
+      },
+      error: null,
+      reseeded: false,
+      enqueuedAt: "t",
+      startedAt: "t",
+      finishedAt: "t",
+    };
+    const seen = recordFetch(job);
+    const api = await loadApiAt("/inbox");
+    const got = await api.fetchInboxAgentJob(draft.id, "01JOB");
+    expect(got.status).toBe("succeeded");
+    expect(got.attempt).toBe(2);
+    expect(seen[0].url).toContain(`/api/inbox/${draft.id}/agent/jobs/01JOB`);
+  });
+
+  it("redacts a comment", async () => {
+    const seen = recordFetch({ eventId: "01TOMB", targetEventId: "01EV" });
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+    const got = await api.redactInboxComment(draft.id, "01EV");
+    expect(got.targetEventId).toBe("01EV");
+    expect(seen[0].url).toContain(
+      `/api/inbox/${draft.id}/comments/01EV/redact`,
+    );
+    expect(seen[0].method).toBe("POST");
+    expect(seen[0].auth).toBe("Bearer tok");
+  });
+
+  it("streams inbox.job events for one item", async () => {
+    const sockets: {
+      url: string;
+      listeners: Record<string, (e: unknown) => void>;
+    }[] = [];
+    class MockWebSocket {
+      listeners: Record<string, (e: unknown) => void> = {};
+      constructor(public url: string) {
+        sockets.push(this);
+      }
+      addEventListener(type: string, fn: (e: unknown) => void) {
+        this.listeners[type] = fn;
+      }
+      close() {}
+    }
+    vi.stubGlobal("WebSocket", MockWebSocket);
+    const api = await loadApiAt("/inbox");
+    const got: string[] = [];
+    const stop = api.connectInboxAgentStream(draft.id, {
+      onJob: (job) => got.push(`${job.jobId}:${job.status}`),
+      onError: () => got.push("error"),
+    });
+    expect(sockets[0].url).toMatch(
+      new RegExp(`/api/inbox/${draft.id}/agent/stream$`),
+    );
+    sockets[0].listeners.message({
+      data: JSON.stringify({
+        type: "inbox.job",
+        job: {
+          jobId: "01JOB",
+          draftId: draft.id,
+          kind: "triage",
+          requestId: "01REQ",
+          attempt: 1,
+          status: "running",
+          output: null,
+          error: null,
+          reseeded: false,
+          enqueuedAt: "t",
+          startedAt: "t",
+          finishedAt: null,
+        },
+      }),
+    });
+    expect(got).toEqual(["01JOB:running"]);
+    stop();
+  });
+
   it("surfaces a rate-limit refusal as the server's message", async () => {
     recordFetch({ error: "rate limit exceeded; try again shortly" }, 429);
     window.__SEBENZA_CONTROL_TOKEN__ = "tok";
     const api = await loadApiAt("/inbox");
-    await expect(api.postInboxComment(draft.id, "again")).rejects.toThrow(/rate limit/);
+    await expect(api.postInboxComment(draft.id, "again")).rejects.toThrow(
+      /rate limit/,
+    );
   });
 });
 

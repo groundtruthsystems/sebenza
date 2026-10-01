@@ -51,6 +51,34 @@ enum InboxCommand {
     },
     Comments(String),
     Requests(String),
+    /// Confirm a request's proposal, or (`--body`) an edited or authored
+    /// resolution, and deliver it.
+    Confirm {
+        id: String,
+        request_id: String,
+        body: Option<String>,
+    },
+    Reject {
+        id: String,
+        request_id: String,
+        reason: String,
+    },
+    Redeliver {
+        id: String,
+        request_id: String,
+    },
+    RetryTriage {
+        id: String,
+        request_id: String,
+    },
+    AgentJob {
+        id: String,
+        job_id: String,
+    },
+    Redact {
+        id: String,
+        event_id: String,
+    },
 }
 
 fn usage() -> String {
@@ -216,6 +244,13 @@ fn parse_worktree(spec: &str) -> Result<(String, String)> {
         }
         _ => Err(anyhow!("--worktree {spec:?} is not project:branch")),
     }
+}
+
+/// The hash a confirm must quote: of the proposal the operator is
+/// confirming (edited or not), else of the resolution they authored.
+fn confirm_hash(request: &Value, body: Option<&str>) -> Result<String> {
+    let _ = (request, body);
+    Err(anyhow!("not implemented"))
 }
 
 fn print_comment_rows(rows: &[Value]) {
@@ -567,6 +602,12 @@ pub async fn run(args: &[String], port: u16) -> i32 {
             }
             InboxCommand::Comments(id) => print_comments(&http.inbox_comments(&id).await?),
             InboxCommand::Requests(id) => print_requests(&http.inbox_requests(&id).await?),
+            InboxCommand::Confirm { .. }
+            | InboxCommand::Reject { .. }
+            | InboxCommand::Redeliver { .. }
+            | InboxCommand::RetryTriage { .. }
+            | InboxCommand::AgentJob { .. }
+            | InboxCommand::Redact { .. } => return Err(anyhow!("not implemented")),
             InboxCommand::Rm { id, yes } => {
                 http.inbox_delete(&id, yes).await?;
                 println!("Deleted {id}.");
@@ -849,5 +890,94 @@ mod tests {
         ] {
             assert!(u.contains(cmd), "usage is missing {cmd}");
         }
+    }
+
+    #[test]
+    fn confirm_takes_an_optional_body() {
+        match parse(&a(&["confirm", "D1", "R1"])).unwrap().unwrap() {
+            InboxCommand::Confirm {
+                id,
+                request_id,
+                body,
+            } => {
+                assert_eq!((id.as_str(), request_id.as_str()), ("D1", "R1"));
+                assert!(body.is_none());
+            }
+            _ => panic!("expected Confirm"),
+        }
+        match parse(&a(&["confirm", "D1", "R1", "--body", "use v2"]))
+            .unwrap()
+            .unwrap()
+        {
+            InboxCommand::Confirm { body, .. } => assert_eq!(body.as_deref(), Some("use v2")),
+            _ => panic!("expected Confirm"),
+        }
+        assert!(parse(&a(&["confirm", "D1"])).is_err());
+    }
+
+    #[test]
+    fn reject_needs_a_reason() {
+        assert!(parse(&a(&["reject", "D1", "R1"])).is_err());
+        match parse(&a(&["reject", "D1", "R1", "wrong", "loader"]))
+            .unwrap()
+            .unwrap()
+        {
+            InboxCommand::Reject { reason, .. } => assert_eq!(reason, "wrong loader"),
+            _ => panic!("expected Reject"),
+        }
+    }
+
+    #[test]
+    fn redeliver_retry_job_and_redact_parse() {
+        assert!(matches!(
+            parse(&a(&["redeliver", "D1", "R1"])).unwrap(),
+            Some(InboxCommand::Redeliver { .. })
+        ));
+        assert!(matches!(
+            parse(&a(&["retry-triage", "D1", "R1"])).unwrap(),
+            Some(InboxCommand::RetryTriage { .. })
+        ));
+        assert!(matches!(
+            parse(&a(&["agent-job", "D1", "J1"])).unwrap(),
+            Some(InboxCommand::AgentJob { .. })
+        ));
+        assert!(matches!(
+            parse(&a(&["redact", "D1", "E1"])).unwrap(),
+            Some(InboxCommand::Redact { .. })
+        ));
+        assert!(parse(&a(&["redact", "D1"])).is_err());
+    }
+
+    // TS-32: agentctl has no confirm; the operator CLI's usage names it.
+    #[test]
+    fn usage_lists_the_decision_commands() {
+        let u = usage();
+        for cmd in [
+            "confirm",
+            "reject",
+            "redeliver",
+            "retry-triage",
+            "agent-job",
+            "redact",
+        ] {
+            assert!(u.contains(&format!("inbox {cmd} ")), "usage lacks {cmd}");
+        }
+    }
+
+    #[test]
+    fn the_confirm_hash_is_of_the_text_shown() {
+        let proposal = json!({"proposal": "use the loader", "proposalHash": "server"});
+        // With a proposal the hash is of the proposal, even when editing.
+        assert_eq!(
+            confirm_hash(&proposal, Some("edited")).unwrap(),
+            common::domain::inbox_events::content_hash("use the loader")
+        );
+        // Without one, of the authored body.
+        let open = json!({"proposal": null});
+        assert_eq!(
+            confirm_hash(&open, Some("authored")).unwrap(),
+            common::domain::inbox_events::content_hash("authored")
+        );
+        assert!(confirm_hash(&open, None).is_err());
     }
 }

@@ -353,6 +353,34 @@ pub fn build_router(state: AppState) -> Router {
             "/api/inbox/{id}/requests",
             get(crate::inbox_routes::list_requests),
         )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/confirm",
+            post(crate::inbox_routes::confirm_request),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/reject",
+            post(crate::inbox_routes::reject_request),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/redeliver",
+            post(crate::inbox_routes::redeliver_request),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/retry-triage",
+            post(crate::inbox_routes::retry_triage),
+        )
+        .route(
+            "/api/inbox/{id}/agent/jobs/{job_id}",
+            get(crate::inbox_routes::get_agent_job),
+        )
+        .route(
+            "/api/inbox/{id}/agent/stream",
+            get(crate::inbox_routes::ws_agent_jobs),
+        )
+        .route(
+            "/api/inbox/{id}/comments/{event_id}/redact",
+            post(crate::inbox_routes::redact_comment),
+        )
         // Per-project routes, scoped under `/<prefix>`.
         .route("/{prefix}/api/config", get(get_config))
         .route("/{prefix}/api/branches", get(get_branches))

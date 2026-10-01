@@ -58,10 +58,15 @@ pub enum InboxEventKind {
         proposal_id: String,
         body: String,
         rationale: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
     },
+    /// A note for the operator about a request. Never delivered (BR-07).
     Advice {
         request_id: String,
         body: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
     },
     TriageFailed {
         request_id: String,
@@ -79,6 +84,8 @@ pub enum InboxEventKind {
         content_hash: String,
         text: String,
         edited: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
     },
     Delivered {
         request_id: String,
@@ -141,6 +148,10 @@ pub struct RequestView {
     pub flagged: bool,
     pub proposal_id: Option<String>,
     pub proposal: Option<String>,
+    /// [`content_hash`] of `proposal`: what a confirm of it must quote.
+    pub proposal_hash: Option<String>,
+    /// Secret/PHI scan hits on the proposal, shown before confirm (FR-10).
+    pub proposal_warnings: Vec<String>,
     /// Hash of the confirmed text, set once confirmed.
     pub content_hash: Option<String>,
     pub confirmed_text: Option<String>,
@@ -175,6 +186,8 @@ pub fn fold_requests(events: &[InboxEvent]) -> Vec<RequestView> {
                     flagged: false,
                     proposal_id: None,
                     proposal: None,
+                    proposal_hash: None,
+                    proposal_warnings: Vec::new(),
                     content_hash: None,
                     confirmed_text: None,
                     last_reason: None,
@@ -343,6 +356,7 @@ mod tests {
                 proposal_id: "p1".into(),
                 body: "Use sqlite".into(),
                 rationale: "simple".into(),
+                warnings: vec![],
             },
         ));
         assert_eq!(status(&log), RequestStatus::Proposed);
@@ -367,6 +381,7 @@ mod tests {
                 content_hash: content_hash("Use postgres"),
                 text: "Use postgres".into(),
                 edited: false,
+                warnings: vec![],
             },
         ));
         assert_eq!(status(&log), RequestStatus::Confirmed);

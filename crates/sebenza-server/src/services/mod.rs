@@ -11,6 +11,7 @@ pub mod active_worktrees;
 pub mod agent_stream;
 pub mod inbox_jobs;
 pub mod oneshot_watcher_service;
+pub mod pane_delivery;
 pub mod project_init_service;
 pub mod project_manager;
 pub mod system_agent;

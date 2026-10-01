@@ -962,18 +962,25 @@ fn looks_like_key(text: &str, prefix: &str, min_tail: usize) -> bool {
 /// Returns one advisory per distinct pattern, not per occurrence: the point is
 /// to prompt a look, and twelve copies of the same warning only buries it.
 pub fn scan_for_secrets(text: &str) -> Vec<Advisory> {
-    let mut out = Vec::new();
-    for (label, prefix, min_tail) in SECRET_PATTERNS {
-        if looks_like_key(text, prefix, min_tail) {
-            out.push(Advisory {
-                kind: "secret".to_string(),
-                message: format!(
-                    "This draft looks like it contains {label} text. It will be copied into every worktree and sent to the agent."
-                ),
-            });
-        }
-    }
-    out
+    secret_hit_names(text)
+        .into_iter()
+        .map(|label| Advisory {
+            kind: "secret".to_string(),
+            message: format!(
+                "This draft looks like it contains {label} text. It will be copied into every worktree and sent to the agent."
+            ),
+        })
+        .collect()
+}
+
+/// The label of each secret pattern found in `text`, once per pattern. The
+/// names, never the matched text, are what comments and requests record.
+pub fn secret_hit_names(text: &str) -> Vec<&'static str> {
+    SECRET_PATTERNS
+        .iter()
+        .filter(|(_, prefix, min_tail)| looks_like_key(text, prefix, *min_tail))
+        .map(|(label, _, _)| *label)
+        .collect()
 }
 
 /// Warn when a target's worktree will not be sandboxed.

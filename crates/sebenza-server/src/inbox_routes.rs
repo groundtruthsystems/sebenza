@@ -714,6 +714,106 @@ pub async fn list_requests(
     Ok(Json(serde_json::json!({ "requests": requests })))
 }
 
+// --- Decisions, triage retry, agent jobs and redaction ------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmBody {
+    /// The edited or operator-authored text; absent confirms the proposal.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// `content_hash` of the text the operator was shown (T-12).
+    pub content_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectBody {
+    pub reason: String,
+}
+
+fn not_yet() -> ApiError {
+    ApiError::new(501, "not implemented".to_string())
+}
+
+/// `POST /api/inbox/{id}/requests/{rid}/confirm` — confirm and deliver.
+pub async fn confirm_request(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<ConfirmBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let _ = (state, id, rid, body);
+    Err(not_yet())
+}
+
+/// `POST /api/inbox/{id}/requests/{rid}/reject` — back to open, with a reason.
+pub async fn reject_request(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<RejectBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let _ = (state, id, rid, body);
+    Err(not_yet())
+}
+
+/// `POST /api/inbox/{id}/requests/{rid}/redeliver` — retry a failed delivery.
+pub async fn redeliver_request(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let _ = (state, id, rid);
+    Err(not_yet())
+}
+
+/// `POST /api/inbox/{id}/requests/{rid}/retry-triage` — re-run triage.
+pub async fn retry_triage(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let _ = (state, id, rid);
+    Err(not_yet())
+}
+
+/// `GET /api/inbox/{id}/agent/jobs/{jobId}` — one system-agent job.
+pub async fn get_agent_job(
+    State(state): State<AppState>,
+    Path((id, job_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<crate::services::system_agent::JobRecord>, ApiError> {
+    let _ = (state, id, job_id, headers);
+    Err(not_yet())
+}
+
+/// `GET /api/inbox/{id}/agent/stream` — WebSocket of `inbox.job` events.
+pub async fn ws_agent_jobs(
+    ws: WebSocketUpgrade,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
+    let _ = (ws, id, headers, state);
+    not_yet().into_response()
+}
+
+/// `POST /api/inbox/{id}/comments/{eventId}/redact` — tombstone a body.
+pub async fn redact_comment(
+    State(state): State<AppState>,
+    Path((id, event_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let _ = (state, id, event_id);
+    Err(not_yet())
+}
+
 /// Handle a `/api/runtime/events` body if it is inbox ingress
 /// (`sebenza-agentctl request|comment`). `None` when it is an ordinary
 /// runtime event. The bearer check has already happened.
@@ -767,10 +867,28 @@ mod tests {
         }
     }
 
+    /// Records every paste; never touches tmux.
+    #[derive(Default)]
+    struct FakePane(Mutex<Vec<(crate::domain::inbox_events::WorktreeKey, String)>>);
+    impl common::services::resolution_delivery::PaneSink for FakePane {
+        fn send(
+            &self,
+            worktree: &crate::domain::inbox_events::WorktreeKey,
+            text: &str,
+        ) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((worktree.clone(), text.to_string()));
+            Ok(())
+        }
+    }
+
     struct Fixture {
         state: AppState,
         store: InboxStore,
         audit: Arc<Captured>,
+        pane: Arc<FakePane>,
     }
 
     fn fixture_with(limits: InboxLimits) -> Fixture {
@@ -787,6 +905,8 @@ mod tests {
         )
         .with_limits(limits)
         .with_audit_sink(audit.clone());
+        let pane = Arc::new(FakePane::default());
+        inbox.set_pane_sink(pane.clone());
         let inbox = Arc::new(inbox);
         let agent_stream = Arc::new(crate::services::agent_stream::AgentStreamManager::new());
         // Disabled: route tests never spawn an agent.
@@ -815,6 +935,7 @@ mod tests {
             state,
             store: InboxStore::with_dir(base.join("inbox")),
             audit,
+            pane,
         }
     }
 
@@ -1317,5 +1438,347 @@ mod tests {
             status(runtime(&f, Some(TOKEN), raw.to_string().into_bytes()).await),
             400
         );
+    }
+
+    // --- Decisions, retry, jobs and redaction (phase 4) -----------------------
+
+    /// A converted item with one request from feat-x, proposed by triage.
+    fn proposed(f: &Fixture, text: &str) -> (String, String, String) {
+        let id = converted(f);
+        let e = f
+            .state
+            .inbox
+            .open_request(
+                &id,
+                crate::adapters::inbox_store::EventAuthor::worktree_agent(),
+                crate::domain::inbox_events::WorktreeKey {
+                    project: "/code/acme-demo".into(),
+                    branch: "feat-x".into(),
+                },
+                "Need a decision",
+                "Which loader?",
+            )
+            .expect("request");
+        let rid = request_id_of(&e.kind).unwrap().to_string();
+        f.state
+            .inbox
+            .record_proposal(&id, &rid, text, "r")
+            .expect("proposal")
+            .expect("open");
+        let hash = f
+            .state
+            .inbox
+            .request(&id, &rid)
+            .unwrap()
+            .proposal_hash
+            .unwrap();
+        (id, rid, hash)
+    }
+
+    fn ids(id: &str, rid: &str) -> Path<(String, String)> {
+        Path((id.to_string(), rid.to_string()))
+    }
+
+    async fn confirm(
+        f: &Fixture,
+        id: &str,
+        rid: &str,
+        h: HeaderMap,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ApiError> {
+        let body: ConfirmBody = serde_json::from_value(body).expect("confirm body");
+        confirm_request(State(f.state.clone()), ids(id, rid), h, Json(body))
+            .await
+            .map(|Json(v)| v)
+    }
+
+    async fn reject(
+        f: &Fixture,
+        id: &str,
+        rid: &str,
+        h: HeaderMap,
+        reason: &str,
+    ) -> Result<serde_json::Value, ApiError> {
+        reject_request(
+            State(f.state.clone()),
+            ids(id, rid),
+            h,
+            Json(RejectBody {
+                reason: reason.into(),
+            }),
+        )
+        .await
+        .map(|Json(v)| v)
+    }
+
+    // TS-25 over HTTP: confirm delivers once and returns the resolved request.
+    #[tokio::test]
+    async fn confirm_delivers_and_returns_the_request() {
+        let f = fixture();
+        let (id, rid, hash) = proposed(&f, "Use the loader.");
+        let v = confirm(
+            &f,
+            &id,
+            &rid,
+            good_headers(),
+            serde_json::json!({"contentHash": hash}),
+        )
+        .await
+        .expect("confirm");
+        assert_eq!(v["request"]["status"], "resolved");
+        assert_eq!(v["request"]["attempts"], 1);
+        assert_eq!(f.pane.0.lock().unwrap().len(), 1);
+    }
+
+    // TS-42 / TS-31 over HTTP: a stale or tampered hash is a 409; nothing sent.
+    #[tokio::test]
+    async fn confirm_with_the_wrong_hash_is_a_409() {
+        let f = fixture();
+        let (id, rid, _) = proposed(&f, "Use the loader.");
+        let r = confirm(
+            &f,
+            &id,
+            &rid,
+            good_headers(),
+            serde_json::json!({"contentHash": "deadbeef"}),
+        )
+        .await;
+        assert_eq!(status(r), 409);
+        assert!(f.pane.0.lock().unwrap().is_empty());
+    }
+
+    // TS-61 over HTTP: no proposal; the operator authors the resolution.
+    #[tokio::test]
+    async fn an_authored_resolution_is_confirmed_over_http() {
+        let f = fixture();
+        let (id, rid, hash) = proposed(&f, "Use the loader.");
+        reject(&f, &id, &rid, good_headers(), "no")
+            .await
+            .expect("reject");
+        let text = "Use tests/helpers/loader.rs";
+        let v = confirm(
+            &f,
+            &id,
+            &rid,
+            good_headers(),
+            serde_json::json!({
+                "body": text,
+                "contentHash": crate::domain::inbox_events::content_hash(text),
+            }),
+        )
+        .await
+        .expect("confirm");
+        assert_eq!(v["request"]["status"], "resolved");
+        assert_eq!(v["request"]["confirmedText"], text);
+        let _ = hash;
+    }
+
+    // TS-32 (confirm half): a worktree caller with the token is accepted
+    // (T-01) and audited as operator with its marker.
+    #[tokio::test]
+    async fn a_worktree_caller_with_the_token_can_confirm_and_is_marked() {
+        let f = fixture();
+        let (id, rid, hash) = proposed(&f, "Use the loader.");
+        let h = with(good_headers(), "x-sebenza-caller", "worktree");
+        confirm(&f, &id, &rid, h, serde_json::json!({"contentHash": hash}))
+            .await
+            .expect("accepted residual T-01");
+        let audit = f.audit.0.lock().unwrap();
+        let rec = audit
+            .iter()
+            .find(|r| r.action == "inbox.resolution.confirmed")
+            .expect("audited");
+        assert_eq!(rec.actor, AuthorKind::Operator);
+        assert_eq!(rec.caller.as_deref(), Some("worktree"));
+    }
+
+    // TS-29 over HTTP.
+    #[tokio::test]
+    async fn reject_reopens_with_the_reason() {
+        let f = fixture();
+        let (id, rid, _) = proposed(&f, "Use the loader.");
+        let v = reject(&f, &id, &rid, good_headers(), "Wrong loader")
+            .await
+            .expect("reject");
+        assert_eq!(v["request"]["status"], "open");
+        assert_eq!(v["request"]["lastReason"], "Wrong loader");
+        assert_eq!(status(reject(&f, &id, &rid, good_headers(), "").await), 400);
+        assert!(f.pane.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn redeliver_needs_a_failed_delivery_and_unknown_requests_are_404() {
+        let f = fixture();
+        let (id, rid, _) = proposed(&f, "Use the loader.");
+        let r = redeliver_request(State(f.state.clone()), ids(&id, &rid), good_headers()).await;
+        assert_eq!(status(r), 409);
+        let r = redeliver_request(State(f.state.clone()), ids(&id, "ghost"), good_headers()).await;
+        assert_eq!(status(r), 404);
+        assert!(f.pane.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn retry_triage_with_the_agent_disabled_is_a_503() {
+        let f = fixture();
+        let (id, rid, _) = proposed(&f, "x");
+        f.state.inbox.reject_request(&id, &rid, "no", None).unwrap();
+        let r = retry_triage(State(f.state.clone()), ids(&id, &rid), good_headers()).await;
+        assert_eq!(status(r), 503);
+        let r = retry_triage(State(f.state.clone()), ids(&id, "ghost"), good_headers()).await;
+        assert_eq!(status(r), 503, "the kill switch is checked first");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_agent_job_is_a_404_and_a_bad_host_a_403() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let r = get_agent_job(State(f.state.clone()), ids(&id, "01NOJOB"), good_headers()).await;
+        assert_eq!(status(r), 404);
+        let h = with(good_headers(), "host", "evil.test:5111");
+        let r = get_agent_job(State(f.state.clone()), ids(&id, "01NOJOB"), h).await;
+        assert_eq!(status(r), 403);
+    }
+
+    // TS-62 over HTTP: redaction masks the comment in the API.
+    #[tokio::test]
+    async fn redact_masks_the_comment() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let v = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "oops sk-TEST-0000000000000000000000"}),
+        )
+        .await
+        .expect("comment");
+        assert_eq!(v["comment"]["warnings"][0], "OpenAI-style key");
+        let event_id = v["comment"]["eventId"].as_str().unwrap().to_string();
+        let r = redact_comment(State(f.state.clone()), ids(&id, &event_id), good_headers())
+            .await
+            .map(|Json(v)| v)
+            .expect("redact");
+        assert_eq!(r["targetEventId"], event_id);
+        let groups = f.state.inbox.list_comments(&id).unwrap();
+        assert_eq!(
+            groups.overall[0].body,
+            crate::domain::inbox_events::REDACTED_BODY
+        );
+        let r = redact_comment(State(f.state.clone()), ids(&id, "01GHOST"), good_headers()).await;
+        assert_eq!(status(r), 404);
+    }
+
+    // TS-41: every new mutating route refuses a missing token, a foreign
+    // origin and a bad host, and writes nothing.
+    #[tokio::test]
+    async fn decision_routes_refuse_a_missing_token_a_foreign_origin_and_a_bad_host() {
+        let f = fixture();
+        let (id, rid, hash) = proposed(&f, "Use the loader.");
+        let before = f.store.read_events(&id).unwrap().len();
+        let cases = [
+            (without(good_headers(), "authorization"), 401),
+            (with(good_headers(), "origin", "http://evil.test"), 403),
+            (
+                with(
+                    with(good_headers(), "host", "evil.test:5111"),
+                    "origin",
+                    "http://evil.test:5111",
+                ),
+                403,
+            ),
+        ];
+        for (h, want) in cases {
+            let body = serde_json::json!({"contentHash": hash});
+            assert_eq!(status(confirm(&f, &id, &rid, h.clone(), body).await), want);
+            assert_eq!(status(reject(&f, &id, &rid, h.clone(), "no").await), want);
+            let r = redeliver_request(State(f.state.clone()), ids(&id, &rid), h.clone()).await;
+            assert_eq!(status(r), want);
+            let r = retry_triage(State(f.state.clone()), ids(&id, &rid), h.clone()).await;
+            assert_eq!(status(r), want);
+            let r = redact_comment(State(f.state.clone()), ids(&id, &rid), h.clone()).await;
+            assert_eq!(status(r), want);
+        }
+        assert_eq!(
+            f.store.read_events(&id).unwrap().len(),
+            before,
+            "nothing written"
+        );
+        assert!(f.pane.0.lock().unwrap().is_empty());
+    }
+
+    /// TS-31: enumerate every inbox route the router mounts. Only the
+    /// confirm and redeliver handlers call into delivery, and they are
+    /// mounted only at the confirm and redeliver paths; nothing else in the
+    /// server calls confirm or redeliver.
+    #[test]
+    fn only_confirm_and_redeliver_routes_reach_delivery() {
+        let server = include_str!("server.rs");
+        let mut routes: Vec<(String, Vec<String>)> = Vec::new();
+        for chunk in server.split(".route(").skip(1) {
+            let Some(start) = chunk.find('"') else {
+                continue;
+            };
+            let path: String = chunk[start + 1..]
+                .chars()
+                .take_while(|c| *c != '"')
+                .collect();
+            if !path.starts_with("/api/inbox") {
+                continue;
+            }
+            let handlers = chunk
+                .match_indices("crate::inbox_routes::")
+                .map(|(i, m)| {
+                    chunk[i + m.len()..]
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect::<String>()
+                })
+                .collect();
+            routes.push((path, handlers));
+        }
+        assert!(routes.len() >= 16, "found {} inbox routes", routes.len());
+
+        let src = include_str!("inbox_routes.rs");
+        let src = &src[..src.find("#[cfg(test)]").unwrap()];
+        let delivering: Vec<String> = src
+            .split("pub async fn ")
+            .skip(1)
+            .filter(|body| body.contains(".confirm_resolution(") || body.contains(".redeliver("))
+            .map(|body| {
+                body.chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect()
+            })
+            .collect();
+        assert_eq!(delivering, ["confirm_request", "redeliver_request"]);
+        for (path, handlers) in &routes {
+            for h in handlers.iter().filter(|h| delivering.contains(h)) {
+                assert!(
+                    path.ends_with("/confirm") || path.ends_with("/redeliver"),
+                    "{h} mounted at {path}"
+                );
+            }
+        }
+        for (name, other) in [
+            ("server.rs", server),
+            ("inbox_runner.rs", include_str!("inbox_runner.rs")),
+            ("main.rs", include_str!("main.rs")),
+            (
+                "system_agent/mod.rs",
+                include_str!("services/system_agent/mod.rs"),
+            ),
+            (
+                "system_agent/apply.rs",
+                include_str!("services/system_agent/apply.rs"),
+            ),
+            (
+                "pane_delivery.rs",
+                include_str!("services/pane_delivery.rs"),
+            ),
+        ] {
+            for call in [".confirm_resolution(", ".redeliver("] {
+                assert!(!other.contains(call), "{name} calls {call}");
+            }
+        }
     }
 }
