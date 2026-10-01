@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 mod adapters;
+#[cfg(test)]
+mod e2e_tests;
 mod inbox_routes;
 mod inbox_runner;
 mod server;
