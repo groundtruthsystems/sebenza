@@ -172,7 +172,7 @@
           "id": "phase-3-task-7",
           "name": "Execute test scenarios TS-15, TS-16, TS-17, TS-18, TS-19, TS-21, TS-22, TS-35, TS-50, TS-51, TS-52, TS-60, TS-65, TS-67",
           "description": "Run and pass the phase's test-plan scenarios.",
-          "status": "doing",
+          "status": "done",
           "test_scenarios": [
             "TS-15",
             "TS-16",
@@ -194,7 +194,7 @@
           "id": "phase-3-task-8",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "doing"
         }
       ]
     },
