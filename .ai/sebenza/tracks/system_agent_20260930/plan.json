@@ -350,13 +350,14 @@
           "id": "phase-6-task-2",
           "name": "Implement priority control, sort and flags in InboxView",
           "description": "Add the priority badge and control, sort by priority then date, and show flagged items.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "457eb98"
         },
         {
           "id": "phase-6-task-3",
           "name": "Implement grouped comments and request card",
           "description": "Render sanitised comments grouped per worktree plus overall, and a request card with verbatim text, diff, and confirm, edit, reject, redeliver.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-6-task-4",
