@@ -378,6 +378,14 @@ pub fn build_router(state: AppState) -> Router {
             get(crate::inbox_routes::ws_agent_jobs),
         )
         .route(
+            "/api/inbox/{id}/agent/draft-help",
+            post(crate::inbox_routes::draft_help),
+        )
+        .route(
+            "/api/inbox/{id}/convert/instructions",
+            post(crate::inbox_routes::convert_instructions),
+        )
+        .route(
             "/api/inbox/{id}/comments/{event_id}/redact",
             post(crate::inbox_routes::redact_comment),
         )

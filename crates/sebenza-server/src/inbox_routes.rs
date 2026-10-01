@@ -930,6 +930,87 @@ async fn agent_job_socket(
     }
 }
 
+// --- Draft help and conversion instructions ---------------------------------
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftHelpBody {
+    /// Optional steer for the proposal ("make it shorter").
+    #[serde(default)]
+    pub instruction: Option<String>,
+}
+
+/// `POST /api/inbox/{id}/agent/draft-help` — queue a draft-help job and return
+/// its id. The proposal arrives on the job (GET or WS); it is never written to
+/// the draft. Applying it is the hash-gated `PUT …/body` (FR-29).
+pub async fn draft_help(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<DraftHelpBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = (state, id, headers, body);
+    todo!("phase-5-task-2")
+}
+
+/// One target the dialog wants an instruction for.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InstructionTargetBody {
+    /// Absolute path of a registered project.
+    pub project: String,
+    pub branch: String,
+    /// The operator's prompt so far; may be empty.
+    #[serde(default)]
+    pub prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertInstructionsBody {
+    pub targets: Vec<InstructionTargetBody>,
+}
+
+/// One target's instruction, for the dialog to show and the operator to edit.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstructionTargetWire {
+    pub project: String,
+    pub branch: String,
+    /// How the agent was asked about this target (`<project name>/<branch>`).
+    pub key: String,
+    /// `None` when the agent was unavailable or failed: convert with the
+    /// operator prompt alone (UC-07a).
+    pub system_instruction: Option<String>,
+    /// The project has `.ai/sebenza/index.md`, so architect-first can run.
+    pub sebenza_workspace: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertInstructionsResponse {
+    pub job_id: Option<String>,
+    /// `succeeded`, `failed`, `unavailable` or `pending`.
+    pub status: &'static str,
+    /// True when no instruction is coming: convert with the operator prompt.
+    pub fallback: bool,
+    pub error: Option<String>,
+    pub targets: Vec<InstructionTargetWire>,
+    pub advisories: Vec<Advisory>,
+}
+
+/// `POST /api/inbox/{id}/convert/instructions` — ask the system agent for a
+/// `systemInstruction` per target (FR-30) and wait for it, up to a bound.
+pub async fn convert_instructions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ConvertInstructionsBody>,
+) -> Result<Json<ConvertInstructionsResponse>, ApiError> {
+    let _ = (state, id, headers, body);
+    todo!("phase-5-task-3")
+}
+
 /// `POST /api/inbox/{id}/comments/{eventId}/redact` — tombstone a comment,
 /// request, proposal or advice body (FR-11). The original line stays in the
 /// log; every read masks it. Redacting twice returns the first tombstone.
@@ -1024,9 +1105,22 @@ mod tests {
         store: InboxStore,
         audit: Arc<Captured>,
         pane: Arc<FakePane>,
+        base: std::path::PathBuf,
+        /// The stub agent's directory, when the system agent is enabled.
+        stub_dir: Option<std::path::PathBuf>,
     }
 
     fn fixture_with(limits: InboxLimits) -> Fixture {
+        fixture_inner(limits, None)
+    }
+
+    /// A fixture whose system agent is enabled and runs the stub CLI in
+    /// `mode`, with the production result sink.
+    fn agent_fixture(mode: &str) -> Fixture {
+        fixture_inner(InboxLimits::default(), Some(mode))
+    }
+
+    fn fixture_inner(limits: InboxLimits, agent_mode: Option<&str>) -> Fixture {
         crate::adapters::control_token::pin_control_token(TOKEN);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let base =
@@ -1044,13 +1138,25 @@ mod tests {
         inbox.set_pane_sink(pane.clone());
         let inbox = Arc::new(inbox);
         let agent_stream = Arc::new(crate::services::agent_stream::AgentStreamManager::new());
-        // Disabled: route tests never spawn an agent.
+        // Disabled unless asked: then only ever the stub CLI.
+        let (agent_config, agent_options, stub_dir) = match agent_mode {
+            Some(mode) => {
+                let (c, o, dir) = crate::services::system_agent::stub_agent_for_tests(&base, mode);
+                (c, o, Some(dir))
+            }
+            None => (Default::default(), Default::default(), None),
+        };
         let system_agent = crate::services::system_agent::SystemAgentService::new(
-            Default::default(),
+            agent_config,
             inbox.clone(),
             agent_stream.clone(),
-            Default::default(),
+            agent_options,
         );
+        if stub_dir.is_some() {
+            system_agent.set_sink(Arc::new(
+                crate::services::system_agent::apply::TriageApplier::new(inbox.clone()),
+            ));
+        }
         let state = AppState {
             manager: Arc::new(crate::services::project_manager::ProjectManager::new(
                 ProjectsRegistry::with_file(base.join("server-projects.json")),
@@ -1071,6 +1177,8 @@ mod tests {
             store: InboxStore::with_dir(base.join("inbox")),
             audit,
             pane,
+            base,
+            stub_dir,
         }
     }
 
@@ -1111,6 +1219,8 @@ mod tests {
             base_branch: None,
             agent_id: None,
             prompt: "go".into(),
+            system_instruction: None,
+            architect_first: None,
         };
         let mut all = match f.store.get(id).expect("get") {
             InboxDraftView::Parsed(d) => d.frontmatter.conversions,
@@ -1915,5 +2025,467 @@ mod tests {
                 assert!(!other.contains(call), "{name} calls {call}");
             }
         }
+    }
+
+    // --- Draft help and conversion instructions ----------------------------
+
+    use crate::services::system_agent::{JobRecord as AgentJob, JobStatus};
+
+    async fn finish(f: &Fixture, job_id: &str) -> AgentJob {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            f.state.system_agent.wait(job_id),
+        )
+        .await
+        .expect("job finished in time")
+        .expect("known job")
+    }
+
+    fn draft_bytes(f: &Fixture, id: &str) -> Vec<u8> {
+        std::fs::read(f.base.join("inbox").join(format!("{id}.md"))).expect("draft file")
+    }
+
+    fn stub_prompts(f: &Fixture) -> Vec<String> {
+        let log = f.stub_dir.as_ref().expect("stub").join("log");
+        let mut out = vec![];
+        for entry in std::fs::read_dir(log).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with("prompt.") {
+                out.push(std::fs::read_to_string(entry.path()).unwrap());
+            }
+        }
+        out
+    }
+
+    async fn body_hash(f: &Fixture, id: &str) -> String {
+        get_draft(State(f.state.clone()), Path(id.to_string()))
+            .await
+            .expect("get")
+            .0
+            .body_hash
+    }
+
+    async fn save(
+        f: &Fixture,
+        id: &str,
+        hash: &str,
+        body: &str,
+    ) -> Result<Json<DraftWire>, ApiError> {
+        save_draft_body(
+            State(f.state.clone()),
+            Path(id.to_string()),
+            good_headers(),
+            Json(SaveBodyBody {
+                expected_hash: hash.to_string(),
+                body: body.to_string(),
+            }),
+        )
+        .await
+    }
+
+    async fn help(
+        f: &Fixture,
+        id: &str,
+        instruction: Option<&str>,
+        headers: HeaderMap,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        draft_help(
+            State(f.state.clone()),
+            Path(id.to_string()),
+            headers,
+            Json(DraftHelpBody {
+                instruction: instruction.map(str::to_string),
+            }),
+        )
+        .await
+    }
+
+    async fn proposal_of(f: &Fixture, id: &str, job_id: &str) -> serde_json::Value {
+        let job = finish(f, job_id).await;
+        assert_eq!(job.status, JobStatus::Succeeded, "{:?}", job.error);
+        let got = get_agent_job(
+            State(f.state.clone()),
+            Path((id.to_string(), job_id.to_string())),
+            good_headers(),
+        )
+        .await
+        .expect("job route")
+        .0;
+        serde_json::to_value(&got).unwrap()["output"].clone()
+    }
+
+    // TS-01: draft-help returns a proposed body; the draft file is unchanged.
+    #[tokio::test]
+    async fn draft_help_returns_a_proposed_body_and_leaves_the_draft_untouched() {
+        let f = agent_fixture("ok");
+        let id = new_draft(&f);
+        let hash = body_hash(&f, &id).await;
+        save(&f, &id, &hash, "rough notes about an importer")
+            .await
+            .expect("save");
+        let before = draft_bytes(&f, &id);
+
+        let started = help(&f, &id, Some("make it a spec"), good_headers())
+            .await
+            .expect("queued")
+            .0;
+        let job_id = started["jobId"].as_str().expect("jobId").to_string();
+        let output = proposal_of(&f, &id, &job_id).await;
+
+        assert_eq!(output["jobKind"], "draft_help");
+        assert!(
+            output["proposed_body"]
+                .as_str()
+                .unwrap()
+                .contains("Ship the importer"),
+            "{output}"
+        );
+        assert!(!output["summary"].as_str().unwrap().is_empty());
+        assert_eq!(
+            draft_bytes(&f, &id),
+            before,
+            "draft-help never writes the draft"
+        );
+        let prompts = stub_prompts(&f);
+        assert!(
+            prompts.iter().any(
+                |p| p.contains("make it a spec") && p.contains("rough notes about an importer")
+            )
+        );
+    }
+
+    // TS-03: the body changed after the proposal; applying it with the old
+    // hash is a 409 and nothing is overwritten.
+    #[tokio::test]
+    async fn applying_a_proposal_over_a_changed_body_is_a_409_and_overwrites_nothing() {
+        let f = agent_fixture("ok");
+        let id = new_draft(&f);
+        let shown = body_hash(&f, &id).await;
+        let job_id = help(&f, &id, None, good_headers()).await.expect("queued").0["jobId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let proposed = proposal_of(&f, &id, &job_id).await["proposed_body"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // The operator kept typing while the agent worked.
+        save(&f, &id, &shown, "edited meanwhile")
+            .await
+            .expect("edit");
+        let after_edit = draft_bytes(&f, &id);
+
+        assert_eq!(status(save(&f, &id, &shown, &proposed).await), 409);
+        assert_eq!(draft_bytes(&f, &id), after_edit, "nothing overwritten");
+
+        // Once merged against the fresh hash, it applies.
+        let fresh = body_hash(&f, &id).await;
+        let saved = save(&f, &id, &fresh, &proposed)
+            .await
+            .expect("merged save")
+            .0;
+        assert_eq!(saved.body, proposed);
+    }
+
+    #[tokio::test]
+    async fn draft_help_needs_the_agent_the_token_and_a_known_draft() {
+        let off = fixture();
+        let id = new_draft(&off);
+        assert_eq!(status(help(&off, &id, None, good_headers()).await), 503);
+        assert_eq!(
+            status(help(&off, &id, None, without(good_headers(), "authorization")).await),
+            401
+        );
+        assert_eq!(
+            status(
+                help(
+                    &off,
+                    &id,
+                    None,
+                    with(good_headers(), "origin", "http://evil.test")
+                )
+                .await
+            ),
+            403
+        );
+        let on = agent_fixture("ok");
+        assert_eq!(
+            status(help(&on, "01ARZ3NDEKTSV4RRFFQ69G5FAV", None, good_headers()).await),
+            404
+        );
+    }
+
+    /// A tempdir project registered with the server and the inbox, with a
+    /// Sebenza workspace when `workspace`.
+    fn project(f: &Fixture, name: &str, workspace: bool) -> String {
+        let dir = f.base.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        if workspace {
+            std::fs::create_dir_all(dir.join(".ai/sebenza")).unwrap();
+            std::fs::write(dir.join(".ai/sebenza/index.md"), "# index").unwrap();
+        }
+        let app = f.state.manager.add_ephemeral(&dir.to_string_lossy());
+        ProjectsRegistry::with_file(f.base.join("projects.json")).add(
+            crate::adapters::projects_registry::ProjectEntry {
+                path: app.path.clone(),
+                name: name.to_string(),
+                added_at: 0,
+            },
+        );
+        app.path.clone()
+    }
+
+    async fn instructions(
+        f: &Fixture,
+        id: &str,
+        targets: serde_json::Value,
+        headers: HeaderMap,
+    ) -> Result<Json<ConvertInstructionsResponse>, ApiError> {
+        let body: ConvertInstructionsBody =
+            serde_json::from_value(serde_json::json!({ "targets": targets })).unwrap();
+        convert_instructions(
+            State(f.state.clone()),
+            Path(id.to_string()),
+            headers,
+            Json(body),
+        )
+        .await
+    }
+
+    // TS-44: an item with comments gets a system instruction per target.
+    #[tokio::test]
+    async fn convert_instructions_return_a_system_instruction_per_target() {
+        let f = agent_fixture("fixture:convert_instructions");
+        let path = project(&f, "acme-demo", true);
+        let id = new_draft(&f);
+        f.state
+            .inbox
+            .add_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Overall,
+                "the parser must stream",
+            )
+            .unwrap();
+
+        let resp = instructions(
+            &f,
+            &id,
+            serde_json::json!([{ "project": path, "branch": "feat-x", "prompt": "Build the importer" }]),
+            good_headers(),
+        )
+        .await
+        .expect("instructions")
+        .0;
+
+        assert_eq!(resp.status, "succeeded", "{:?}", resp.error);
+        assert!(!resp.fallback);
+        let job_id = resp.job_id.clone().expect("job id");
+        assert_eq!(resp.targets.len(), 1);
+        let t = &resp.targets[0];
+        assert_eq!(t.key, "acme-demo/feat-x");
+        assert_eq!(t.project, path);
+        assert!(t.sebenza_workspace);
+        assert_eq!(
+            t.system_instruction.as_deref(),
+            Some("Architect the streaming parser only; the upload UI is another worktree.")
+        );
+        let prompt = stub_prompts(&f).pop().expect("prompt");
+        assert!(prompt.contains("JOB-KIND: convert"));
+        assert!(
+            prompt.contains("the parser must stream"),
+            "comments inform it"
+        );
+        assert!(prompt.contains("acme-demo/feat-x"));
+        assert!(prompt.contains("Build the importer"));
+        assert_eq!(
+            f.state.system_agent.job(&job_id).unwrap().kind,
+            crate::services::system_agent::JobKind::Convert
+        );
+    }
+
+    /// Records each launch prompt; never touches git or tmux.
+    #[derive(Default)]
+    struct LaunchSpy(Mutex<Vec<String>>);
+    impl crate::services::inbox_convert::ConversionRunner for LaunchSpy {
+        fn create_worktree(&self, t: &ConversionTarget) -> Result<String, String> {
+            Ok(format!("/wt/{}", t.branch))
+        }
+        fn write_note(&self, _p: &str, _b: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn exclude_note(&self, _p: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn record_origin(&self, _p: &str, _d: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn send_prompt(&self, t: &ConversionTarget, _p: &str) -> Result<(), String> {
+            self.0.lock().unwrap().push(t.prompt.clone());
+            Ok(())
+        }
+        fn has_sebenza_workspace(&self, _t: &ConversionTarget) -> bool {
+            true
+        }
+        fn now(&self) -> String {
+            "t".into()
+        }
+    }
+
+    /// Convert with what the dialog would submit after `resp`: the operator
+    /// prompt, plus each target's instruction when there is one.
+    fn convert_with(f: &Fixture, id: &str, resp: &ConvertInstructionsResponse) -> Vec<String> {
+        let targets: Vec<ConversionTarget> = resp
+            .targets
+            .iter()
+            .map(|t| ConversionTarget {
+                project_path: t.project.clone(),
+                branch: t.branch.clone(),
+                prompt: "Build the importer".into(),
+                system_instruction: t.system_instruction.clone(),
+                ..Default::default()
+            })
+            .collect();
+        let spy = LaunchSpy::default();
+        f.state.inbox.convert(id, &targets, &spy).expect("convert");
+        spy.0.into_inner().unwrap()
+    }
+
+    // TS-47: with the agent disabled the dialog falls back, and convert
+    // launches with the operator prompt alone.
+    #[tokio::test]
+    async fn with_the_agent_disabled_instructions_fall_back_and_convert_uses_the_operator_prompt() {
+        let f = fixture();
+        let path = project(&f, "acme-demo", true);
+        let id = new_draft(&f);
+        let resp = instructions(
+            &f,
+            &id,
+            serde_json::json!([{ "project": path, "branch": "feat-x", "prompt": "Build the importer" }]),
+            good_headers(),
+        )
+        .await
+        .expect("a fallback is not an error")
+        .0;
+        assert_eq!(resp.status, "unavailable");
+        assert!(resp.fallback);
+        assert_eq!(resp.job_id, None);
+        assert_eq!(resp.targets[0].system_instruction, None);
+
+        assert_eq!(convert_with(&f, &id, &resp), vec!["Build the importer"]);
+        let history = f.state.inbox.conversion_history(&id).unwrap();
+        assert_eq!(history[0].system_instruction, None);
+        assert!(!history[0].architect_first);
+    }
+
+    // TS-47: a failed instruction job falls back the same way.
+    #[tokio::test]
+    async fn a_failed_instruction_job_falls_back_to_the_operator_prompt() {
+        let f = agent_fixture("exit");
+        let path = project(&f, "acme-demo", true);
+        let id = new_draft(&f);
+        let resp = instructions(
+            &f,
+            &id,
+            serde_json::json!([{ "project": path, "branch": "feat-x", "prompt": "Build the importer" }]),
+            good_headers(),
+        )
+        .await
+        .expect("a fallback is not an error")
+        .0;
+        assert_eq!(resp.status, "failed");
+        assert!(resp.fallback);
+        assert!(resp.error.is_some());
+        assert_eq!(resp.targets[0].system_instruction, None);
+        assert_eq!(convert_with(&f, &id, &resp), vec!["Build the importer"]);
+    }
+
+    // TS-57-adjacent: instructions that do arrive launch architect-first and
+    // are recorded on conversions[].
+    #[tokio::test]
+    async fn returned_instructions_launch_architect_first_and_are_recorded() {
+        let f = agent_fixture("fixture:convert_instructions");
+        let path = project(&f, "acme-demo", true);
+        let id = new_draft(&f);
+        let resp = instructions(
+            &f,
+            &id,
+            serde_json::json!([{ "project": path, "branch": "feat-x", "prompt": "Build the importer" }]),
+            good_headers(),
+        )
+        .await
+        .unwrap()
+        .0;
+        let sent = convert_with(&f, &id, &resp);
+        assert!(sent[0].contains("sebenza-architect"));
+        assert!(sent[0].contains("Architect the streaming parser only"));
+        let history = f.state.inbox.conversion_history(&id).unwrap();
+        assert!(history[0].architect_first);
+        assert!(history[0].system_instruction.is_some());
+    }
+
+    // TS-49 (route): comments are scanned too, and targets are validated.
+    #[tokio::test]
+    async fn instructions_validate_targets_guard_the_route_and_scan_comments() {
+        let f = fixture();
+        let path = project(&f, "acme-demo", false);
+        let id = new_draft(&f);
+        f.state
+            .inbox
+            .add_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Overall,
+                "use sk-TEST-0000000000000000",
+            )
+            .unwrap();
+        let ok = serde_json::json!([{ "project": path, "branch": "feat-x" }]);
+
+        let resp = instructions(&f, &id, ok.clone(), good_headers())
+            .await
+            .expect("ok")
+            .0;
+        assert!(!resp.targets[0].sebenza_workspace);
+        assert!(
+            resp.advisories
+                .iter()
+                .any(|a| a.kind == "secret" && a.message.contains("comment")),
+            "{:?}",
+            resp.advisories
+        );
+
+        let unknown = serde_json::json!([{ "project": "/code/not-registered", "branch": "x" }]);
+        assert_eq!(
+            status(instructions(&f, &id, unknown, good_headers()).await),
+            400
+        );
+        assert_eq!(
+            status(
+                instructions(
+                    &f,
+                    &id,
+                    ok.clone(),
+                    without(good_headers(), "authorization")
+                )
+                .await
+            ),
+            401
+        );
+        assert_eq!(
+            status(
+                instructions(
+                    &f,
+                    &id,
+                    ok.clone(),
+                    with(good_headers(), "host", "evil.test")
+                )
+                .await
+            ),
+            403
+        );
+        assert_eq!(
+            status(instructions(&f, "01ARZ3NDEKTSV4RRFFQ69G5FAV", ok, good_headers()).await),
+            404
+        );
     }
 }

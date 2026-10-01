@@ -825,6 +825,50 @@ impl RequestObserver for TriageOnRequest {
     }
 }
 
+/// A private, executable copy of the stub agent CLI (`testdata/`) under
+/// `base/stub`, in `mode`, and a config and options that run it in an
+/// isolated tempdir. For other modules' tests; never a real CLI (NFR-02).
+#[cfg(test)]
+pub(crate) fn stub_agent_for_tests(
+    base: &std::path::Path,
+    mode: &str,
+) -> (SystemAgentConfig, SystemAgentOptions, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+    let testdata =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/services/system_agent/testdata");
+    let stub_dir = base.join("stub");
+    std::fs::create_dir_all(stub_dir.join("fixtures")).expect("stub dir");
+    let script = stub_dir.join("stub-agent.sh");
+    std::fs::copy(testdata.join("stub-agent.sh"), &script).expect("copy stub");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    for entry in std::fs::read_dir(testdata.join("fixtures")).expect("fixtures") {
+        let entry = entry.expect("fixture");
+        std::fs::copy(
+            entry.path(),
+            stub_dir.join("fixtures").join(entry.file_name()),
+        )
+        .expect("copy fixture");
+    }
+    std::fs::write(stub_dir.join("stub.mode"), mode).expect("stub mode");
+    let config = SystemAgentConfig {
+        enabled: true,
+        timeout_secs: 20,
+        binary: Some(script.to_string_lossy().to_string()),
+        ..SystemAgentConfig::default()
+    };
+    let options = SystemAgentOptions {
+        scratch_root: base.join("scratch"),
+        parent_env: Some(vec![
+            ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
+            (
+                "HOME".into(),
+                base.join("home").to_string_lossy().to_string(),
+            ),
+        ]),
+    };
+    (config, options, stub_dir)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1408,6 +1452,8 @@ mod tests {
             base_branch: None,
             agent_id: Some("claude".into()),
             prompt: "go".into(),
+            system_instruction: None,
+            architect_first: None,
         };
         let outcome = serde_yaml::to_value(ConversionOutcome::created(
             &target,

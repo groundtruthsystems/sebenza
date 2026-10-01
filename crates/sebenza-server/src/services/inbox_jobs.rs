@@ -193,6 +193,8 @@ mod tests {
             base_branch: None,
             agent_id: None,
             prompt: "go".into(),
+            system_instruction: None,
+            architect_first: None,
         }
     }
 

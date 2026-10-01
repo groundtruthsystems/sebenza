@@ -1894,6 +1894,8 @@ mod tests {
                 base_branch: None,
                 agent_id: Some("claude".into()),
                 prompt: "build it".into(),
+                system_instruction: None,
+                architect_first: None,
             },
         )
     }
@@ -2103,6 +2105,8 @@ mod tests {
             base_branch: None,
             agent_id: None,
             prompt: "go".into(),
+            system_instruction: None,
+            architect_first: None,
         };
         assert!(s.convert(bad, &[target], &StubRunner::new(&[])).is_err());
     }
@@ -2234,6 +2238,8 @@ mod collaboration_tests {
             base_branch: None,
             agent_id: Some("claude".into()),
             prompt: "go".into(),
+            system_instruction: None,
+            architect_first: None,
         };
         let mut all = match f.store.get(id).expect("get") {
             InboxDraftView::Parsed(d) => d.frontmatter.conversions,
@@ -2633,6 +2639,8 @@ mod collaboration_tests {
             base_branch: None,
             agent_id: None,
             prompt: "go".into(),
+            system_instruction: None,
+            architect_first: None,
         };
         let mut failed = ConversionOutcome::failed(&target, "boom".into(), "t".into());
         failed.worktree_path = Some("/wt/acme-demo/feat-x".into());
@@ -2991,6 +2999,8 @@ mod resolution_tests {
             base_branch: None,
             agent_id: Some("claude".into()),
             prompt: "go".into(),
+            system_instruction: None,
+            architect_first: None,
         };
         let mut all = match f.store.get(id).expect("get") {
             InboxDraftView::Parsed(d) => d.frontmatter.conversions,
