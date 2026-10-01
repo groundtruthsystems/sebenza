@@ -15,7 +15,7 @@
       "description": "Sebenza 2.0: system-wide agent that drafts inbox items, triages/auto-resolves worktree requests within policy, inbox priority and grouped comments, and architect-first instructions on conversion",
       "status": "doing",
       "created_at": "2026-09-30T00:00:00Z",
-      "updated_at": "2026-10-01T04:53:00Z",
+      "updated_at": "2026-10-01T04:53:44Z",
       "design_path": "./tracks/system_agent_20260930/design.md",
       "test_plan_path": "./tracks/system_agent_20260930/test-plan.md",
       "phases_summary": [
@@ -52,20 +52,20 @@
         {
           "id": "phase-6",
           "name": "Inbox UI",
-          "status": "doing",
+          "status": "done",
           "blocked_reason": null
         },
         {
           "id": "phase-7",
           "name": "Final verification",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         }
       ],
       "progress": {
         "total_tasks": 44,
-        "completed_tasks": 38,
-        "percentage": 86
+        "completed_tasks": 39,
+        "percentage": 89
       },
       "spec_path": "./tracks/system_agent_20260930/spec.md",
       "plan_path": "./tracks/system_agent_20260930/plan.json"

@@ -336,7 +336,7 @@
     {
       "id": "phase-6",
       "name": "Inbox UI",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -387,21 +387,22 @@
           "id": "phase-6-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "doing"
+          "status": "done"
         }
-      ]
+      ],
+      "checkpoint_sha": "2c5cd4c"
     },
     {
       "id": "phase-7",
       "name": "Final verification",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-7-task-1",
           "name": "Write end-to-end tests",
           "description": "Write the loopback e2e harness tests for the request-to-delivery and conversion flows using the stub CLI and fake pane.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-7-task-2",
