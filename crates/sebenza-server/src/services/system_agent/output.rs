@@ -5,6 +5,7 @@
 
 use crate::domain::model::Priority;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
 use super::JobKind;
 
@@ -108,10 +109,188 @@ pub fn parse_job_output(
     message: &str,
     expected_targets: &[String],
 ) -> Result<JobOutput, OutputError> {
-    todo!(
-        "phase-3-task-5: {kind:?} {} {expected_targets:?}",
-        message.len()
-    )
+    let text = strip_code_fence(message.trim());
+    let value: Value =
+        serde_json::from_str(text).map_err(|e| OutputError::NotJson(e.to_string()))?;
+    let Value::Object(mut fields) = value else {
+        return Err(OutputError::NotAnObject);
+    };
+    match fields.remove("schema_version") {
+        Some(Value::Number(n)) if n.as_u64() == Some(OUTPUT_SCHEMA_VERSION) => {}
+        Some(Value::Number(n)) => return Err(OutputError::UnsupportedVersion(n.to_string())),
+        Some(_) => return Err(OutputError::UnsupportedVersion("(not a number)".into())),
+        None => return Err(OutputError::UnsupportedVersion("(missing)".into())),
+    }
+    let expected = kind.as_str();
+    match fields.remove("job_kind") {
+        Some(Value::String(got)) if got == expected => {}
+        Some(Value::String(got)) => {
+            // Name a known kind; never echo free text.
+            let got = [JobKind::Triage, JobKind::DraftHelp, JobKind::Convert]
+                .iter()
+                .map(|k| k.as_str())
+                .find(|k| *k == got)
+                .unwrap_or("(unknown)")
+                .to_string();
+            return Err(OutputError::WrongKind { expected, got });
+        }
+        _ => {
+            return Err(OutputError::WrongKind {
+                expected,
+                got: "(missing)".into(),
+            });
+        }
+    }
+    match kind {
+        JobKind::Triage => {
+            check_keys(
+                expected,
+                &fields,
+                &["priority", "rationale", "recommendation"],
+                &["body"],
+            )?;
+            let out: TriageOutput = typed(expected, fields)?;
+            validate_triage(&out)?;
+            Ok(JobOutput::Triage(out))
+        }
+        JobKind::DraftHelp => {
+            check_keys(expected, &fields, &["proposed_body", "summary"], &[])?;
+            let out: DraftHelpOutput = typed(expected, fields)?;
+            non_blank("proposed_body", &out.proposed_body, MAX_BODY_BYTES)?;
+            capped("summary", &out.summary, MAX_NOTE_BYTES)?;
+            Ok(JobOutput::DraftHelp(out))
+        }
+        JobKind::Convert => {
+            check_keys(expected, &fields, &["targets"], &[])?;
+            if let Some(Value::Array(targets)) = fields.get("targets") {
+                for target in targets {
+                    let Value::Object(t) = target else {
+                        return Err(schema(expected, "each target must be an object"));
+                    };
+                    check_keys(expected, t, &["project", "system_instruction"], &[])?;
+                }
+            }
+            let out: ConvertOutput = typed(expected, fields)?;
+            validate_convert(&out, expected_targets)?;
+            Ok(JobOutput::Convert(out))
+        }
+    }
+}
+
+/// The text inside one surrounding ```` ``` ```` fence (with or without a
+/// language tag), or `text` unchanged.
+fn strip_code_fence(text: &str) -> &str {
+    let Some(rest) = text.strip_prefix("```") else {
+        return text;
+    };
+    let Some(body) = rest.strip_suffix("```") else {
+        return text;
+    };
+    // Drop the language tag line (`json`, or nothing).
+    match body.split_once('\n') {
+        Some((tag, inner)) if !tag.contains('{') => inner.trim(),
+        _ => body.trim(),
+    }
+}
+
+fn schema(kind: &'static str, detail: impl Into<String>) -> OutputError {
+    OutputError::Schema {
+        kind,
+        detail: detail.into(),
+    }
+}
+
+/// Every `required` key present, nothing outside `required` + `optional`.
+/// Names an offending key (capped), never a value.
+fn check_keys(
+    kind: &'static str,
+    fields: &Map<String, Value>,
+    required: &[&str],
+    optional: &[&str],
+) -> Result<(), OutputError> {
+    if let Some(unknown) = fields
+        .keys()
+        .find(|k| !required.contains(&k.as_str()) && !optional.contains(&k.as_str()))
+    {
+        let name: String = unknown.chars().take(64).collect();
+        return Err(schema(kind, format!("unknown field `{name}`")));
+    }
+    if let Some(missing) = required.iter().find(|k| !fields.contains_key(**k)) {
+        return Err(schema(kind, format!("missing field `{missing}`")));
+    }
+    Ok(())
+}
+
+/// Deserialize the checked fields. serde's own message can quote values, so
+/// it is replaced by a generic one.
+fn typed<T: serde::de::DeserializeOwned>(
+    kind: &'static str,
+    fields: Map<String, Value>,
+) -> Result<T, OutputError> {
+    serde_json::from_value(Value::Object(fields))
+        .map_err(|_| schema(kind, "a field has the wrong type or an unsupported value"))
+}
+
+fn capped(field: &str, value: &str, max: usize) -> Result<(), OutputError> {
+    if value.len() > max {
+        return Err(OutputError::Invalid(format!(
+            "{field} is longer than {max} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn non_blank(field: &str, value: &str, max: usize) -> Result<(), OutputError> {
+    if value.trim().is_empty() {
+        return Err(OutputError::Invalid(format!("{field} is empty")));
+    }
+    capped(field, value, max)
+}
+
+fn validate_triage(out: &TriageOutput) -> Result<(), OutputError> {
+    non_blank("rationale", &out.rationale, MAX_NOTE_BYTES)?;
+    match (out.recommendation, &out.body) {
+        (Recommendation::Advice | Recommendation::Proposal, Some(body)) => {
+            non_blank("body", body, MAX_BODY_BYTES)
+        }
+        (Recommendation::Advice | Recommendation::Proposal, None) => Err(OutputError::Invalid(
+            "advice and proposals need a body".to_string(),
+        )),
+        (Recommendation::None, body) => {
+            capped("body", body.as_deref().unwrap_or(""), MAX_BODY_BYTES)
+        }
+    }
+}
+
+fn validate_convert(out: &ConvertOutput, expected: &[String]) -> Result<(), OutputError> {
+    if out.targets.is_empty() {
+        return Err(OutputError::Invalid("targets is empty".to_string()));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for target in &out.targets {
+        non_blank("project", &target.project, MAX_NOTE_BYTES)?;
+        non_blank(
+            "system_instruction",
+            &target.system_instruction,
+            MAX_BODY_BYTES,
+        )?;
+        if !seen.insert(target.project.as_str()) {
+            return Err(OutputError::Invalid(
+                "a target project appears twice".to_string(),
+            ));
+        }
+        if !expected.is_empty() && !expected.contains(&target.project) {
+            return Err(OutputError::Invalid(
+                "a target project was not asked for".to_string(),
+            ));
+        }
+    }
+    if expected.iter().any(|p| !seen.contains(p.as_str())) {
+        return Err(OutputError::Invalid(
+            "a requested target project is missing".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

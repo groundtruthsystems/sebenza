@@ -72,18 +72,43 @@ pub fn child_env<I>(parent: I) -> HashMap<String, String>
 where
     I: IntoIterator<Item = (String, String)>,
 {
-    todo!("phase-3-task-5: {}", parent.into_iter().count())
+    parent
+        .into_iter()
+        .filter(|(k, _)| ENV_ALLOWLIST.contains(&k.as_str()) && !k.starts_with("SEBENZA_"))
+        .collect()
 }
 
 /// The read-only tool policy every job runs under.
 pub fn read_only_tools() -> ToolPolicy {
-    todo!("phase-3-task-5")
+    ToolPolicy {
+        allowed: ALLOWED_TOOLS.iter().map(|t| t.to_string()).collect(),
+        disallowed: DISALLOWED_TOOLS.iter().map(|t| t.to_string()).collect(),
+        strict_mcp: true,
+    }
 }
 
 /// Create (or empty) `<root>/<draft_id>` and return it. The id must be a bare
 /// alphanumeric ULID so it cannot climb out of `root`.
 pub fn prepare_scratch_dir(root: &Path, draft_id: &str) -> std::io::Result<PathBuf> {
-    todo!("phase-3-task-5: {} {draft_id}", root.display())
+    if draft_id.is_empty() || !draft_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "a scratch dir needs a bare alphanumeric item id",
+        ));
+    }
+    let dir = root.join(draft_id);
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    std::fs::create_dir_all(&dir)?;
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(dir)
 }
 
 /// The full run input for one job, from config and the per-job parts.
@@ -95,15 +120,24 @@ pub fn build_run_input(
     resume_session_id: Option<String>,
     env: HashMap<String, String>,
 ) -> StartRunInput {
-    todo!(
-        "phase-3-task-5: {config:?} {draft_id} {} {} {resume_session_id:?} {}",
-        cwd.display(),
-        prompt.len(),
-        env.len()
-    )
+    StartRunInput {
+        provider: StreamProvider::Claude,
+        conversation_id: format!("system-agent:{draft_id}"),
+        cwd: cwd.to_string_lossy().to_string(),
+        prompt,
+        env,
+        permission_mode: Some(PERMISSION_MODE.to_string()),
+        resume_session_id,
+        system_prompt: Some(super::prompt::SYSTEM_PROMPT.to_string()),
+        binary: config.binary.clone(),
+        model: config.model.clone(),
+        tools: Some(read_only_tools()),
+        isolated: true,
+        timeout: Some(job_timeout(config)),
+    }
 }
 
-/// The `--resume` session timeout as a [`Duration`].
+/// The per-job wall-clock limit.
 pub fn job_timeout(config: &SystemAgentConfig) -> Duration {
     Duration::from_secs(config.timeout_secs)
 }

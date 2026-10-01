@@ -36,7 +36,31 @@ pub struct DigestEntry {
 /// Wrap `text` in an `<untrusted-data name=...>` block. Any fence tag inside
 /// `text` is defused, so the data cannot close the block and speak as the task.
 pub fn fence(name: &str, text: &str) -> String {
-    todo!("phase-3-task-5: {name} {}", text.len())
+    let name: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    format!(
+        "<{FENCE_TAG} name=\"{name}\">\n{}\n</{FENCE_TAG}>\n",
+        defuse(text).trim_end()
+    )
+}
+
+/// `text` with every `<untrusted-data` / `</untrusted-data` (any case) made
+/// inert by escaping its `<`.
+fn defuse(text: &str) -> String {
+    let lower = text.to_ascii_lowercase();
+    let open = format!("<{FENCE_TAG}");
+    let close = format!("</{FENCE_TAG}");
+    let mut out = String::with_capacity(text.len());
+    for (i, c) in text.char_indices() {
+        if c == '<' && (lower[i..].starts_with(&open) || lower[i..].starts_with(&close)) {
+            out.push_str("&lt;");
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Up to [`DIGEST_LIMIT`] other open (non-dropped, parsed) items, in inbox
