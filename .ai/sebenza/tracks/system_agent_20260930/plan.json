@@ -313,7 +313,7 @@
           "id": "phase-5-task-5",
           "name": "Execute test scenarios TS-01, TS-03, TS-44, TS-45, TS-47, TS-48, TS-49",
           "description": "Run and pass the phase's test-plan scenarios.",
-          "status": "doing",
+          "status": "done",
           "test_scenarios": [
             "TS-01",
             "TS-03",
