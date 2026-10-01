@@ -402,13 +402,14 @@
           "id": "phase-7-task-1",
           "name": "Write end-to-end tests",
           "description": "Write the loopback e2e harness tests for the request-to-delivery and conversion flows using the stub CLI and fake pane.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "0c5b520"
         },
         {
           "id": "phase-7-task-2",
           "name": "Update docs and CLI help",
           "description": "Document the system agent, systemAgent config, agentctl request/comment, and the accepted T-01 convention.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-7-task-3",
