@@ -5,7 +5,7 @@
     {
       "id": "phase-1",
       "name": "Store and domain model",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -40,7 +40,7 @@
           "id": "phase-1-task-5",
           "name": "Execute test scenarios TS-05, TS-07, TS-08, TS-10, TS-39, TS-53, TS-54, TS-64",
           "description": "Run and pass the phase's test-plan scenarios.",
-          "status": "doing",
+          "status": "done",
           "test_scenarios": [
             "TS-05",
             "TS-07",
@@ -56,21 +56,22 @@
           "id": "phase-1-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "done"
         }
-      ]
+      ],
+      "checkpoint_sha": "27b8ccf"
     },
     {
       "id": "phase-2",
       "name": "Routes, agentctl ingress and CLI parity",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for priority, comment and request routes",
           "description": "Write failing tests for the new guarded routes, runtime-event ingress, the worktree cross-check, limits, and audit.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-2-task-2",
