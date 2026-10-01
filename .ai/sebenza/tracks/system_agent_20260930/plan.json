@@ -158,13 +158,14 @@
           "id": "phase-3-task-5",
           "name": "Implement isolated argv, env allowlist and output schemas",
           "description": "Build read-only non-yolo argv with an empty cwd and token-free env, and validate versioned triage, draft_help and convert output.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "7f5b3f8"
         },
         {
           "id": "phase-3-task-6",
           "name": "Implement sessions, digest, restart recovery and re-seed",
           "description": "Persist sessions, build the titles-only digest, re-enqueue unproposed requests once on restart, and re-seed past turnCap.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-7",
