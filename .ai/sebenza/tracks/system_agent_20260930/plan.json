@@ -78,13 +78,14 @@
           "id": "phase-2-task-2",
           "name": "Implement priority and comment routes with contract",
           "description": "Add PATCH priority and GET/POST comments to inbox_routes, the ts-rest contract, api.ts, and sebenza-cli inbox.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "3261fba"
         },
         {
           "id": "phase-2-task-3",
           "name": "Implement agentctl request and comment ingress",
           "description": "Add inbox.request and inbox.comment runtime events and agentctl commands, refusing workers not in conversions[].",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-2-task-4",
