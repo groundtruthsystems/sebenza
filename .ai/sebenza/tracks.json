@@ -13,16 +13,16 @@
       "track_id": "system_agent_20260930",
       "type": "feature",
       "description": "Sebenza 2.0: system-wide agent that drafts inbox items, triages/auto-resolves worktree requests within policy, inbox priority and grouped comments, and architect-first instructions on conversion",
-      "status": "backlog",
+      "status": "doing",
       "created_at": "2026-09-30T00:00:00Z",
-      "updated_at": "2026-09-30T13:00:00Z",
+      "updated_at": "2026-10-01T03:07:39Z",
       "design_path": "./tracks/system_agent_20260930/design.md",
       "test_plan_path": "./tracks/system_agent_20260930/test-plan.md",
       "phases_summary": [
         {
           "id": "phase-1",
           "name": "Store and domain model",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
@@ -64,8 +64,8 @@
       ],
       "progress": {
         "total_tasks": 44,
-        "completed_tasks": 0,
-        "percentage": 0
+        "completed_tasks": 1,
+        "percentage": 2
       },
       "spec_path": "./tracks/system_agent_20260930/spec.md",
       "plan_path": "./tracks/system_agent_20260930/plan.json"

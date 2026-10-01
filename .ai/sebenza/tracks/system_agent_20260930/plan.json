@@ -5,20 +5,21 @@
     {
       "id": "phase-1",
       "name": "Store and domain model",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-1-task-1",
           "name": "Write tests for frontmatter v2 and event sidecars",
           "description": "Write failing unit and integration tests for priority fields, schema refusal, the JSONL event store, the request fold, and retention.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "35d93ed"
         },
         {
           "id": "phase-1-task-2",
           "name": "Implement frontmatter v2 and priority fields",
           "description": "Add priority and priority_source with serde defaults, a flatten catch-all, and refusal to write newer schema versions.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-3",
