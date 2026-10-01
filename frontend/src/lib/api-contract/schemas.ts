@@ -861,12 +861,19 @@ export const InboxProjectLinkSchema = z.object({
 
 export const DraftStatusSchema = z.enum(["Draft", "Promoted", "Dropped"]);
 
+/** `P0` is most urgent; the inbox lists by priority, then newest. */
+export const InboxPrioritySchema = z.enum(["P0", "P1", "P2", "P3"]);
+/** `operator` while an override stands; the system agent may not move it. */
+export const InboxPrioritySourceSchema = z.enum(["agent", "operator"]);
+
 export const InboxDraftSummarySchema = z.object({
   id: z.string(),
   title: z.string(),
   status: DraftStatusSchema,
   updatedAt: z.string(),
   project: InboxProjectLinkSchema.nullable(),
+  priority: InboxPrioritySchema.default("P2"),
+  prioritySource: InboxPrioritySourceSchema.default("agent"),
   isRaw: z.boolean(),
 });
 
@@ -897,6 +904,8 @@ export const InboxDraftSchema = z.object({
   body: z.string(),
   bodyHash: z.string(),
   project: InboxProjectLinkSchema.nullable(),
+  priority: InboxPrioritySchema.default("P2"),
+  prioritySource: InboxPrioritySourceSchema.default("agent"),
   conversions: z.array(ConversionOutcomeSchema).default([]),
   raw: z.object({ text: z.string(), error: z.string() }).nullable(),
 });
@@ -914,6 +923,86 @@ export const PatchInboxDraftRequestSchema = z.object({
   status: DraftStatusSchema.optional(),
 });
 
+
+/** `null` clears the override and hands priority back to the agent. The key
+ *  is required: an empty body is refused rather than read as a clear. */
+export const SetInboxPriorityRequestSchema = z.object({
+  priority: InboxPrioritySchema.nullable(),
+});
+
+export const InboxWorktreeKeySchema = z.object({
+  project: z.string(),
+  branch: z.string(),
+});
+
+export const InboxAuthorKindSchema = z.enum([
+  "operator",
+  "worktree_agent",
+  "system_agent",
+]);
+
+/** One thread row. Bodies are untrusted text: render as plain text or
+ *  sanitised markdown only. `caller` is self-declared, never authenticated. */
+export const InboxCommentSchema = z.object({
+  eventId: z.string(),
+  ts: z.string(),
+  author: InboxAuthorKindSchema,
+  caller: z.string().nullable(),
+  kind: z.enum(["note", "request", "advice", "proposal", "resolution"]),
+  body: z.string(),
+  title: z.string().nullable(),
+  requestId: z.string().nullable(),
+  parentEventId: z.string().nullable(),
+  warnings: z.array(z.string()).default([]),
+  redacted: z.boolean(),
+});
+
+export const InboxCommentGroupsSchema = z.object({
+  overall: z.array(InboxCommentSchema),
+  worktrees: z.array(
+    InboxWorktreeKeySchema.extend({ comments: z.array(InboxCommentSchema) }),
+  ),
+});
+
+/** `worktree` absent posts to the overall thread. */
+export const PostInboxCommentRequestSchema = z.object({
+  body: z.string(),
+  worktree: InboxWorktreeKeySchema.optional(),
+});
+
+export const PostInboxCommentResponseSchema = z.object({
+  comment: InboxCommentSchema,
+});
+
+export const InboxRequestStatusSchema = z.enum([
+  "open",
+  "proposed",
+  "confirmed",
+  "resolved",
+  "delivery_failed",
+]);
+
+export const InboxRequestSchema = z.object({
+  requestId: z.string(),
+  worktree: InboxWorktreeKeySchema,
+  title: z.string(),
+  body: z.string(),
+  status: InboxRequestStatusSchema,
+  flagged: z.boolean(),
+  proposalId: z.string().nullable(),
+  proposal: z.string().nullable(),
+  contentHash: z.string().nullable(),
+  confirmedText: z.string().nullable(),
+  lastReason: z.string().nullable(),
+  lastError: z.string().nullable(),
+  attempts: z.number(),
+  warnings: z.array(z.string()).default([]),
+  openedAt: z.string(),
+});
+
+export const InboxRequestListSchema = z.object({
+  requests: z.array(InboxRequestSchema),
+});
 
 export const ConversionTargetSchema = z.object({
   projectPath: z.string(),

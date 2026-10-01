@@ -309,12 +309,14 @@ impl InboxService {
         }
     }
 
-    /// Drafts newest first, `Dropped` hidden unless asked for, filtered by
-    /// `search` over title and body.
+    /// Drafts by priority, then newest first (`inbox_order`), `Dropped`
+    /// hidden unless asked for, filtered by `search` over title and body.
     pub fn list(&self, query: &ListQuery) -> Result<Vec<DraftSummary>, InboxServiceError> {
         let needle = query.search.as_ref().map(|s| s.to_lowercase());
+        let mut views = self.store.list()?;
+        views.sort_by(inbox_order);
         let mut out = Vec::new();
-        for view in self.store.list()? {
+        for view in views {
             let summary = match &view {
                 InboxDraftView::Parsed(draft) => {
                     if draft.frontmatter.status == DraftStatus::Dropped && !query.include_dropped {
@@ -578,8 +580,10 @@ impl InboxService {
         priority: Option<Priority>,
         caller: Option<String>,
     ) -> Result<InboxDraft, InboxServiceError> {
-        let _ = (id, priority, caller, PriorityWrite::Operator(None));
-        todo!("operator priority")
+        self.parsed(id)?;
+        self.store
+            .set_priority_by(id, PriorityWrite::Operator(priority), caller)?;
+        self.parsed(id)
     }
 
     /// The system agent's priority write. A no-op while an operator override
@@ -589,21 +593,56 @@ impl InboxService {
         id: &str,
         priority: Priority,
     ) -> Result<Option<InboxEvent>, InboxServiceError> {
-        let _ = (id, priority);
-        todo!("agent priority")
+        Ok(self
+            .store
+            .set_priority(id, PriorityWrite::Agent(priority))?)
     }
 
     /// The item's event log with redactions applied.
     pub fn events(&self, id: &str) -> Result<Vec<InboxEvent>, InboxServiceError> {
-        let _ = id;
-        todo!("events")
+        self.parsed(id)?;
+        let mut events = self.store.read_events(id)?;
+        apply_redactions(&mut events);
+        Ok(events)
     }
 
     /// Every thread: overall, then one group per converted worktree (in
     /// conversion order) plus any worktree that only appears in the log.
     pub fn list_comments(&self, id: &str) -> Result<CommentGroups, InboxServiceError> {
-        let _ = (id, apply_redactions, fold_requests);
-        todo!("list comments")
+        let draft = self.parsed(id)?;
+        let events = self.events(id)?;
+        let redacted = redacted_ids(&events);
+        let requests = fold_requests(&events);
+
+        let mut groups = CommentGroups::default();
+        for key in worktree_keys(&draft) {
+            group_for(&mut groups, &key);
+        }
+        for event in &events {
+            let Some(row) = comment_row(event, &redacted) else {
+                continue;
+            };
+            let thread = match (&event.kind, &row.request_id) {
+                (InboxEventKind::Comment { thread, .. }, _) => thread.clone(),
+                (_, Some(rid)) => requests
+                    .iter()
+                    .find(|r| &r.request_id == rid)
+                    .map(|r| Thread::Worktree(r.worktree.clone()))
+                    .unwrap_or(Thread::Overall),
+                (_, None) => Thread::Overall,
+            };
+            match thread {
+                Thread::Overall => groups.overall.push(row),
+                Thread::Worktree(key) => group_for(&mut groups, &key).comments.push(row),
+            }
+        }
+        Ok(groups)
+    }
+
+    /// The thread row for one event, or `None` for events that are not rows
+    /// (priority changes, tombstones, delivery bookkeeping).
+    pub fn comment_view(&self, event: &InboxEvent) -> Option<CommentView> {
+        comment_row(event, &std::collections::HashSet::new())
     }
 
     /// Append a comment. A worktree thread must name a worktree this item
@@ -615,8 +654,31 @@ impl InboxService {
         thread: Thread,
         body: &str,
     ) -> Result<InboxEvent, InboxServiceError> {
-        let _ = (id, author, thread, body, scan_for_secrets);
-        todo!("add comment")
+        if body.trim().is_empty() {
+            return Err(InboxServiceError::Invalid(
+                "a comment needs a body".to_string(),
+            ));
+        }
+        let draft = self.parsed(id)?;
+        if let Thread::Worktree(key) = &thread
+            && !worktree_keys(&draft).contains(key)
+        {
+            return Err(InboxServiceError::Invalid(format!(
+                "{}:{} is not a worktree this item was converted into",
+                key.project, key.branch
+            )));
+        }
+        let event = self.store.append_event(
+            id,
+            author,
+            None,
+            InboxEventKind::Comment {
+                thread,
+                body: body.to_string(),
+                warnings: secret_warnings(body),
+            },
+        )?;
+        Ok(event)
     }
 
     /// Open a request in `worktree`'s group and tell the observer.
@@ -634,16 +696,155 @@ impl InboxService {
 
     /// Every request on the item, folded from the log, redactions applied.
     pub fn list_requests(&self, id: &str) -> Result<Vec<RequestView>, InboxServiceError> {
-        let _ = id;
-        todo!("list requests")
+        Ok(fold_requests(&self.events(id)?))
     }
 
     /// Apply a worktree agent's request or comment, after checking the
     /// claimed worktree is one this item was converted into (T-06, T-37).
     pub fn ingest(&self, ingress: &WorktreeIngress) -> Result<InboxEvent, InboxServiceError> {
-        let _ = (ingress, InboxEventKind::Unknown);
+        let _ = ingress;
         todo!("ingest")
     }
+
+    /// The draft, or an error if it is missing or does not parse.
+    fn parsed(&self, id: &str) -> Result<InboxDraft, InboxServiceError> {
+        match self.store.get(id)? {
+            InboxDraftView::Parsed(d) => Ok(d),
+            InboxDraftView::Raw { id, error, .. } => {
+                Err(InboxServiceError::Store(InboxStoreError::Unparsed {
+                    id,
+                    error,
+                }))
+            }
+        }
+    }
+}
+
+/// Every worktree this draft was successfully converted into, in order.
+fn worktree_keys(draft: &InboxDraft) -> Vec<WorktreeKey> {
+    let mut out: Vec<WorktreeKey> = Vec::new();
+    for outcome in created_conversions(draft) {
+        let key = WorktreeKey {
+            project: outcome.project_path,
+            branch: outcome.branch,
+        };
+        if !out.contains(&key) {
+            out.push(key);
+        }
+    }
+    out
+}
+
+/// The created entries of `conversions[]`. An entry that no longer parses
+/// is skipped, as [`InboxService::conversion_history`] does.
+fn created_conversions(draft: &InboxDraft) -> Vec<ConversionOutcome> {
+    draft
+        .frontmatter
+        .conversions
+        .iter()
+        .filter_map(|v| serde_yaml::from_value::<ConversionOutcome>(v.clone()).ok())
+        .filter(ConversionOutcome::is_created)
+        .collect()
+}
+
+fn group_for<'a>(groups: &'a mut CommentGroups, key: &WorktreeKey) -> &'a mut WorktreeGroup {
+    let at = match groups
+        .worktrees
+        .iter()
+        .position(|g| g.project == key.project && g.branch == key.branch)
+    {
+        Some(i) => i,
+        None => {
+            groups.worktrees.push(WorktreeGroup {
+                project: key.project.clone(),
+                branch: key.branch.clone(),
+                comments: Vec::new(),
+            });
+            groups.worktrees.len() - 1
+        }
+    };
+    &mut groups.worktrees[at]
+}
+
+fn redacted_ids(events: &[InboxEvent]) -> std::collections::HashSet<String> {
+    events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            InboxEventKind::Redacted { target_event_id } => Some(target_event_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn comment_row(
+    event: &InboxEvent,
+    redacted: &std::collections::HashSet<String>,
+) -> Option<CommentView> {
+    let (kind, body, title, request_id, warnings) = match &event.kind {
+        InboxEventKind::Comment { body, warnings, .. } => {
+            (CommentKind::Note, body, None, None, warnings.clone())
+        }
+        InboxEventKind::RequestOpened {
+            request_id,
+            title,
+            body,
+            warnings,
+            ..
+        } => (
+            CommentKind::Request,
+            body,
+            Some(title.clone()),
+            Some(request_id),
+            warnings.clone(),
+        ),
+        InboxEventKind::Advice { request_id, body } => (
+            CommentKind::Advice,
+            body,
+            None,
+            Some(request_id),
+            Vec::new(),
+        ),
+        InboxEventKind::Proposal {
+            request_id, body, ..
+        } => (
+            CommentKind::Proposal,
+            body,
+            None,
+            Some(request_id),
+            Vec::new(),
+        ),
+        InboxEventKind::ResolutionConfirmed {
+            request_id, text, ..
+        } => (
+            CommentKind::Resolution,
+            text,
+            None,
+            Some(request_id),
+            Vec::new(),
+        ),
+        _ => return None,
+    };
+    Some(CommentView {
+        event_id: event.event_id.clone(),
+        ts: event.ts.clone(),
+        author: event.author,
+        caller: event.caller.clone(),
+        kind,
+        body: body.clone(),
+        title,
+        request_id: request_id.cloned(),
+        parent_event_id: event.parent_event_id.clone(),
+        warnings,
+        redacted: redacted.contains(&event.event_id),
+    })
+}
+
+/// Secret-scan hits for a comment or request body: warnings only (FR-10).
+fn secret_warnings(text: &str) -> Vec<String> {
+    scan_for_secrets(text)
+        .into_iter()
+        .map(|a| a.message)
+        .collect()
 }
 
 #[cfg(test)]

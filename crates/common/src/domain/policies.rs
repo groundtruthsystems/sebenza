@@ -348,8 +348,13 @@ pub fn allowed_hosts_from_env() -> Vec<String> {
 /// reduced to a short lowercase token: anything else is dropped rather than
 /// echoed, which keeps caller-chosen text out of the logs.
 pub fn sanitize_caller_marker(raw: Option<&str>) -> Option<String> {
-    let _ = raw;
-    todo!("caller marker")
+    let marker = raw?.trim().to_ascii_lowercase();
+    let ok = !marker.is_empty()
+        && marker.len() <= 32
+        && marker
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    ok.then_some(marker)
 }
 
 /// True when `path` is safe to store as an inbox project link and later hand

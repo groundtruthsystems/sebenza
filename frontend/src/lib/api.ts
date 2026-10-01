@@ -524,6 +524,43 @@ export async function fetchConversionJob(jobId: string) {
   return hubApi.fetchConversionJob({ params: { id: jobId } });
 }
 
+/** Set (`P0`-`P3`) or clear (`null`) the operator priority override. While
+ *  an override stands the system agent cannot move it. */
+export async function setInboxPriority(
+  id: string,
+  priority: "P0" | "P1" | "P2" | "P3" | null,
+) {
+  return hubApi.setInboxPriority({
+    params: { id },
+    body: { priority },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** The overall thread plus one thread per converted worktree. */
+export async function fetchInboxComments(id: string) {
+  return hubApi.fetchInboxComments({ params: { id } });
+}
+
+/** Post an operator comment, to a worktree's thread or (no `worktree`) the
+ *  overall one. */
+export async function postInboxComment(
+  id: string,
+  body: string,
+  worktree?: { project: string; branch: string },
+) {
+  return hubApi.postInboxComment({
+    params: { id },
+    body: worktree ? { body, worktree } : { body },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Every request worktree agents raised against the item, with its state. */
+export async function fetchInboxRequests(id: string) {
+  return hubApi.fetchInboxRequests({ params: { id } });
+}
+
 /** Base branches for an arbitrary project, by URL prefix.
  *
  *  The conversion dialog is global but each row targets one project, so it

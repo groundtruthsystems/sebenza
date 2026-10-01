@@ -62,6 +62,11 @@ import {
   CreateInboxDraftRequestSchema,
   SaveInboxDraftBodyRequestSchema,
   PatchInboxDraftRequestSchema,
+  SetInboxPriorityRequestSchema,
+  InboxCommentGroupsSchema,
+  PostInboxCommentRequestSchema,
+  PostInboxCommentResponseSchema,
+  InboxRequestListSchema,
 } from "./schemas";
 
 const c = initContract();
@@ -121,6 +126,10 @@ export const apiPaths = {
   saveInboxDraftBody: "/api/inbox/:id/body",
   convertInboxDraft: "/api/inbox/:id/convert",
   fetchConversionJob: "/api/inbox/jobs/:id",
+  setInboxPriority: "/api/inbox/:id/priority",
+  fetchInboxComments: "/api/inbox/:id/comments",
+  postInboxComment: "/api/inbox/:id/comments",
+  fetchInboxRequests: "/api/inbox/:id/requests",
   fetchRegistry: "/api/registry",
   fetchRegistryFile: "/api/registry/file",
 } as const;
@@ -599,6 +608,58 @@ export const apiContract = c.router({
     responses: {
       200: ConversionJobSchema,
       404: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  setInboxPriority: {
+    method: "PATCH",
+    path: apiPaths.setInboxPriority,
+    body: SetInboxPriorityRequestSchema,
+    responses: {
+      200: InboxDraftSchema,
+      400: ErrorResponseSchema,
+      401: ErrorResponseSchema,
+      403: ErrorResponseSchema,
+      404: ErrorResponseSchema,
+      422: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  fetchInboxComments: {
+    method: "GET",
+    path: apiPaths.fetchInboxComments,
+    responses: {
+      200: InboxCommentGroupsSchema,
+      400: ErrorResponseSchema,
+      404: ErrorResponseSchema,
+      422: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  postInboxComment: {
+    method: "POST",
+    path: apiPaths.postInboxComment,
+    body: PostInboxCommentRequestSchema,
+    responses: {
+      200: PostInboxCommentResponseSchema,
+      400: ErrorResponseSchema,
+      401: ErrorResponseSchema,
+      403: ErrorResponseSchema,
+      404: ErrorResponseSchema,
+      413: ErrorResponseSchema,
+      422: ErrorResponseSchema,
+      429: ErrorResponseSchema,
+      500: ErrorResponseSchema,
+    },
+  },
+  fetchInboxRequests: {
+    method: "GET",
+    path: apiPaths.fetchInboxRequests,
+    responses: {
+      200: InboxRequestListSchema,
+      400: ErrorResponseSchema,
+      404: ErrorResponseSchema,
+      422: ErrorResponseSchema,
       500: ErrorResponseSchema,
     },
   },

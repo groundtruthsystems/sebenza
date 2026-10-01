@@ -578,6 +578,10 @@ impl Http {
 
 // --- Inbox (hub routes; drafts are global) --------------------------------
 
+/// The self-declared caller marker the server writes into audit records. It
+/// is unauthenticated: it says which surface acted, not who.
+const CALLER_HEADER: &str = "x-sebenza-caller";
+
 /// Read the control token the server requires on mutating inbox routes. Same
 /// file the server generates, so no handshake is needed.
 fn control_token() -> Result<String> {
@@ -680,6 +684,46 @@ impl Http {
             .await
             .map_err(|e| friendly_connect_error(&e, self.port))?;
         self.read_json(resp).await
+    }
+
+    /// `PATCH /api/inbox/{id}/priority` — `{"priority": null}` clears.
+    pub async fn inbox_set_priority(&self, id: &str, body: Value) -> Result<Value> {
+        let resp = self
+            .http
+            .patch(format!("{}/api/inbox/{id}/priority", self.hub))
+            .bearer_auth(control_token()?)
+            .header(CALLER_HEADER, "cli")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `GET /api/inbox/{id}/comments`
+    pub async fn inbox_comments(&self, id: &str) -> Result<Value> {
+        self.get(&format!("{}/api/inbox/{id}/comments", self.hub))
+            .await
+    }
+
+    /// `POST /api/inbox/{id}/comments`
+    pub async fn inbox_post_comment(&self, id: &str, body: Value) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!("{}/api/inbox/{id}/comments", self.hub))
+            .bearer_auth(control_token()?)
+            .header(CALLER_HEADER, "cli")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `GET /api/inbox/{id}/requests`
+    pub async fn inbox_requests(&self, id: &str) -> Result<Value> {
+        self.get(&format!("{}/api/inbox/{id}/requests", self.hub))
+            .await
     }
 
     /// `GET /api/inbox/jobs/{id}` — the CLI polls rather than holding a socket.

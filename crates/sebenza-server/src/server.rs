@@ -339,6 +339,18 @@ pub fn build_router(state: AppState) -> Router {
             "/api/inbox/{id}/conversions",
             get(crate::inbox_routes::get_draft_conversions),
         )
+        .route(
+            "/api/inbox/{id}/priority",
+            axum::routing::patch(crate::inbox_routes::patch_priority),
+        )
+        .route(
+            "/api/inbox/{id}/comments",
+            get(crate::inbox_routes::list_comments).post(crate::inbox_routes::post_comment),
+        )
+        .route(
+            "/api/inbox/{id}/requests",
+            get(crate::inbox_routes::list_requests),
+        )
         // Per-project routes, scoped under `/<prefix>`.
         .route("/{prefix}/api/config", get(get_config))
         .route("/{prefix}/api/branches", get(get_branches))

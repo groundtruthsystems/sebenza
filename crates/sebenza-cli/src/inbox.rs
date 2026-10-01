@@ -1,4 +1,5 @@
-//! Inbox subcommands: `ls`, `show`, `new`, `edit`, `link`, `unlink`, `drop`, `rm`.
+//! Inbox subcommands: `ls`, `show`, `new`, `edit`, `link`, `unlink`, `drop`, `rm`,
+//! `convert`, `job`, `priority`, `comment`, `comments`, `requests`.
 //!
 //! The inbox is global — drafts exist before they belong to any project — so
 //! these talk to the hub routes rather than a project-prefixed base.
@@ -65,6 +66,11 @@ fn usage() -> String {
         "  sebenza-cli inbox rm <id> [--yes]              Delete a draft",
         "  sebenza-cli inbox convert <id> <target>... [--base B]  Turn a draft into worktrees",
         "  sebenza-cli inbox job <job-id>                 Show a conversion's progress",
+        "  sebenza-cli inbox priority <id> <P0-P3|clear>  Set or clear the priority override",
+        "  sebenza-cli inbox comment <id> [--worktree project:branch] <text>",
+        "                                                 Comment overall or on one worktree",
+        "  sebenza-cli inbox comments <id>                Show the overall and worktree threads",
+        "  sebenza-cli inbox requests <id>                List requests worktree agents raised",
         "",
         "A convert target is project:branch:prompt, for example:",
         "  sebenza-cli inbox convert 01ARZ... ~/code/acme:fix-scorer:'rewrite the scorer'",
@@ -76,6 +82,9 @@ fn usage() -> String {
         "    ~/code/acme:fix-scorer:'rewrite it' ~/code/beta:hotfix@main:'patch it'",
         "",
         "Pass --watch to poll until the fan-out finishes.",
+        "",
+        "Drafts list by priority (P0 first), then newest. A priority you set is an",
+        "override the system agent will not change; `priority <id> clear` hands it back.",
         "",
         "Drafts are markdown files under ~/.ai/sebenza/inbox/, global across every",
         "project. A draft that has been converted into worktrees needs --yes to",
@@ -107,7 +116,7 @@ fn positional(args: &[String]) -> Vec<String> {
             skip_next = false;
             continue;
         }
-        if a == "--search" || a == "--base" {
+        if a == "--search" || a == "--base" || a == "--worktree" {
             skip_next = true;
             continue;
         }
@@ -160,10 +169,117 @@ fn parse(args: &[String]) -> Result<Option<InboxCommand>> {
             id: need(0, "draft id")?,
             yes: flag(args, "--yes") || flag(args, "-y"),
         })),
-        "priority" | "comment" | "comments" | "requests" => {
-            Err(anyhow!("{} is not implemented yet", args[0]))
+        "priority" => {
+            let id = need(0, "draft id")?;
+            let level = need(1, "priority (P0-P3, or clear)")?;
+            Ok(Some(InboxCommand::Priority {
+                id,
+                priority: parse_priority(&level)?,
+            }))
         }
+        "comment" => {
+            let id = need(0, "draft id")?;
+            let body = pos[1..].join(" ");
+            if body.trim().is_empty() {
+                return Err(anyhow!("Missing comment text"));
+            }
+            let worktree = match opt(args, "--worktree") {
+                Some(spec) => Some(parse_worktree(&spec)?),
+                None => None,
+            };
+            Ok(Some(InboxCommand::Comment { id, body, worktree }))
+        }
+        "comments" => Ok(Some(InboxCommand::Comments(need(0, "draft id")?))),
+        "requests" => Ok(Some(InboxCommand::Requests(need(0, "draft id")?))),
         other => Err(anyhow!("Unknown inbox command: {other}")),
+    }
+}
+
+/// `P0`-`P3` (any case) sets an override; `clear` or `none` removes it.
+fn parse_priority(raw: &str) -> Result<Option<String>> {
+    let level = raw.trim().to_ascii_uppercase();
+    match level.as_str() {
+        "CLEAR" | "NONE" => Ok(None),
+        "P0" | "P1" | "P2" | "P3" => Ok(Some(level)),
+        _ => Err(anyhow!(
+            "priority must be P0, P1, P2, P3 or clear, not {raw:?}"
+        )),
+    }
+}
+
+/// `project:branch`. Split at the last colon: a branch cannot contain one,
+/// but a path might.
+fn parse_worktree(spec: &str) -> Result<(String, String)> {
+    match spec.rsplit_once(':') {
+        Some((project, branch)) if !project.trim().is_empty() && !branch.trim().is_empty() => {
+            Ok((project.trim().to_string(), branch.trim().to_string()))
+        }
+        _ => Err(anyhow!("--worktree {spec:?} is not project:branch")),
+    }
+}
+
+fn print_comment_rows(rows: &[Value]) {
+    if rows.is_empty() {
+        println!("  (no comments)");
+    }
+    for c in rows {
+        let ts = c.get("ts").and_then(Value::as_str).unwrap_or("");
+        let author = c.get("author").and_then(Value::as_str).unwrap_or("");
+        let kind = c.get("kind").and_then(Value::as_str).unwrap_or("");
+        let body = c.get("body").and_then(Value::as_str).unwrap_or("");
+        let flag = if c
+            .get("warnings")
+            .and_then(Value::as_array)
+            .is_some_and(|w| !w.is_empty())
+        {
+            "  [possible secret]"
+        } else {
+            ""
+        };
+        println!("  {ts}  {author:<14} {kind:<10}{flag}");
+        for line in body.lines() {
+            println!("      {line}");
+        }
+    }
+}
+
+fn print_comments(groups: &Value) {
+    println!("Overall");
+    let rows = |v: Option<&Value>| v.and_then(Value::as_array).cloned().unwrap_or_default();
+    print_comment_rows(&rows(groups.get("overall")));
+    for g in rows(groups.get("worktrees")) {
+        println!();
+        println!(
+            "{}:{}",
+            g.get("project").and_then(Value::as_str).unwrap_or(""),
+            g.get("branch").and_then(Value::as_str).unwrap_or("")
+        );
+        print_comment_rows(&rows(g.get("comments")));
+    }
+}
+
+fn print_requests(body: &Value) {
+    let requests = body
+        .get("requests")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if requests.is_empty() {
+        println!("No requests.");
+        return;
+    }
+    for r in requests {
+        let id = r.get("requestId").and_then(Value::as_str).unwrap_or("");
+        let status = r.get("status").and_then(Value::as_str).unwrap_or("");
+        let flagged = if r.get("flagged").and_then(Value::as_bool).unwrap_or(false) {
+            " (flagged)"
+        } else {
+            ""
+        };
+        let wt = r.get("worktree").cloned().unwrap_or(Value::Null);
+        let branch = wt.get("branch").and_then(Value::as_str).unwrap_or("");
+        let title = r.get("title").and_then(Value::as_str).unwrap_or("");
+        println!("{id}  {status:<15}{flagged} [{branch}] {title}");
     }
 }
 
@@ -219,7 +335,16 @@ fn print_list(body: &Value) {
                 })
             })
             .unwrap_or_default();
-        println!("{id}  {:<9} {title}{project}", status_of(&d));
+        let priority = d.get("priority").and_then(Value::as_str).unwrap_or("P2");
+        let pinned = if d.get("prioritySource").and_then(Value::as_str) == Some("operator") {
+            "*"
+        } else {
+            " "
+        };
+        println!(
+            "{id}  {priority}{pinned} {:<9} {title}{project}",
+            status_of(&d)
+        );
     }
 }
 
@@ -417,10 +542,31 @@ pub async fn run(args: &[String], port: u16) -> i32 {
                 }
             }
             InboxCommand::Job(job_id) => print_job(&http.inbox_job(&job_id).await?),
-            InboxCommand::Priority { .. }
-            | InboxCommand::Comment { .. }
-            | InboxCommand::Comments(_)
-            | InboxCommand::Requests(_) => todo!("inbox collaboration commands"),
+            InboxCommand::Priority { id, priority } => {
+                let d = http
+                    .inbox_set_priority(&id, json!({ "priority": priority }))
+                    .await?;
+                let level = d.get("priority").and_then(Value::as_str).unwrap_or("");
+                match priority {
+                    Some(_) => println!("{id} is {level} (operator override)."),
+                    None => println!(
+                        "Cleared the override on {id}; it stays {level} until the agent re-ranks it."
+                    ),
+                }
+            }
+            InboxCommand::Comment { id, body, worktree } => {
+                let mut payload = json!({ "body": body });
+                if let Some((project, branch)) = worktree {
+                    payload["worktree"] = json!({
+                        "project": expand_home(&project),
+                        "branch": branch,
+                    });
+                }
+                http.inbox_post_comment(&id, payload).await?;
+                println!("Commented on {id}.");
+            }
+            InboxCommand::Comments(id) => print_comments(&http.inbox_comments(&id).await?),
+            InboxCommand::Requests(id) => print_requests(&http.inbox_requests(&id).await?),
             InboxCommand::Rm { id, yes } => {
                 http.inbox_delete(&id, yes).await?;
                 println!("Deleted {id}.");

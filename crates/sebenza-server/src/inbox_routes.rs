@@ -5,12 +5,14 @@
 //! [`guard_inbox_request`] — a control token *and* a same-origin check, neither
 //! substituting for the other.
 
+use crate::adapters::inbox_store::EventAuthor;
 use crate::domain::inbox_events::{Thread, WorktreeKey};
 use crate::domain::model::{
     DraftStatus, FileRevision, InboxDraft, InboxDraftView, Priority, PrioritySource,
 };
 use crate::domain::policies::{
     InboxGuard, InboxGuardDenial, guard_inbox_request, is_safe_project_path, origin_is_acceptable,
+    sanitize_caller_marker,
 };
 use crate::inbox_runner::ServerConversionRunner;
 use crate::services::inbox_convert::{
@@ -175,6 +177,15 @@ impl From<InboxServiceError> for ApiError {
             InboxServiceError::Store(InboxStoreError::Conflict { .. }) => {
                 ApiError::new(409, err.to_string())
             }
+            InboxServiceError::Store(InboxStoreError::Unparsed { .. }) => {
+                ApiError::new(422, err.to_string())
+            }
+            InboxServiceError::Invalid(_) => ApiError::new(400, err.to_string()),
+            InboxServiceError::TooLarge { .. } => ApiError::new(413, err.to_string()),
+            InboxServiceError::RateLimited | InboxServiceError::TooManyOpenRequests(_) => {
+                ApiError::new(429, err.to_string())
+            }
+            InboxServiceError::ForeignWorktree(_) => ApiError::new(403, err.to_string()),
             other => ApiError::new(500, other.to_string()),
         }
     }
@@ -602,8 +613,11 @@ async fn conversion_job_socket(mut socket: WebSocket, subscription: JobSubscript
 
 /// The unauthenticated `X-Sebenza-Caller` marker (T-01), normalised.
 fn caller_marker(headers: &HeaderMap) -> Option<String> {
-    let _ = headers;
-    todo!("caller marker")
+    sanitize_caller_marker(
+        headers
+            .get("x-sebenza-caller")
+            .and_then(|v| v.to_str().ok()),
+    )
 }
 
 /// `PATCH /api/inbox/{id}/priority` — `{"priority": "P0"}` sets the operator
@@ -615,8 +629,24 @@ pub async fn patch_priority(
     headers: HeaderMap,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<DraftWire>, ApiError> {
-    let _ = (state, id, headers, body);
-    todo!("patch priority")
+    check(&headers, "PATCH")?;
+    let priority = match body.get("priority") {
+        None => {
+            return Err(ApiError::new(
+                400,
+                "priority is required; send null to clear the override".to_string(),
+            ));
+        }
+        Some(serde_json::Value::Null) => None,
+        Some(v) => Some(
+            serde_json::from_value::<Priority>(v.clone())
+                .map_err(|_| ApiError::new(400, format!("unknown priority {v}")))?,
+        ),
+    };
+    let svc = inbox(&state);
+    svc.set_priority(&id, priority, caller_marker(&headers))?;
+    let (view, link) = svc.get(&id)?;
+    Ok(Json(to_wire(view, link)))
 }
 
 /// `GET /api/inbox/{id}/comments` — the overall thread plus one per worktree.
@@ -624,8 +654,7 @@ pub async fn list_comments(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<CommentGroups>, ApiError> {
-    let _ = (state, id);
-    todo!("list comments")
+    Ok(Json(inbox(&state).list_comments(&id)?))
 }
 
 #[derive(Debug, Deserialize)]
@@ -644,8 +673,22 @@ pub async fn post_comment(
     headers: HeaderMap,
     Json(body): Json<PostCommentBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let _ = (state, id, headers, body, Thread::Overall);
-    todo!("post comment")
+    check(&headers, "POST")?;
+    let thread = body
+        .worktree
+        .map(Thread::Worktree)
+        .unwrap_or(Thread::Overall);
+    // The token holder is the operator as far as the server can tell; the
+    // marker records what the caller claimed to be (T-01).
+    let author = EventAuthor {
+        caller: caller_marker(&headers),
+        ..EventAuthor::operator()
+    };
+    let svc = inbox(&state);
+    let event = svc.add_comment(&id, author, thread, &body.body)?;
+    Ok(Json(
+        serde_json::json!({ "comment": svc.comment_view(&event) }),
+    ))
 }
 
 /// `GET /api/inbox/{id}/requests` — every request, folded from the log.
@@ -653,8 +696,8 @@ pub async fn list_requests(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let _ = (state, id);
-    todo!("list requests")
+    let requests = inbox(&state).list_requests(&id)?;
+    Ok(Json(serde_json::json!({ "requests": requests })))
 }
 
 /// Handle a `/api/runtime/events` body if it is inbox ingress
