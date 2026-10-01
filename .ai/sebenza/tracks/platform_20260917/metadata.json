@@ -1,8 +1,0 @@
-{
-  "track_id": "platform_20260917",
-  "type": "feature",
-  "status": "backlog",
-  "description": "Continuous agent platform: chat, work-item inbox/canvas/board, human asks, ops, S3 artifacts, Headscale cluster, LXC per work item",
-  "created_at": "2026-09-17T00:00:00Z",
-  "updated_at": "2026-09-18T12:00:00Z"
-}
