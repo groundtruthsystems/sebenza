@@ -230,13 +230,14 @@
           "id": "phase-4-task-4",
           "name": "Implement ResolutionDelivery",
           "description": "Paste escape-stripped confirmed text only into the verified origin pane, recording delivered or delivery_failed per attempt.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "d5024c1"
         },
         {
           "id": "phase-4-task-5",
           "name": "Implement secret scan warnings and manual redaction",
           "description": "Run the secret and PHI scan on comments, requests, and proposals as warnings and add the redacted tombstone.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-4-task-6",
