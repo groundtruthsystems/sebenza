@@ -92,6 +92,8 @@ struct RunState {
     tx: broadcast::Sender<StreamEvent>,
     live: Mutex<IndexMap<String, DraftMessage>>,
     interrupt: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// What awaiting callers get back; chat ignores it.
+    outcome: Mutex<RunOutcome>,
 }
 
 pub struct StartRunInput {
@@ -144,7 +146,10 @@ pub struct RunOutcome {
 impl RunOutcome {
     /// Exited zero, in time, without a stream error, with a final message.
     pub fn succeeded(&self) -> bool {
-        todo!("phase-3-task-2")
+        !self.timed_out
+            && self.error.is_none()
+            && self.exit_code == Some(0)
+            && self.final_message.is_some()
     }
 }
 
@@ -177,9 +182,24 @@ impl AgentStreamManager {
     /// Start a streaming turn for `input.provider`. Returns the new turn id, or an error if
     /// a turn is already running for this conversation.
     pub fn start_run(&self, input: StartRunInput) -> Result<String, String> {
-        if self.has_active_run(&input.conversation_id) {
-            return Err("The agent is already responding in this conversation".to_string());
-        }
+        self.start(input).map(|(turn_id, _done)| turn_id)
+    }
+
+    /// Start a turn and wait for it to end. Same rules as [`Self::start_run`],
+    /// but resolves to the run's final message, session id and exit status.
+    pub async fn run_to_completion(&self, input: StartRunInput) -> Result<RunOutcome, String> {
+        let (turn_id, done) = self.start(input)?;
+        Ok(done.await.unwrap_or_else(|_| RunOutcome {
+            turn_id,
+            error: Some("the run ended without reporting an outcome".to_string()),
+            ..RunOutcome::default()
+        }))
+    }
+
+    fn start(
+        &self,
+        input: StartRunInput,
+    ) -> Result<(String, tokio::sync::oneshot::Receiver<RunOutcome>), String> {
         let prefix = input.provider.id_prefix();
         let turn_id = format!("{prefix}-turn:{}", random_uuid());
         let (tx, _rx) = broadcast::channel::<StreamEvent>(1024);
@@ -189,11 +209,24 @@ impl AgentStreamManager {
             tx,
             live: Mutex::new(IndexMap::new()),
             interrupt: Mutex::new(None),
+            outcome: Mutex::new(RunOutcome {
+                turn_id: turn_id.clone(),
+                ..RunOutcome::default()
+            }),
         });
-        self.runs
-            .lock()
-            .unwrap()
-            .insert(input.conversation_id.clone(), run.clone());
+        {
+            // Check and insert under one lock, so two racing starts cannot
+            // both see the conversation idle (TA-R2).
+            let mut runs = self.runs.lock().unwrap();
+            if runs
+                .get(&input.conversation_id)
+                .is_some_and(|r| !r.completed.load(Ordering::Relaxed))
+            {
+                return Err("The agent is already responding in this conversation".to_string());
+            }
+            runs.insert(input.conversation_id.clone(), run.clone());
+        }
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
 
         // Optimistic user message + running status, before the process starts.
         let user_msg = DraftMessage {
@@ -220,15 +253,10 @@ impl AgentStreamManager {
                 StreamProvider::Codex => run_codex(input, run.clone()).await,
             }
             finish_run(&run, "completed");
+            let _ = done_tx.send(run.outcome.lock().unwrap().clone());
         });
 
-        Ok(turn_id)
-    }
-
-    /// Start a turn and wait for it to end. Same rules as [`Self::start_run`],
-    /// but resolves to the run's final message, session id and exit status.
-    pub async fn run_to_completion(&self, input: StartRunInput) -> Result<RunOutcome, String> {
-        todo!("phase-3-task-2: {}", input.conversation_id)
+        Ok((turn_id, done_rx))
     }
 
     /// Interrupt the active run, returning its turn id.
@@ -333,7 +361,8 @@ async fn run_messages_stream_agent(
     input: StartRunInput,
     run: Arc<RunState>,
 ) {
-    let mut command = tokio::process::Command::new(binary);
+    let binary = input.binary.clone().unwrap_or_else(|| binary.to_string());
+    let mut command = tokio::process::Command::new(&binary);
     command
         .args(&args)
         .current_dir(&input.cwd)
@@ -343,7 +372,17 @@ async fn run_messages_stream_agent(
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        // Nothing reads stderr; a piped one could fill and wedge the child.
+        .stderr(if input.isolated {
+            Stdio::null()
+        } else {
+            Stdio::piped()
+        });
+    if input.isolated {
+        // Only what the caller allowlisted, and a group of its own so a
+        // timeout reaches everything the agent started.
+        command.env_clear().process_group(0).kill_on_drop(true);
+    }
     for (k, v) in &input.env {
         command.env(k, v);
     }
@@ -351,12 +390,14 @@ async fn run_messages_stream_agent(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
-            let _ = run.tx.send(StreamEvent::Error {
-                message: format!("failed to spawn {binary}: {e}"),
-            });
+            let message = format!("failed to spawn {binary}: {e}");
+            run.outcome.lock().unwrap().error = Some(message.clone());
+            let _ = run.tx.send(StreamEvent::Error { message });
             return;
         }
     };
+    let group = if input.isolated { child.id() } else { None };
+    let deadline = input.timeout.map(|t| tokio::time::Instant::now() + t);
 
     // Feed the prompt on stdin, then close it.
     if stdin_prompt && let Some(mut stdin) = child.stdin.take() {
@@ -365,8 +406,15 @@ async fn run_messages_stream_agent(
         } else {
             format!("{}\n", input.prompt)
         };
-        let _ = stdin.write_all(prompt.as_bytes()).await;
-        drop(stdin);
+        if deadline.is_some() {
+            // A child that never reads stdin must not stall us past the deadline.
+            tokio::spawn(async move {
+                let _ = stdin.write_all(prompt.as_bytes()).await;
+            });
+        } else {
+            let _ = stdin.write_all(prompt.as_bytes()).await;
+            drop(stdin);
+        }
     }
 
     let stdout = child.stdout.take();
@@ -376,12 +424,17 @@ async fn run_messages_stream_agent(
     let mut message_id: Option<String> = None;
     let mut block_index: i64 = 0;
 
+    let mut timed_out = false;
     if let Some(stdout) = stdout {
         let mut lines = BufReader::new(stdout).lines();
         loop {
             tokio::select! {
                 _ = &mut int_rx => {
                     let _ = child.start_kill();
+                    break;
+                }
+                _ = sleep_until_deadline(deadline) => {
+                    timed_out = true;
                     break;
                 }
                 line = lines.next_line() => {
@@ -397,17 +450,54 @@ async fn run_messages_stream_agent(
             }
         }
     }
-    let _ = child.wait().await;
+    // The stream can close while the child (or something it started) lives
+    // on, so the deadline also bounds the wait.
+    let status = if timed_out {
+        None
+    } else {
+        tokio::select! {
+            status = child.wait() => status.ok(),
+            _ = sleep_until_deadline(deadline) => {
+                timed_out = true;
+                None
+            }
+        }
+    };
+    if timed_out {
+        kill_group(group);
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+    let mut outcome = run.outcome.lock().unwrap();
+    outcome.timed_out = timed_out;
+    outcome.exit_code = status.and_then(|s| s.code());
+}
+
+/// Resolves at `deadline`, or never when there is none.
+async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// SIGKILL the process group led by `pgid`. Uses `kill(1)` rather than a libc
+/// binding, which the workspace does not otherwise need.
+fn kill_group(pgid: Option<u32>) {
+    let Some(pgid) = pgid else {
+        return;
+    };
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pgid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 /// The `claude` argv for `input`. In-app chat sets none of `model` and
 /// `tools`, so its argv is exactly what it always was (TS-52).
 pub fn claude_args(input: &StartRunInput) -> Vec<String> {
-    todo!("phase-3-task-2: {}", input.conversation_id)
-}
-
-/// Spawn `claude` and pump its stream-json output into the run's broadcast.
-async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
     let mut args: Vec<String> = vec![
         "-p".into(),
         "--verbose".into(),
@@ -427,6 +517,31 @@ async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
         args.push("--append-system-prompt".into());
         args.push(sys.clone());
     }
+    if let Some(model) = &input.model {
+        args.push("--model".into());
+        args.push(model.clone());
+    }
+    if let Some(tools) = &input.tools {
+        if tools.strict_mcp {
+            args.push("--strict-mcp-config".into());
+        }
+        // One comma-joined value each: the flags are variadic, so a separate
+        // value per tool would swallow whatever argument came next.
+        if !tools.allowed.is_empty() {
+            args.push("--allowedTools".into());
+            args.push(tools.allowed.join(","));
+        }
+        if !tools.disallowed.is_empty() {
+            args.push("--disallowedTools".into());
+            args.push(tools.disallowed.join(","));
+        }
+    }
+    args
+}
+
+/// Spawn `claude` and pump its stream-json output into the run's broadcast.
+async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
+    let args = claude_args(&input);
     run_messages_stream_agent("claude", args, true, input, run).await;
 }
 
@@ -481,6 +596,18 @@ fn handle_stream_line(
     let Some(parsed) = parse_claude_stream_line(line) else {
         return;
     };
+    {
+        let mut outcome = run.outcome.lock().unwrap();
+        if let Some(sid) = &parsed.session_id {
+            outcome.session_id = Some(sid.clone());
+        }
+        if let Some(text) = &parsed.result_text {
+            outcome.final_message = Some(text.clone());
+        }
+        if let Some(err) = &parsed.error {
+            outcome.error = Some(err.clone());
+        }
+    }
 
     if let Some(mid) = parsed.message_start {
         *message_id = Some(mid);

@@ -440,6 +440,7 @@ pub fn parse_claude_stream_line(line: &str) -> Option<ParsedClaudeStreamLine> {
                 );
             } else {
                 out.complete_session_id = parsed.get("session_id").and_then(read_string);
+                out.result_text = parsed.get("result").and_then(read_string);
             }
         }
         Some("error") => {
