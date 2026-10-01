@@ -237,13 +237,14 @@
           "id": "phase-4-task-5",
           "name": "Implement secret scan warnings and manual redaction",
           "description": "Run the secret and PHI scan on comments, requests, and proposals as warnings and add the redacted tombstone.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "b31643e"
         },
         {
           "id": "phase-4-task-6",
           "name": "Execute test scenarios TS-14, TS-20, TS-23, TS-24, TS-25, TS-26, TS-27, TS-28, TS-29, TS-31, TS-33, TS-34, TS-36, TS-38, TS-42, TS-61, TS-62, TS-63",
           "description": "Run and pass the phase's test-plan scenarios.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-14",
             "TS-20",
