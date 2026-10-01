@@ -930,19 +930,23 @@ async fn agent_job_socket(
     }
 }
 
-fn not_yet() -> ApiError {
-    ApiError::new(501, "not implemented".to_string())
-}
-
-/// `POST /api/inbox/{id}/comments/{eventId}/redact` — tombstone a body.
+/// `POST /api/inbox/{id}/comments/{eventId}/redact` — tombstone a comment,
+/// request, proposal or advice body (FR-11). The original line stays in the
+/// log; every read masks it. Redacting twice returns the first tombstone.
 pub async fn redact_comment(
     State(state): State<AppState>,
     Path((id, event_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     check(&headers, "POST")?;
-    let _ = (state, id, event_id);
-    Err(not_yet())
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let target = event_id.clone();
+    let tombstone = blocking(move || svc.redact(&id, &target, caller)).await?;
+    Ok(Json(serde_json::json!({
+        "eventId": tombstone.event_id,
+        "targetEventId": event_id,
+    })))
 }
 
 /// Handle a `/api/runtime/events` body if it is inbox ingress

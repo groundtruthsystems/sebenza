@@ -18,7 +18,7 @@ use crate::domain::model::{
 };
 use crate::services::inbox_convert::{
     ConversionOutcome, ConversionRunner, ConversionTarget, TargetError, run_conversion,
-    scan_for_secrets, status_after, validate_targets,
+    status_after, validate_targets,
 };
 use crate::services::inbox_limits::{InboxLimits, RateLimiter};
 use crate::services::resolution_delivery::{PaneSink, ResolutionDelivery};
@@ -1377,8 +1377,46 @@ impl InboxService {
         event_id: &str,
         caller: Option<String>,
     ) -> Result<InboxEvent, InboxServiceError> {
-        let _ = (id, event_id, caller);
-        todo!("phase-4-task-5")
+        self.parsed(id)?;
+        let _decide = self.decisions.lock().unwrap_or_else(|e| e.into_inner());
+        let events = self.store.read_events(id)?;
+        let existing = events.iter().find(|e| {
+            matches!(&e.kind, InboxEventKind::Redacted { target_event_id } if target_event_id == event_id)
+        });
+        if let Some(tombstone) = existing {
+            return Ok(tombstone.clone());
+        }
+        let target = events
+            .iter()
+            .find(|e| {
+                e.event_id == event_id
+                    && matches!(
+                        e.kind,
+                        InboxEventKind::Comment { .. }
+                            | InboxEventKind::RequestOpened { .. }
+                            | InboxEventKind::Proposal { .. }
+                            | InboxEventKind::Advice { .. }
+                    )
+            })
+            .ok_or_else(|| InboxServiceError::UnknownEvent(event_id.to_string()))?;
+        let mut record = AuditRecord::new("inbox.comment.redacted", id, AuthorKind::Operator)
+            .with_caller(&caller);
+        record.request_id =
+            crate::domain::inbox_events::request_id_of(&target.kind).map(str::to_string);
+        let author = EventAuthor {
+            caller,
+            ..EventAuthor::operator()
+        };
+        let tombstone = self.store.append_event(
+            id,
+            author,
+            Some(event_id.to_string()),
+            InboxEventKind::Redacted {
+                target_event_id: event_id.to_string(),
+            },
+        )?;
+        self.audit.record(&record.with_event(&tombstone));
+        Ok(tombstone)
     }
 }
 
@@ -1581,12 +1619,10 @@ fn title_from(body: &str) -> String {
     line.chars().take(80).collect()
 }
 
-/// Secret-scan hits for a comment or request body: warnings only (FR-10).
+/// Secret and likely-PHI scan hit names for a comment, request, proposal or
+/// resolution: warnings only, the text is stored unchanged (FR-10).
 fn secret_warnings(text: &str) -> Vec<String> {
-    scan_for_secrets(text)
-        .into_iter()
-        .map(|a| a.message)
-        .collect()
+    crate::services::content_scan::scan_hits(text)
 }
 
 #[cfg(test)]

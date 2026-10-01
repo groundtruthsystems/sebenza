@@ -330,7 +330,7 @@ fn print_comment_rows(rows: &[Value]) {
             .and_then(Value::as_array)
             .is_some_and(|w| !w.is_empty())
         {
-            "  [possible secret]"
+            "  [possible secret or PHI]"
         } else {
             ""
         };
