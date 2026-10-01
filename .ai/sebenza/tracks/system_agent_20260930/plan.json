@@ -285,13 +285,14 @@
           "id": "phase-5-task-1",
           "name": "Write tests for draft help and conversion instructions",
           "description": "Write failing tests for draft-help proposals, conflicts, per-target instructions, the prompt builder, and fallbacks.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "b5d51c4"
         },
         {
           "id": "phase-5-task-2",
           "name": "Implement draft-help job",
           "description": "Run draft-help through the item session and return a proposed body applied only via the hash-gated PUT.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-5-task-3",
