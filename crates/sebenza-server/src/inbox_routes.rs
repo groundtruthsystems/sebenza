@@ -68,10 +68,13 @@ pub struct DraftSummaryWire {
     pub id: String,
     pub title: String,
     pub status: DraftStatus,
+    pub created_at: String,
     pub updated_at: String,
     pub project: Option<ProjectLinkWire>,
     pub priority: Priority,
     pub priority_source: PrioritySource,
+    /// A request needs the operator (triage or delivery failed).
+    pub flagged: bool,
     pub is_raw: bool,
 }
 
@@ -81,10 +84,12 @@ impl From<DraftSummary> for DraftSummaryWire {
             id: s.id,
             title: s.title,
             status: s.status,
+            created_at: s.created_at,
             updated_at: s.updated_at,
             project: s.project.map(Into::into),
             priority: s.priority,
             priority_source: s.priority_source,
+            flagged: s.flagged,
             is_raw: s.is_raw,
         }
     }
@@ -1646,6 +1651,13 @@ mod tests {
         assert_eq!(drafts[0]["priority"], "P0");
         assert_eq!(drafts[0]["prioritySource"], "operator");
         assert_eq!(drafts[1]["priority"], "P2");
+        // The UI orders by created and flags items needing the operator.
+        assert!(
+            drafts[0]["createdAt"]
+                .as_str()
+                .is_some_and(|c| !c.is_empty())
+        );
+        assert_eq!(drafts[0]["flagged"], false);
 
         let Json(item) = get_draft(State(f.state.clone()), Path(first.clone()))
             .await

@@ -966,10 +966,14 @@ export const InboxDraftSummarySchema = z.object({
   id: z.string(),
   title: z.string(),
   status: DraftStatusSchema,
+  /** Empty for an unparseable draft. The list orders by priority, then this. */
+  createdAt: z.string().default(""),
   updatedAt: z.string(),
   project: InboxProjectLinkSchema.nullable(),
   priority: InboxPrioritySchema.default("P2"),
   prioritySource: InboxPrioritySourceSchema.default("agent"),
+  /** A request needs the operator: triage or delivery failed. */
+  flagged: z.boolean().default(false),
   isRaw: z.boolean(),
 });
 

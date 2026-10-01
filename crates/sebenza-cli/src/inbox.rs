@@ -516,8 +516,15 @@ fn print_list(body: &Value) {
         } else {
             " "
         };
+        // Mirrors the UI's attention flag: a request's triage or delivery
+        // failed and waits on the operator.
+        let flagged = if d.get("flagged").and_then(Value::as_bool) == Some(true) {
+            "  (needs attention)"
+        } else {
+            ""
+        };
         println!(
-            "{id}  {priority}{pinned} {:<9} {title}{project}",
+            "{id}  {priority}{pinned} {:<9} {title}{project}{flagged}",
             status_of(&d)
         );
     }

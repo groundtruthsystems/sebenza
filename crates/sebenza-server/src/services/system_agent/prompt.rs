@@ -257,10 +257,12 @@ mod tests {
             id: format!("01J{i:023}"),
             title: format!("Item {i}"),
             status,
+            created_at: "2026-09-30T00:00:00Z".into(),
             updated_at: "2026-09-30T00:00:00Z".into(),
             project: None,
             priority,
             priority_source: PrioritySource::Agent,
+            flagged: false,
             is_raw: false,
         }
     }

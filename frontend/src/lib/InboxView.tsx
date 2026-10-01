@@ -9,6 +9,7 @@ import {
   loadInboxControlToken,
   patchInboxDraft,
   saveInboxDraftBody,
+  setInboxPriority,
 } from "./api";
 import MDEditor from "@uiw/react-md-editor";
 import NavRail from "./NavRail";
@@ -21,6 +22,8 @@ import { fetchProjects } from "./api";
 import { renderDraftMarkdown } from "./inboxMarkdown";
 import { createDebouncer, saveDraftBody, type DraftLike } from "./inbox-editor";
 import type { ProjectSummary } from "./types";
+import PriorityControl, { PriorityBadge } from "./InboxPriority";
+import { sortInboxItems, type Priority, type PrioritySource } from "./inbox-collab";
 
 const AUTOSAVE_MS = 800;
 
@@ -36,8 +39,13 @@ interface Summary {
   id: string;
   title: string;
   status: DraftStatus;
+  createdAt?: string;
   updatedAt: string;
   project: ProjectLink | null;
+  priority?: Priority;
+  prioritySource?: PrioritySource;
+  /** A request's triage or delivery failed and waits on the operator. */
+  flagged?: boolean;
   isRaw: boolean;
 }
 
@@ -46,6 +54,8 @@ interface Draft extends DraftLike {
   title: string;
   status: DraftStatus;
   project: ProjectLink | null;
+  priority?: Priority;
+  prioritySource?: PrioritySource;
   raw: { text: string; error: string } | null;
   conversions?: {
     projectPath: string;
@@ -94,7 +104,9 @@ export default function InboxView() {
         search: search || undefined,
         includeDropped,
       });
-      setDrafts(data.drafts);
+      // The server already orders the list; sorting again keeps a stale
+      // response or a test fixture from ever disagreeing with it.
+      setDrafts(sortInboxItems(data.drafts as Summary[]));
     } catch (err) {
       setStatus((err as Error).message);
     }
@@ -318,6 +330,25 @@ export default function InboxView() {
     }
   };
 
+  const onPriority = async (priority: Priority | null) => {
+    if (!draft) return;
+    try {
+      const updated = (await setInboxPriority(draft.id, priority)) as Draft;
+      setDraft((prev) =>
+        prev && prev.id === updated.id
+          ? {
+              ...prev,
+              priority: updated.priority,
+              prioritySource: updated.prioritySource,
+            }
+          : prev,
+      );
+      await refresh();
+    } catch (err) {
+      setStatus((err as Error).message);
+    }
+  };
+
   return (
     <div className="flex h-dvh bg-surface text-primary">
       <NavRail active="inbox" projectBase={projectBase} />
@@ -412,8 +443,24 @@ export default function InboxView() {
                     isActive ? "bg-active border-accent" : "border-transparent"
                   } ${d.status === "Dropped" ? "opacity-60" : ""}`}
                 >
-                  <span className="font-medium truncate">
-                    {d.isRaw ? "(unparseable)" : d.title || "(untitled)"}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    {!d.isRaw && (
+                      <PriorityBadge
+                        priority={d.priority ?? "P2"}
+                        source={d.prioritySource ?? "agent"}
+                      />
+                    )}
+                    <span className="font-medium truncate">
+                      {d.isRaw ? "(unparseable)" : d.title || "(untitled)"}
+                    </span>
+                    {d.flagged && (
+                      <span
+                        className="ml-auto shrink-0 h-2 w-2 rounded-full bg-danger"
+                        role="img"
+                        aria-label="Needs attention: a request's triage or delivery failed"
+                        title="Needs attention: a request's triage or delivery failed"
+                      />
+                    )}
                   </span>
                   <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px] text-muted">
                     {d.status !== "Draft" && (
@@ -458,6 +505,11 @@ export default function InboxView() {
           {draft && !draft.raw && (
             <div className="flex items-center gap-2 shrink-0">
               {status && <span className="text-[11px] text-muted">{status}</span>}
+              <PriorityControl
+                priority={draft.priority ?? "P2"}
+                source={draft.prioritySource ?? "agent"}
+                onchange={(p) => void onPriority(p)}
+              />
               <Btn
                 variant="accent-outline"
                 onClick={() => {

@@ -86,10 +86,13 @@ pub struct DraftSummary {
     pub id: String,
     pub title: String,
     pub status: DraftStatus,
+    pub created_at: String,
     pub updated_at: String,
     pub project: Option<ProjectLink>,
     pub priority: Priority,
     pub priority_source: PrioritySource,
+    /// A request on the item needs the operator: triage or delivery failed.
+    pub flagged: bool,
     /// True when the file did not parse; it still lists, so one bad draft
     /// cannot hide the rest.
     pub is_raw: bool,
@@ -422,10 +425,16 @@ impl InboxService {
                         id: draft.id.clone(),
                         title: draft.frontmatter.title.clone(),
                         status: draft.frontmatter.status,
+                        created_at: draft.frontmatter.created_at.clone(),
                         updated_at: draft.frontmatter.updated_at.clone(),
                         project: self.resolve_project(draft.frontmatter.project.as_ref()),
                         priority: draft.frontmatter.priority,
                         priority_source: draft.frontmatter.priority_source,
+                        // An unreadable sidecar must not hide the item; it
+                        // lists unflagged and the error shows when opened.
+                        flagged: self
+                            .list_requests(&draft.id)
+                            .is_ok_and(|rs| rs.iter().any(|r| r.flagged)),
                         is_raw: false,
                     }
                 }
@@ -442,10 +451,12 @@ impl InboxService {
                         id: id.clone(),
                         title: String::new(),
                         status: DraftStatus::Draft,
+                        created_at: String::new(),
                         updated_at: String::new(),
                         project: None,
                         priority: Priority::default(),
                         priority_source: PrioritySource::default(),
+                        flagged: false,
                         is_raw: true,
                     }
                 }
@@ -3180,6 +3191,28 @@ mod resolution_tests {
             .expect_err("no proposal to confirm");
         assert_eq!(status(err), "400");
         assert!(f.pane.sent().is_empty());
+    }
+
+    // TS-55: the listing carries the flag, so the item stands out in the
+    // inbox without opening it; nothing is dropped.
+    #[test]
+    fn a_flagged_request_flags_the_item_in_the_listing() {
+        let f = fixture();
+        let (id, rid) = with_request(&f, "Which loader?");
+        let row = |f: &Fixture| {
+            f.svc
+                .list(&ListQuery::default())
+                .unwrap()
+                .into_iter()
+                .find(|d| d.id == id)
+                .expect("listed")
+        };
+        assert!(!row(&f).flagged);
+        assert!(!row(&f).created_at.is_empty());
+        f.svc
+            .record_triage_failed(&id, &rid, "the agent exited with status 3")
+            .expect("flag");
+        assert!(row(&f).flagged);
     }
 
     // TS-20: a failed triage flags the request and leaves it open.
