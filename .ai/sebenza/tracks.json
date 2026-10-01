@@ -15,7 +15,7 @@
       "description": "Sebenza 2.0: system-wide agent that drafts inbox items, triages/auto-resolves worktree requests within policy, inbox priority and grouped comments, and architect-first instructions on conversion",
       "status": "doing",
       "created_at": "2026-09-30T00:00:00Z",
-      "updated_at": "2026-10-01T05:01:06Z",
+      "updated_at": "2026-10-01T01:00:00Z",
       "design_path": "./tracks/system_agent_20260930/design.md",
       "test_plan_path": "./tracks/system_agent_20260930/test-plan.md",
       "phases_summary": [
@@ -58,8 +58,8 @@
         {
           "id": "phase-7",
           "name": "Final verification",
-          "status": "doing",
-          "blocked_reason": null
+          "status": "blocked",
+          "blocked_reason": "Awaiting operator manual verification: TS-58 (live pane paste) and TS-59 (job metrics), plus final sign-off"
         }
       ],
       "progress": {
