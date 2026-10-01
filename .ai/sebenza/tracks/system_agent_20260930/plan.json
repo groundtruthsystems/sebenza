@@ -64,7 +64,7 @@
     {
       "id": "phase-2",
       "name": "Routes, agentctl ingress and CLI parity",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -115,21 +115,22 @@
           "id": "phase-2-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "doing"
+          "status": "done"
         }
-      ]
+      ],
+      "checkpoint_sha": "a5a9db7"
     },
     {
       "id": "phase-3",
       "name": "System agent runtime",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Write tests for system agent runtime",
           "description": "Write failing tests using a stub stream-json CLI for queueing, limits, timeout, isolation, schemas, restart, and re-seed.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-2",
