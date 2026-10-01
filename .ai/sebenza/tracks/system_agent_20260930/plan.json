@@ -343,13 +343,14 @@
           "id": "phase-6-task-1",
           "name": "Write tests for Inbox UI components",
           "description": "Write failing vitest tests for priority control and sort, grouped comments, request card, merge view, convert dialog, and warnings.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "fa01426"
         },
         {
           "id": "phase-6-task-2",
           "name": "Implement priority control, sort and flags in InboxView",
           "description": "Add the priority badge and control, sort by priority then date, and show flagged items.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-6-task-3",
