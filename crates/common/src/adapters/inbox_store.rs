@@ -12,8 +12,12 @@ use crate::domain::model::{
     InboxDraftView, Priority, PrioritySource, ProjectRef, parse_inbox_file, render_inbox_file,
 };
 use crate::util::id::{is_ulid, random_ulid};
+use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use thiserror::Error;
 
 /// Every way a store operation can fail. `Conflict` carries both hashes so a
@@ -114,6 +118,18 @@ fn default_inbox_dir() -> PathBuf {
         .join("inbox")
 }
 
+/// One lock per path, shared by every `InboxStore` in the process, so a
+/// priority write and an editor save on the same draft never interleave their
+/// read-modify-write. External editors are still unlocked.
+fn path_lock(path: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let mut map = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    map.entry(path.to_path_buf()).or_default().clone()
+}
+
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
@@ -143,8 +159,41 @@ impl InboxStore {
         Ok(self.dir.join(format!("{id}.md")))
     }
 
-    fn atomic_write(&self, id: &str, contents: &str) -> Result<(), InboxStoreError> {
+    fn ensure_dir(&self) -> Result<(), InboxStoreError> {
         fs::create_dir_all(&self.dir)?;
+        let _ = fs::set_permissions(&self.dir, fs::Permissions::from_mode(0o700));
+        Ok(())
+    }
+
+    fn sidecar(&self, id: &str, suffix: &str) -> Result<PathBuf, InboxStoreError> {
+        self.path_for(id)?;
+        Ok(self.dir.join(format!("{id}.{suffix}")))
+    }
+
+    /// Hold the draft's lock for the duration of `f`.
+    fn locked<T>(
+        &self,
+        id: &str,
+        f: impl FnOnce() -> Result<T, InboxStoreError>,
+    ) -> Result<T, InboxStoreError> {
+        let lock = path_lock(&self.path_for(id)?);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        f()
+    }
+
+    fn write_owner_only(path: &Path, contents: &str) -> Result<(), InboxStoreError> {
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(contents.as_bytes())?;
+        Ok(())
+    }
+
+    fn atomic_write(&self, id: &str, contents: &str) -> Result<(), InboxStoreError> {
+        self.ensure_dir()?;
         let final_path = self.path_for(id)?;
         let tmp_path = self.dir.join(format!(
             "{id}.{}.{}.tmp",
@@ -154,7 +203,7 @@ impl InboxStore {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        fs::write(&tmp_path, contents)?;
+        Self::write_owner_only(&tmp_path, contents)?;
         fs::rename(&tmp_path, &final_path)?;
         Ok(())
     }
@@ -169,6 +218,21 @@ impl InboxStore {
             Err(e) => return Err(e.into()),
         };
         Ok(parse_inbox_file(id, &text))
+    }
+
+    /// Load a draft for rewriting: refuse a newer schema, and stamp an older one
+    /// with the current version (v2 is additive, so this loses nothing).
+    fn require_writable(&self, id: &str) -> Result<InboxDraft, InboxStoreError> {
+        let mut draft = self.require_parsed(id)?;
+        let version = draft.frontmatter.schema_version;
+        if version > INBOX_DRAFT_SCHEMA_VERSION {
+            return Err(InboxStoreError::UnsupportedVersion {
+                id: id.to_string(),
+                version,
+            });
+        }
+        draft.frontmatter.schema_version = INBOX_DRAFT_SCHEMA_VERSION;
+        Ok(draft)
     }
 
     fn require_parsed(&self, id: &str) -> Result<InboxDraft, InboxStoreError> {
@@ -248,29 +312,33 @@ impl InboxStore {
         expected_hash: &str,
         body: &str,
     ) -> Result<InboxDraft, InboxStoreError> {
-        let mut draft = self.require_parsed(id)?;
-        let actual = FileRevision::of_body(&draft.body);
-        if actual.body_hash != expected_hash {
-            return Err(InboxStoreError::Conflict {
-                id: id.to_string(),
-                expected: expected_hash.to_string(),
-                actual: actual.body_hash,
-            });
-        }
-        draft.body = body.to_string();
-        draft.frontmatter.updated_at = now_rfc3339();
-        self.atomic_write(id, &render_inbox_file(&draft))?;
-        Ok(draft)
+        self.locked(id, || {
+            let mut draft = self.require_writable(id)?;
+            let actual = FileRevision::of_body(&draft.body);
+            if actual.body_hash != expected_hash {
+                return Err(InboxStoreError::Conflict {
+                    id: id.to_string(),
+                    expected: expected_hash.to_string(),
+                    actual: actual.body_hash,
+                });
+            }
+            draft.body = body.to_string();
+            draft.frontmatter.updated_at = now_rfc3339();
+            self.atomic_write(id, &render_inbox_file(&draft))?;
+            Ok(draft)
+        })
     }
 
     /// Rewrite the body without a hash check. Frontmatter (including
     /// `conversions[]`) is re-read and written back unchanged except `updated_at`.
     pub fn force_write_body(&self, id: &str, body: &str) -> Result<InboxDraft, InboxStoreError> {
-        let mut draft = self.require_parsed(id)?;
-        draft.body = body.to_string();
-        draft.frontmatter.updated_at = now_rfc3339();
-        self.atomic_write(id, &render_inbox_file(&draft))?;
-        Ok(draft)
+        self.locked(id, || {
+            let mut draft = self.require_writable(id)?;
+            draft.body = body.to_string();
+            draft.frontmatter.updated_at = now_rfc3339();
+            self.atomic_write(id, &render_inbox_file(&draft))?;
+            Ok(draft)
+        })
     }
 
     /// Remove the draft file. Unparseable drafts delete like any other — a
@@ -295,11 +363,13 @@ impl InboxStore {
         author: FrontmatterAuthor,
         patch: FrontmatterPatch,
     ) -> Result<InboxDraft, InboxStoreError> {
-        let mut draft = self.require_parsed(id)?;
-        apply_patch(&mut draft.frontmatter, author, patch);
-        draft.frontmatter.updated_at = now_rfc3339();
-        self.atomic_write(id, &render_inbox_file(&draft))?;
-        Ok(draft)
+        self.locked(id, || {
+            let mut draft = self.require_writable(id)?;
+            apply_patch(&mut draft.frontmatter, author, patch);
+            draft.frontmatter.updated_at = now_rfc3339();
+            self.atomic_write(id, &render_inbox_file(&draft))?;
+            Ok(draft)
+        })
     }
 }
 
@@ -312,8 +382,42 @@ impl InboxStore {
         id: &str,
         write: PriorityWrite,
     ) -> Result<Option<InboxEvent>, InboxStoreError> {
-        let _ = (id, write);
-        todo!("set_priority")
+        self.locked(id, || {
+            let mut draft = self.require_writable(id)?;
+            let fm = &mut draft.frontmatter;
+            let from = fm.priority;
+            let (to, source, author) = match write {
+                PriorityWrite::Operator(Some(p)) => {
+                    (p, PrioritySource::Operator, EventAuthor::operator())
+                }
+                PriorityWrite::Operator(None) => {
+                    (from, PrioritySource::Agent, EventAuthor::operator())
+                }
+                PriorityWrite::Agent(p) => {
+                    if fm.priority_source == PrioritySource::Operator {
+                        return Ok(None);
+                    }
+                    (p, PrioritySource::Agent, EventAuthor::system_agent())
+                }
+            };
+            if to == from && source == fm.priority_source {
+                return Ok(None);
+            }
+            fm.priority = to;
+            fm.priority_source = source;
+            fm.updated_at = now_rfc3339();
+            self.atomic_write(id, &render_inbox_file(&draft))?;
+            if to == from {
+                return Ok(None);
+            }
+            let event = self.append_event(
+                id,
+                author,
+                None,
+                InboxEventKind::PriorityChanged { from, to, source },
+            )?;
+            Ok(Some(event))
+        })
     }
 
     /// Append one event to `<id>.events.jsonl`. The draft must exist.
@@ -324,14 +428,38 @@ impl InboxStore {
         parent_event_id: Option<String>,
         kind: InboxEventKind,
     ) -> Result<InboxEvent, InboxStoreError> {
-        let _ = (
-            id,
-            author,
+        if !self.path_for(id)?.is_file() {
+            return Err(InboxStoreError::NotFound(id.to_string()));
+        }
+        let event = InboxEvent {
+            schema_version: INBOX_EVENT_SCHEMA_VERSION,
+            event_id: random_ulid(),
+            ts: now_rfc3339(),
+            author: author.kind,
+            caller: author.caller,
             parent_event_id,
             kind,
-            INBOX_EVENT_SCHEMA_VERSION,
-        );
-        todo!("append_event")
+        };
+        let mut line = serde_json::to_string(&event)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        line.push('\n');
+        let path = self.sidecar(id, "events.jsonl")?;
+        // One lock per log keeps appends single-writer within the process;
+        // O_APPEND plus a single write keeps each line whole.
+        let lock = path_lock(&path);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.ensure_dir()?;
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .open(&path)?;
+        // A torn tail (crash mid-write) would swallow this line; start a fresh one.
+        if !ends_with_newline(&path)? {
+            line.insert(0, '\n');
+        }
+        f.write_all(line.as_bytes())?;
+        Ok(event)
     }
 
     /// Every parseable event, in append order. A torn or foreign line is skipped.
@@ -354,6 +482,17 @@ impl InboxStore {
     pub fn sweep_orphans(&self) -> Result<Vec<PathBuf>, InboxStoreError> {
         todo!("sweep_orphans")
     }
+}
+
+fn ends_with_newline(path: &Path) -> Result<bool, InboxStoreError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = fs::File::open(path)?;
+    if f.seek(SeekFrom::End(-1)).is_err() {
+        return Ok(true);
+    }
+    let mut last = [0u8; 1];
+    f.read_exact(&mut last)?;
+    Ok(last[0] == b'\n')
 }
 
 fn view_id(v: &InboxDraftView) -> &str {

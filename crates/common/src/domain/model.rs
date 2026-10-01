@@ -553,8 +553,18 @@ pub struct InboxDraftFrontmatter {
 /// Inbox list order: priority (`P0` first), then newest `created_at` first.
 /// Unparseable drafts sort after every parsed one, newest id first.
 pub fn inbox_order(a: &InboxDraftView, b: &InboxDraftView) -> std::cmp::Ordering {
-    let _ = (a, b);
-    todo!("inbox_order")
+    use std::cmp::Ordering;
+    match (a, b) {
+        (InboxDraftView::Parsed(x), InboxDraftView::Parsed(y)) => x
+            .frontmatter
+            .priority
+            .cmp(&y.frontmatter.priority)
+            .then_with(|| y.frontmatter.created_at.cmp(&x.frontmatter.created_at))
+            .then_with(|| y.id.cmp(&x.id)),
+        (InboxDraftView::Parsed(_), InboxDraftView::Raw { .. }) => Ordering::Less,
+        (InboxDraftView::Raw { .. }, InboxDraftView::Parsed(_)) => Ordering::Greater,
+        (InboxDraftView::Raw { id: x, .. }, InboxDraftView::Raw { id: y, .. }) => y.cmp(x),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
