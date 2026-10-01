@@ -2122,6 +2122,8 @@ async fn remove_project(
 
 /// Agent → backend control channel. Applies a runtime event to whichever
 /// project owns the worktree id, recording a notification. Bearer-token authed.
+/// Inbox ingress (`inbox.request`, `inbox.comment`) is routed to the inbox
+/// instead; it names its item, not a project.
 pub(crate) async fn runtime_event(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
@@ -2139,6 +2141,10 @@ pub(crate) async fn runtime_event(
 
     let raw: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|_| ApiError::new(400, "Invalid JSON".to_string()))?;
+    // `sebenza-agentctl request|comment` share this channel (AA-D4).
+    if let Some(outcome) = crate::inbox_routes::inbox_runtime_event(&state, &raw).await {
+        return outcome;
+    }
     let event = crate::domain::events::parse_runtime_event(&raw)
         .ok_or_else(|| ApiError::new(400, "Invalid runtime event body".to_string()))?;
 

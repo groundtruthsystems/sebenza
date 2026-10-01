@@ -10,8 +10,8 @@ use crate::adapters::inbox_store::{
 };
 use crate::adapters::projects_registry::ProjectsRegistry;
 use crate::domain::inbox_events::{
-    AuthorKind, InboxEvent, InboxEventKind, RequestStatus, RequestView, Thread, WorktreeKey,
-    apply_redactions, fold_requests,
+    AuthorKind, InboxEvent, InboxEventKind, RequestView, Thread, WorktreeKey, apply_redactions,
+    fold_requests,
 };
 use crate::domain::model::{
     DraftStatus, InboxDraft, InboxDraftView, Priority, PrioritySource, ProjectRef, inbox_order,
@@ -21,6 +21,7 @@ use crate::services::inbox_convert::{
     scan_for_secrets, status_after, validate_targets,
 };
 use crate::services::inbox_limits::{InboxLimits, RateLimiter};
+use crate::util::id::random_ulid;
 use serde::Serialize;
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
@@ -246,8 +247,38 @@ pub const INGRESS_COMMENT_TYPE: &str = "inbox.comment";
 /// `type` is not an inbox one (the caller handles it as a runtime event);
 /// `Some(Err)` when it is, but malformed.
 pub fn parse_worktree_ingress(raw: &serde_json::Value) -> Option<Result<WorktreeIngress, String>> {
-    let _ = raw;
-    todo!("parse inbox ingress")
+    let kind = raw.get("type")?.as_str()?;
+    if !kind.starts_with("inbox.") {
+        return None;
+    }
+    let field = |key: &str| {
+        raw.get(key)
+            .and_then(serde_json::Value::as_str)
+            .filter(|v| !v.trim().is_empty())
+            .map(str::to_string)
+    };
+    let required = |key: &'static str| field(key).ok_or_else(|| format!("{key} is required"));
+    Some((|| {
+        let draft_id = required("draftId")?;
+        let worktree_path = required("worktreePath")?;
+        let branch = required("branch")?;
+        let body = required("body")?;
+        // The error never echoes `kind`: it is caller-chosen text.
+        let kind = match kind {
+            INGRESS_REQUEST_TYPE => IngressKind::Request {
+                title: field("title"),
+                body,
+            },
+            INGRESS_COMMENT_TYPE => IngressKind::Comment { body },
+            _ => return Err("unknown inbox event type".to_string()),
+        };
+        Ok(WorktreeIngress {
+            draft_id,
+            worktree_path,
+            branch,
+            kind,
+        })
+    })())
 }
 
 /// Reads and writes drafts under the rules above.
@@ -690,8 +721,40 @@ impl InboxService {
         title: &str,
         body: &str,
     ) -> Result<InboxEvent, InboxServiceError> {
-        let _ = (id, author, worktree, title, body, RequestStatus::Open);
-        todo!("open request")
+        let title = title.trim();
+        if title.is_empty() || body.trim().is_empty() {
+            return Err(InboxServiceError::Invalid(
+                "a request needs a title and a body".to_string(),
+            ));
+        }
+        let draft = self.parsed(id)?;
+        if !worktree_keys(&draft).contains(&worktree) {
+            return Err(InboxServiceError::ForeignWorktree(id.to_string()));
+        }
+        let request_id = random_ulid();
+        let event = self.store.append_event(
+            id,
+            author,
+            None,
+            InboxEventKind::RequestOpened {
+                request_id: request_id.clone(),
+                worktree,
+                title: title.to_string(),
+                body: body.to_string(),
+                warnings: secret_warnings(&format!("{title}\n{body}")),
+            },
+        )?;
+        // Phase 3 hangs triage here. With no observer the request simply
+        // waits, open, for the operator.
+        let observer = self
+            .observer
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if let Some(observer) = observer {
+            observer.request_opened(id, &request_id);
+        }
+        Ok(event)
     }
 
     /// Every request on the item, folded from the log, redactions applied.
@@ -702,8 +765,39 @@ impl InboxService {
     /// Apply a worktree agent's request or comment, after checking the
     /// claimed worktree is one this item was converted into (T-06, T-37).
     pub fn ingest(&self, ingress: &WorktreeIngress) -> Result<InboxEvent, InboxServiceError> {
-        let _ = ingress;
-        todo!("ingest")
+        let draft = self.parsed(&ingress.draft_id)?;
+        let claimed = ingress.worktree_path.trim_end_matches('/');
+        // Both halves must match one created conversion: the path from the
+        // worktree's environment and the branch from its control.env. The
+        // draft id alone is just a file the worktree could have rewritten.
+        let conversion = created_conversions(&draft)
+            .into_iter()
+            .find(|c| {
+                c.branch == ingress.branch
+                    && c.worktree_path
+                        .as_deref()
+                        .is_some_and(|p| p.trim_end_matches('/') == claimed)
+            })
+            .ok_or_else(|| InboxServiceError::ForeignWorktree(draft.id.clone()))?;
+        let key = WorktreeKey {
+            project: conversion.project_path,
+            branch: conversion.branch,
+        };
+        let author = EventAuthor::worktree_agent();
+        match &ingress.kind {
+            IngressKind::Request { title, body } => {
+                let title = title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| title_from(body));
+                self.open_request(&draft.id, author, key, &title, body)
+            }
+            IngressKind::Comment { body } => {
+                self.add_comment(&draft.id, author, Thread::Worktree(key), body)
+            }
+        }
     }
 
     /// The draft, or an error if it is missing or does not parse.
@@ -837,6 +931,17 @@ fn comment_row(
         warnings,
         redacted: redacted.contains(&event.event_id),
     })
+}
+
+/// A request title from the first non-blank line of its body, cut to 80
+/// characters on a char boundary.
+fn title_from(body: &str) -> String {
+    let line = body
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("");
+    line.chars().take(80).collect()
 }
 
 /// Secret-scan hits for a comment or request body: warnings only (FR-10).
@@ -1386,7 +1491,7 @@ mod tests {
 #[cfg(test)]
 mod collaboration_tests {
     use super::*;
-    use crate::domain::inbox_events::REDACTED_BODY;
+    use crate::domain::inbox_events::{REDACTED_BODY, RequestStatus};
     use crate::services::inbox_limits::RateLimit;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};

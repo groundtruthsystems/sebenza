@@ -6,7 +6,7 @@
 //! substituting for the other.
 
 use crate::adapters::inbox_store::EventAuthor;
-use crate::domain::inbox_events::{Thread, WorktreeKey};
+use crate::domain::inbox_events::{Thread, WorktreeKey, request_id_of};
 use crate::domain::model::{
     DraftStatus, FileRevision, InboxDraft, InboxDraftView, Priority, PrioritySource,
 };
@@ -21,6 +21,7 @@ use crate::services::inbox_convert::{
 use crate::services::inbox_jobs::{JobEvent, JobSnapshot, JobSubscription};
 use crate::services::inbox_service::{
     CommentGroups, DraftSummary, InboxService, InboxServiceError, ListQuery, ProjectLink,
+    parse_worktree_ingress,
 };
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -707,8 +708,21 @@ pub async fn inbox_runtime_event(
     state: &AppState,
     raw: &serde_json::Value,
 ) -> Option<Result<Json<serde_json::Value>, ApiError>> {
-    let _ = (state, raw);
-    todo!("inbox ingress")
+    let ingress = match parse_worktree_ingress(raw)? {
+        Ok(ingress) => ingress,
+        Err(msg) => return Some(Err(ApiError::new(400, msg))),
+    };
+    let svc = inbox(state);
+    let outcome = tokio::task::spawn_blocking(move || svc.ingest(&ingress)).await;
+    Some(match outcome {
+        Err(_) => Err(ApiError::new(500, "task panicked".to_string())),
+        Ok(Err(e)) => Err(e.into()),
+        Ok(Ok(event)) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "eventId": event.event_id,
+            "requestId": request_id_of(&event.kind),
+        }))),
+    })
 }
 
 #[cfg(test)]
