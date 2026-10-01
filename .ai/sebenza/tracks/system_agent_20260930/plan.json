@@ -364,13 +364,14 @@
           "id": "phase-6-task-4",
           "name": "Implement draft-help merge view, convert dialog instructions and PHI warning",
           "description": "Show draft-help proposals with a conflict merge view, editable system instructions in the convert dialog, and the PHI and provider warning.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "2c5cd4c"
         },
         {
           "id": "phase-6-task-5",
           "name": "Execute test scenarios TS-02, TS-04, TS-09, TS-30, TS-43, TS-46, TS-55, TS-66",
           "description": "Run and pass the phase's test-plan scenarios.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-02",
             "TS-04",
