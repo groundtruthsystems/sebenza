@@ -62,6 +62,24 @@ agents:
 #     label: Zed
 #     command: zed ${WORKTREE_PATH}
 
+# The inbox system agent is also machine-wide: it is configured ONLY in
+# ~/.ai/sebenza.yaml (never per project), because the inbox is global. With no
+# `systemAgent:` block it is OFF and the inbox works without it. Adding the
+# block turns it on (`enabled` defaults to true once the block exists). Each
+# inbox item gets a headless `claude -p` session, resumed per job, in plan
+# mode with read-only tools; it triages worktree requests, helps draft, and
+# writes per-target conversion instructions. Nothing it proposes reaches a
+# worktree until you confirm it. An invalid block stops the server at startup.
+# Do not put PHI in the inbox: it is sent to the model provider.
+# systemAgent:
+#   enabled: true            # kill switch
+#   agent: claude            # the only supported value (grok/codex/opencode are refused)
+#   model: claude-haiku-4-5  # optional --model; omit for the CLI default
+#   maxConcurrent: 2         # agent processes at once, across all items (1-16)
+#   timeoutSecs: 120         # per-job limit; the process group is killed past it (1-3600)
+#   turnCap: 40              # turns per session before it is re-seeded from the item (1-1000)
+#   binary: claude           # optional path to the CLI; default is `claude` on PATH
+
 # Auto-generated service ports that are injected into pane processes,
 # lifecycle hooks, and runtime env files.
 services:

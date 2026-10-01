@@ -51,6 +51,14 @@ wrapper in `frontend/src/lib/api.ts`.
 | `codex` | — | Needs `--enable hooks`; assigns its own session id |
 | `opencode` | **1.18.7** | Installs to `~/.opencode/bin`, which is **not** on a default `PATH`. History is read via `opencode export <id>` (never `--sanitize`, which redacts the transcript). Session store is SQLite; Sebenza never reads it directly |
 
+**Inbox system agent (dated 2026-10-01).** The per-item inbox system agent reuses the
+installed `claude` CLI headlessly — `claude -p --output-format stream-json`, resumed per item
+with `--resume`, `--permission-mode plan`, `--allowedTools Read,Grep,Glob` — in an empty
+per-item scratch directory with an allowlisted environment. Only `claude` is supported in that
+role. It is off unless `~/.ai/sebenza.yaml` has a `systemAgent:` block. No new crates; tests run
+a shell stub (`crates/sebenza-server/src/services/system_agent/testdata/stub-agent.sh`), never
+the real CLI.
+
 `sebenza-cli init` reports each tool's detected version, so a session-format or hook change
 that breaks history can be diagnosed against the version actually installed rather than
 guessed at. opencode moves fast — 1.18.7 → 1.18.9 was observed within a day — so the

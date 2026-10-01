@@ -23,7 +23,9 @@ URL prefixes — and everything the dashboard does is also available from the
 - **Inbox** — take notes before you know which repo they belong to. Drafts are plain
   markdown with mermaid, edited in the dashboard with a live preview, and converted
   into worktrees when you are ready — one draft can fan out to several worktrees
-  across different projects, each with its own branch, agent, and prompt.
+  across different projects, each with its own branch, agent, and prompt. Items carry a
+  priority, grouped comments, and requests from the worktrees they produced; an optional
+  per-item **system agent** triages those requests and proposes answers for you to confirm.
 - **Tracks board** — a per-worktree Kanban view of a project's Sebenza tracks
   (`.ai/sebenza/tracks.json`, written by the `sebenza` Claude Code plugin):
   phases as cards grouped by track, drill-down into tasks/subtasks, and `spec.md` /
@@ -196,7 +198,7 @@ export PATH="$PWD/target/release:$PATH"   # sebenza-cli, sebenza-server
 | `tab` | List/create/switch/close agent tabs in a worktree. |
 | `prune` / `restore` | Remove closed worktrees / re-open previously-open sessions. |
 | `oneshot` | Run a worktree start-to-finish, streaming to stdout. |
-| `inbox` | `ls` / `show` / `new` / `edit` / `link` / `drop` / `rm` drafts, plus `convert` and `job`. |
+| `inbox` | `ls` / `show` / `new` / `edit` / `link` / `drop` / `rm` drafts; `convert`, `convert-instructions` and `job`; `priority`; `comment` / `comments`; `requests`, `confirm` / `reject` / `redeliver` / `retry-triage`; `draft-help`, `agent-job`; `redact`. See [Inbox](#inbox). |
 | `project` | `ls` / `add` / `rm` / `migrate` the served projects. |
 | `service` | Install/uninstall the systemd/launchd service. |
 | `completion` | Print a bash/zsh completion script. |
@@ -209,9 +211,9 @@ Without `--port`, CLI commands target the live server for the current project
 | What | Location |
 |---|---|
 | Project config | `<repo>/.ai/sebenza.yaml` (+ `.ai/sebenza.local.yaml` for local overrides) |
-| Machine-wide launchers | `~/.ai/sebenza.yaml` |
+| Machine-wide launchers and the inbox system agent | `~/.ai/sebenza.yaml` (`launchers:`, `systemAgent:` — see [The system agent](#the-system-agent)) |
 | Server state (project registry, instances) | `~/.ai/sebenza/` |
-| Inbox drafts | `~/.ai/sebenza/inbox/<ulid>.md` — global, outside every repo |
+| Inbox drafts | `~/.ai/sebenza/inbox/<ulid>.md` — global, outside every repo; beside each, `<ulid>.events.jsonl` (comments, requests, decisions) and `<ulid>.session.json` (system agent session) |
 | Control token | `~/.config/sebenza/control-token` |
 | Environment | `PORT` (server port, default `5111`); `SEBENZA_HOST` (bind host, default `127.0.0.1`); `SEBENZA_FRONTEND_DIST` (optional — serve the SPA from disk instead of the embedded bundle) |
 
@@ -225,6 +227,133 @@ Each draft is one self-contained `.md` file — YAML frontmatter, then the body 
 by an opaque id rather than its title, so renaming never moves the file. They are
 ordinary files: edit them in the dashboard or in your own editor, and the dashboard
 notices an external change rather than overwriting it.
+
+> **Do not put PHI in the inbox.** Drafts, comments and requests are stored in plaintext
+> and, when the system agent is enabled, sent to its model provider. The editor and the
+> comment box say so permanently; the scan described under [Warnings](#warnings) is a
+> heuristic backstop, not a control.
+
+### Priority
+
+Every item has a priority, `P0` (most urgent) to `P3`, defaulting to `P2`. Lists sort by
+priority, then newest first. The system agent may set it while triaging a request; a
+priority *you* set is an **override** the agent never changes until you clear it, which
+hands control back. Every change is recorded as an event.
+
+```bash
+sebenza-cli inbox priority <draft-id> P0      # set the override
+sebenza-cli inbox priority <draft-id> clear   # hand it back to the agent
+```
+
+### Comments
+
+Comments are grouped: one **overall** thread for the item, plus one thread per worktree
+it was converted into. You, the system agent and the worktree agents all comment;
+each comment is an immutable event in the item's `<ulid>.events.jsonl` sidecar and
+renders as inert, sanitised markdown.
+
+```bash
+sebenza-cli inbox comment <draft-id> 'overall note'
+sebenza-cli inbox comment <draft-id> --worktree ~/code/acme:fix-scorer 'note for one worktree'
+sebenza-cli inbox comments <draft-id>
+```
+
+### Requests from worktrees
+
+A worktree agent that needs a decision can ask for one. Inside a converted worktree,
+`sebenza-agentctl` (the helper Sebenza already provides to every worktree agent) files
+against the item the worktree came from, read from `.ai/sebenza/inbox-origin.json`:
+
+```bash
+sebenza-agentctl request --title 'Which loader?' --body 'Should the tests use the fixture loader?'
+sebenza-agentctl request --body -          # read the body from stdin
+sebenza-agentctl comment --body 'progress: parser done'
+```
+
+A request lands in that worktree's group; one claiming a worktree the item was never
+converted into is refused. Size, rate and open-request limits apply.
+
+A request moves through **open → proposed → confirmed → resolved** (or
+**delivery_failed**). With the system agent enabled, each new request is **triaged**: the
+agent sets the item's priority (unless you have overridden it) and either proposes a
+resolution, leaves advice as a comment, or does nothing. Advice is never delivered. A
+triage that fails or times out leaves the request open and flagged, for you to retry.
+
+Nothing reaches a worktree until you decide:
+
+- **Confirm** the proposal as shown, or **edit** it first, or — with no proposal — write
+  the resolution yourself. Confirm quotes the content hash of the text you were shown,
+  so a proposal that changed underneath you is a `409`, not a silent swap.
+- On confirm, the text is stripped of terminal escapes, control characters and tmux
+  syntax, fenced as data, and pasted into the **origin worktree's agent pane only**.
+- **Reject** with a reason reopens the request.
+- If the pane is gone, the request is `delivery_failed`; **redeliver** retries it.
+- **Retry triage** re-runs the agent on a flagged request.
+
+```bash
+sebenza-cli inbox requests <draft-id>
+sebenza-cli inbox confirm <draft-id> <request-id>                 # the proposal as shown
+sebenza-cli inbox confirm <draft-id> <request-id> --body 'use v2'  # edited or your own
+sebenza-cli inbox reject <draft-id> <request-id> 'wrong loader'
+sebenza-cli inbox redeliver <draft-id> <request-id>
+sebenza-cli inbox retry-triage <draft-id> <request-id>
+```
+
+Every proposal, priority change, confirm, reject and delivery is audited (metadata only).
+
+### The system agent
+
+Each item can have its own **system agent**: a headless `claude -p` session, resumed with
+`--resume` for every job on that item, that triages requests, helps draft, and writes
+conversion instructions. It is **claude only** — the one CLI that can be held to read-only
+tools headlessly — and runs in `plan` permission mode with `Read`/`Grep`/`Glob` only, in an
+empty per-item scratch directory, with an environment allowlist that excludes
+`SEBENZA_CONTROL_TOKEN`. It never runs yolo, and it can only answer: every change it
+causes is made by the server, and nothing it writes is delivered without your confirm.
+
+It is **off unless configured**: with no `systemAgent` block in `~/.ai/sebenza.yaml`
+there is no agent, and the inbox works exactly as before (draft help and convert
+instructions report it unavailable and fall back). Adding the block turns it on:
+
+```yaml
+# ~/.ai/sebenza.yaml (machine-wide; the inbox is global)
+systemAgent:
+  enabled: true          # kill switch; a present block defaults to true
+  agent: claude          # the only accepted value; grok/codex/opencode are a startup error
+  model: claude-haiku-4-5  # passed as --model; omit for the CLI default
+  maxConcurrent: 2       # agent processes at once, across all items (1-16)
+  timeoutSecs: 120       # per job; past it the whole process group is killed (1-3600)
+  turnCap: 40            # turns on one session before it is re-seeded from the item (1-1000)
+  # binary: /path/to/claude   # override the CLI (default: `claude` on PATH); tests use a stub
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `true` when the block is present; off when the block is absent | `false` spawns no jobs. |
+| `agent` | `claude` | Only `claude` is accepted. |
+| `model` | unset (CLI default) | Model for every job. |
+| `maxConcurrent` | `2` | Global concurrency. Jobs on one item run one at a time; interactive jobs go before triage. |
+| `timeoutSecs` | `120` | Per-job wall-clock limit. |
+| `turnCap` | `40` | Session length before re-seeding from the item and its last 20 comments. |
+| `binary` | `claude` on `PATH` | Path to the agent binary. |
+
+An invalid block — `agent: grok`, an unknown key, a number out of range — stops the
+server at startup rather than running with a different agent than you asked for. After a
+restart, open requests whose triage never finished are triaged again, once each (a
+flagged one waits for your retry). Follow a job with
+`sebenza-cli inbox agent-job <draft-id> <job-id>` (the dashboard streams it live).
+
+### Draft help
+
+**Ask agent** in the editor (or `sebenza-cli inbox draft-help`) asks the system agent to
+rework the body, optionally following an instruction. It returns a *proposed* body and
+never writes the draft: applying it goes through the normal hash-gated save, so if you
+kept typing meanwhile you get a merge view rather than an overwrite.
+
+```bash
+sebenza-cli inbox draft-help <draft-id> --instruction 'make it a spec' --watch
+sebenza-cli inbox draft-help <draft-id> --apply   # save it, unless the body changed meanwhile
+```
 
 ### Converting a draft
 
@@ -262,6 +391,30 @@ others, and each outcome — success or not — is recorded in the draft as it h
 The draft survives conversion, marked promoted, carrying back-links to everything it
 produced. Converting again pre-fills from the previous wave.
 
+### Convert instructions and architect-first launch
+
+With the system agent enabled, the convert dialog first asks it for a **system
+instruction per target** — what that worktree's portion of the item is, informed by the
+item and its comments. Each is shown for you to edit or clear before anything launches.
+A target that has a system instruction, in a project with a Sebenza workspace
+(`.ai/sebenza/index.md`), launches **architect-first**: its agent is told to run the
+`sebenza-architect` skill on its portion, with the item, your prompt and the system
+instruction. The fallbacks:
+
+- no Sebenza workspace, or architect-first turned off: your prompt plus the system
+  instruction, as a direct instruction;
+- the agent disabled, failed or timed out: your prompt alone, as before.
+
+`conversions[]` records each target's system instruction and whether it launched
+architect-first.
+
+```bash
+sebenza-cli inbox convert-instructions <draft-id> ~/code/acme:fix-scorer:'rewrite it'
+sebenza-cli inbox convert <draft-id> ~/code/acme:fix-scorer:'rewrite it' --instructions
+sebenza-cli inbox convert <draft-id> ~/code/acme:fix-scorer:'rewrite it' \
+  --system fix-scorer='only the scoring core' --no-architect
+```
+
 ### What conversion writes, and what it does not
 
 The draft copy and its origin marker are added to the worktree's
@@ -274,13 +427,35 @@ would dirty every worktree it touched. Your notes therefore never show up in
 Before a fan-out, Sebenza flags two things and then gets out of the way — both are
 advisory, neither blocks:
 
-- **Credential-shaped text** in the draft. It is about to be copied into a real
-  checkout and sent to whichever model provider the agent uses. The scan is narrow on
-  purpose and will miss things; the inbox is not a secrets vault.
+- **Credential-shaped text** in the draft, its comments, requests and proposals. It is
+  about to be copied into a real checkout and sent to whichever model provider the agent
+  uses. The scan is narrow on purpose and will miss things; the inbox is not a secrets
+  vault.
 - **An unsandboxed target.** A draft is likelier than a typed prompt to contain text
   pasted from elsewhere, and an unsandboxed agent acts on it with shell access.
   Install `lxc` (Linux) or Apple `container` (macOS) and set a sandboxed profile to
   avoid this.
+
+The same scan — secrets plus likely PHI (SSN, medical record number, date of birth) —
+runs on every comment, request and proposal. It is **warn-only**: a hit is stored
+unchanged with a warning badge, never blocked or rewritten. To remove something, redact
+it yourself; redaction appends a tombstone, and the text is masked wherever it is shown
+and in every later system-agent prompt (comments, requests, proposals and advice can all
+be redacted):
+
+```bash
+sebenza-cli inbox redact <draft-id> <event-id>
+```
+
+### Security note: confirmation is a convention
+
+Worktree agents reach the server with the same control token the dashboard and CLI
+use, because every worktree pane holds it to run `sebenza-agentctl`. So the rule that
+*a human confirms every resolution* is today a **convention**, not an enforced
+boundary: a worktree agent that chose to could call the confirm, priority or comment
+routes itself. Such calls are accepted, audited as the operator, and tagged with the
+self-declared `X-Sebenza-Caller` marker, which is not authentication. This is an
+accepted risk (threat **T-01**); scoped per-worktree tokens are a planned follow-up.
 
 ### Network exposure
 
