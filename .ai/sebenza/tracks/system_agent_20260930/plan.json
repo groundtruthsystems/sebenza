@@ -409,13 +409,14 @@
           "id": "phase-7-task-2",
           "name": "Update docs and CLI help",
           "description": "Document the system agent, systemAgent config, agentctl request/comment, and the accepted T-01 convention.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "def6cfd"
         },
         {
           "id": "phase-7-task-3",
           "name": "Execute end-to-end and manual scenarios",
           "description": "Run the e2e scenarios and sign off the manual live-pane and metrics checks.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-56",
             "TS-57",
