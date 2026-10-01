@@ -1,0 +1,476 @@
+{
+  "$schema": "sebenza-plan-v1",
+  "track_id": "system_agent_20260930",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Store and domain model",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-1-task-1",
+          "name": "Write tests for frontmatter v2 and event sidecars",
+          "description": "Write failing unit and integration tests for priority fields, schema refusal, the JSONL event store, the request fold, and retention.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-2",
+          "name": "Implement frontmatter v2 and priority fields",
+          "description": "Add priority and priority_source with serde defaults, a flatten catch-all, and refusal to write newer schema versions.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-3",
+          "name": "Implement event sidecar and request fold",
+          "description": "Add the single-writer append-only events.jsonl, the request state fold, and the server-owned session.json with 0600 files.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-4",
+          "name": "Implement drop, delete and orphan sweep",
+          "description": "Keep sidecars on Drop, delete sidecars before the .md on Delete, and sweep orphans at startup.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-5",
+          "name": "Execute test scenarios TS-05, TS-07, TS-08, TS-10, TS-39, TS-53, TS-54, TS-64",
+          "description": "Run and pass the phase's test-plan scenarios.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-05",
+            "TS-07",
+            "TS-08",
+            "TS-10",
+            "TS-39",
+            "TS-53",
+            "TS-54",
+            "TS-64"
+          ]
+        },
+        {
+          "id": "phase-1-task-6",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Routes, agentctl ingress and CLI parity",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-2-task-1",
+          "name": "Write tests for priority, comment and request routes",
+          "description": "Write failing tests for the new guarded routes, runtime-event ingress, the worktree cross-check, limits, and audit.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-2",
+          "name": "Implement priority and comment routes with contract",
+          "description": "Add PATCH priority and GET/POST comments to inbox_routes, the ts-rest contract, api.ts, and sebenza-cli inbox.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-3",
+          "name": "Implement agentctl request and comment ingress",
+          "description": "Add inbox.request and inbox.comment runtime events and agentctl commands, refusing workers not in conversions[].",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-4",
+          "name": "Implement rate limits and metadata-only audit",
+          "description": "Add body caps, per-caller rate limits, and audit records with the unauthenticated caller marker.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-5",
+          "name": "Execute test scenarios TS-06, TS-11, TS-12, TS-13, TS-32, TS-37, TS-40, TS-41",
+          "description": "Run and pass the phase's test-plan scenarios.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-06",
+            "TS-11",
+            "TS-12",
+            "TS-13",
+            "TS-32",
+            "TS-37",
+            "TS-40",
+            "TS-41"
+          ]
+        },
+        {
+          "id": "phase-2-task-6",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "System agent runtime",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-3-task-1",
+          "name": "Write tests for system agent runtime",
+          "description": "Write failing tests using a stub stream-json CLI for queueing, limits, timeout, isolation, schemas, restart, and re-seed.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-2",
+          "name": "Extend AgentStreamManager for final message, session id and model",
+          "description": "Return the final message and session id from a run and pass the configured model, keeping chat behaviour unchanged.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-3",
+          "name": "Implement systemAgent config and claude-only validation",
+          "description": "Add the systemAgent config block and reject agents other than claude at startup.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-4",
+          "name": "Implement SystemAgentService queue, semaphore and timeout",
+          "description": "Add per-item serial queues, a global semaphore, an interactive priority lane, process-group timeout kill, and the kill switch.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-5",
+          "name": "Implement isolated argv, env allowlist and output schemas",
+          "description": "Build read-only non-yolo argv with an empty cwd and token-free env, and validate versioned triage, draft_help and convert output.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-6",
+          "name": "Implement sessions, digest, restart recovery and re-seed",
+          "description": "Persist sessions, build the titles-only digest, re-enqueue unproposed requests once on restart, and re-seed past turnCap.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-7",
+          "name": "Execute test scenarios TS-15, TS-16, TS-17, TS-18, TS-19, TS-21, TS-22, TS-35, TS-50, TS-51, TS-52, TS-60, TS-65, TS-67",
+          "description": "Run and pass the phase's test-plan scenarios.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-15",
+            "TS-16",
+            "TS-17",
+            "TS-18",
+            "TS-19",
+            "TS-21",
+            "TS-22",
+            "TS-35",
+            "TS-50",
+            "TS-51",
+            "TS-52",
+            "TS-60",
+            "TS-65",
+            "TS-67"
+          ]
+        },
+        {
+          "id": "phase-3-task-8",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "Triage, confirmation and delivery",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-4-task-1",
+          "name": "Write tests for triage and resolution flow",
+          "description": "Write failing tests for triage application, failure and retry, confirm, author, reject, redeliver, sanitising, scanning, and redaction.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-2",
+          "name": "Implement triage application and advice",
+          "description": "Apply triage output to priority, proposals, and advice comments, flagging failed jobs and supporting retry-triage.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-3",
+          "name": "Implement confirm, author, reject and job status routes",
+          "description": "Add hash-bound confirm, operator-authored resolutions, reject with reason, redeliver, and job status over HTTP and WS.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-4",
+          "name": "Implement ResolutionDelivery",
+          "description": "Paste escape-stripped confirmed text only into the verified origin pane, recording delivered or delivery_failed per attempt.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-5",
+          "name": "Implement secret scan warnings and manual redaction",
+          "description": "Run the secret and PHI scan on comments, requests, and proposals as warnings and add the redacted tombstone.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-6",
+          "name": "Execute test scenarios TS-14, TS-20, TS-23, TS-24, TS-25, TS-26, TS-27, TS-28, TS-29, TS-31, TS-33, TS-34, TS-36, TS-38, TS-42, TS-61, TS-62, TS-63",
+          "description": "Run and pass the phase's test-plan scenarios.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-14",
+            "TS-20",
+            "TS-23",
+            "TS-24",
+            "TS-25",
+            "TS-26",
+            "TS-27",
+            "TS-28",
+            "TS-29",
+            "TS-31",
+            "TS-33",
+            "TS-34",
+            "TS-36",
+            "TS-38",
+            "TS-42",
+            "TS-61",
+            "TS-62",
+            "TS-63"
+          ]
+        },
+        {
+          "id": "phase-4-task-7",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "Draft help and architect-first conversion",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-5-task-1",
+          "name": "Write tests for draft help and conversion instructions",
+          "description": "Write failing tests for draft-help proposals, conflicts, per-target instructions, the prompt builder, and fallbacks.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-2",
+          "name": "Implement draft-help job",
+          "description": "Run draft-help through the item session and return a proposed body applied only via the hash-gated PUT.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-3",
+          "name": "Implement convert instructions and ArchitectFirstPromptBuilder",
+          "description": "Generate per-target system instructions and build architect-first or direct prompts, recording both on conversions[].",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-4",
+          "name": "Wire fallbacks into inbox_runner",
+          "description": "Fall back to the operator prompt when the agent is unavailable and scan comments before conversion.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-5",
+          "name": "Execute test scenarios TS-01, TS-03, TS-44, TS-45, TS-47, TS-48, TS-49",
+          "description": "Run and pass the phase's test-plan scenarios.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-01",
+            "TS-03",
+            "TS-44",
+            "TS-45",
+            "TS-47",
+            "TS-48",
+            "TS-49"
+          ]
+        },
+        {
+          "id": "phase-5-task-6",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-6",
+      "name": "Inbox UI",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-6-task-1",
+          "name": "Write tests for Inbox UI components",
+          "description": "Write failing vitest tests for priority control and sort, grouped comments, request card, merge view, convert dialog, and warnings.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6-task-2",
+          "name": "Implement priority control, sort and flags in InboxView",
+          "description": "Add the priority badge and control, sort by priority then date, and show flagged items.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6-task-3",
+          "name": "Implement grouped comments and request card",
+          "description": "Render sanitised comments grouped per worktree plus overall, and a request card with verbatim text, diff, and confirm, edit, reject, redeliver.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6-task-4",
+          "name": "Implement draft-help merge view, convert dialog instructions and PHI warning",
+          "description": "Show draft-help proposals with a conflict merge view, editable system instructions in the convert dialog, and the PHI and provider warning.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6-task-5",
+          "name": "Execute test scenarios TS-02, TS-04, TS-09, TS-30, TS-43, TS-46, TS-55, TS-66",
+          "description": "Run and pass the phase's test-plan scenarios.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-02",
+            "TS-04",
+            "TS-09",
+            "TS-30",
+            "TS-43",
+            "TS-46",
+            "TS-55",
+            "TS-66"
+          ]
+        },
+        {
+          "id": "phase-6-task-6",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-7",
+      "name": "Final verification",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-7-task-1",
+          "name": "Write end-to-end tests",
+          "description": "Write the loopback e2e harness tests for the request-to-delivery and conversion flows using the stub CLI and fake pane.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-7-task-2",
+          "name": "Update docs and CLI help",
+          "description": "Document the system agent, systemAgent config, agentctl request/comment, and the accepted T-01 convention.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-7-task-3",
+          "name": "Execute end-to-end and manual scenarios",
+          "description": "Run the e2e scenarios and sign off the manual live-pane and metrics checks.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-56",
+            "TS-57",
+            "TS-58",
+            "TS-59"
+          ]
+        },
+        {
+          "id": "phase-7-task-4",
+          "name": "Re-run full test plan",
+          "description": "Re-run every scenario against the finished feature, confirm coverage above 80%, and close any traceability gap.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-01",
+            "TS-02",
+            "TS-03",
+            "TS-04",
+            "TS-05",
+            "TS-06",
+            "TS-07",
+            "TS-08",
+            "TS-09",
+            "TS-10",
+            "TS-11",
+            "TS-12",
+            "TS-13",
+            "TS-14",
+            "TS-15",
+            "TS-16",
+            "TS-17",
+            "TS-18",
+            "TS-19",
+            "TS-20",
+            "TS-21",
+            "TS-22",
+            "TS-23",
+            "TS-24",
+            "TS-25",
+            "TS-26",
+            "TS-27",
+            "TS-28",
+            "TS-29",
+            "TS-30",
+            "TS-31",
+            "TS-32",
+            "TS-33",
+            "TS-34",
+            "TS-35",
+            "TS-36",
+            "TS-37",
+            "TS-38",
+            "TS-39",
+            "TS-40",
+            "TS-41",
+            "TS-42",
+            "TS-43",
+            "TS-44",
+            "TS-45",
+            "TS-46",
+            "TS-47",
+            "TS-48",
+            "TS-49",
+            "TS-50",
+            "TS-51",
+            "TS-52",
+            "TS-53",
+            "TS-54",
+            "TS-55",
+            "TS-56",
+            "TS-57",
+            "TS-58",
+            "TS-59",
+            "TS-60",
+            "TS-61",
+            "TS-62",
+            "TS-63",
+            "TS-64",
+            "TS-65",
+            "TS-66",
+            "TS-67"
+          ]
+        },
+        {
+          "id": "phase-7-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    }
+  ]
+}

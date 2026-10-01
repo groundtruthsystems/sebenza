@@ -8,3 +8,5 @@ architect-first worktree instructions on conversion.
 - [Design](./design.md)
 - [Test Plan](./test-plan.md)
 - [Metadata](./metadata.json)
+- [Spec](./spec.md)
+- [Plan](./plan.json)

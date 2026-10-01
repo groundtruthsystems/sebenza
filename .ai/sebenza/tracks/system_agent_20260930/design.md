@@ -298,7 +298,7 @@ flowchart LR
 | Frontmatter (title, project, status, timestamps) | Internal | No | Project name may identify a customer |
 | `priority`, `priority_source` | Internal | No | Operator value wins |
 | Draft body | Confidential, may hold secrets | Prohibited (BR-08) | Secret scan on convert, extended to comments |
-| Comments, requests, proposals, resolutions | Confidential, may hold secrets | Prohibited (BR-08) | Immutable; `redacted` tombstone masks the body; resolution pasted into tmux |
+| Comments, requests, proposals, resolutions | Confidential, may hold secrets | Prohibited (BR-08) | Immutable; scan warns; operator-initiated `redacted` tombstone masks the body; resolution pasted into tmux |
 | `session.json` | Internal, sensitive | No | `session_id` is a capability to resume a transcript |
 | Agent transcript | Confidential, likely secrets | Possible | Outside Sebenza's control |
 | `system_instruction` | Confidential | Possible | Derived from item + comments; operator-edited |
@@ -316,7 +316,7 @@ flowchart LR
 - DA-R1: Priority writes race editor saves — per-draft mutex plus a hash check.
 - DA-R2: Interleaved JSONL appends — single writer, `O_APPEND`, tolerant reader.
 - DA-R3: Orphaned transcripts outside Sebenza's control.
-- DA-R4: Secrets spread into comments and tmux scrollback — scan; `redacted` tombstone; the reader masks the body.
+- DA-R4: Secrets spread into comments and tmux scrollback — the scan warns only (operator decision); the operator can redact by hand with a tombstone.
 
 ### Security Architecture
 **Verified:** the one control token guarding mutating inbox routes is exported into every worktree pane (`fs.rs:479`), so worktree agents hold operator credentials. **Operator decision (2026-09-30):** confirmation is a convention for now; scoped tokens are deferred (T-01).
@@ -366,7 +366,7 @@ flowchart LR
 | T-04 | System agent with tools or yolo exfiltrates or executes | E | Server-built read-only argv, empty cwd, env allowlist without the control token, never yolo | High |
 | T-05 | Worktree agent reads or comments on other items | I | Residual with T-01; digest is titles and priority only | High |
 | T-06 | Spoofed worktree identity or origin item | S | Residual with T-01; server cross-checks the claimed worktree path against `conversions[]` (payload-declared, not authenticated) | High |
-| T-07 | Secrets in comments or transcripts replayed to models | I | Secret scan on comments, requests, proposals; 0600 files; titles-only digest | High |
+| T-07 | Secrets in comments or transcripts replayed to models | I | Secret scan **warns** (badge) on comments, requests, proposals; manual redaction; 0600 files; titles-only digest. Residual: flagged text still reaches the model and the pane if confirmed | High |
 | T-08 | Unattributable decisions | R | Metadata-only append-only audit of every proposal, priority change, confirm, reject, and delivery; agent-vs-operator attribution not possible under T-01 | Medium |
 | T-09 | Request floods exhaust budget | D | Rate limits, queue depth cap, body caps, timeout, dedupe | Medium |
 | T-10 | DNS rebinding or cross-site calls to confirm | S | Bearer + same-origin on all new routes; Host allowlist | Medium |

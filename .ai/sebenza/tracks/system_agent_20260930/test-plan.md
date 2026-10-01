@@ -10,7 +10,7 @@ Fast, deterministic levels carry the weight. Rust unit tests cover the pure logi
 |---|---|---|---|
 | Unit (Rust) | State machine, event fold, priority ordering, output parser, prompt builders, sanitiser, secret scan | `cargo test`, inline `mod tests` | Dev, CI |
 | Integration (Rust) | Routes, `InboxService` on a tempdir store, `SystemAgentService` queue/semaphore/timeout, delivery, runtime-event ingress, restart recovery | `cargo test` + stub CLI + fake pane sink | Dev, CI |
-| Contract | Per-CLI resume argv and stream-json fixtures (claude, grok, codex; opencode rejected); ts-rest contract vs `api.ts` | `cargo test` on recorded fixtures; ts-rest types | CI |
+| Contract | Per-CLI resume argv and stream-json fixtures (claude; grok, codex, opencode rejected for now); ts-rest contract vs `api.ts` | `cargo test` on recorded fixtures; ts-rest types | CI |
 | UI component | `InboxView` sort, priority control, grouped comments, request card, `ConvertDraftDialog` | vitest + Testing Library | Dev, CI |
 | End-to-end | Request → triage → confirm → delivery; convert | `cargo test` harness on loopback (stub CLI, fake pane) | CI |
 | Manual / UAT | Live pane paste, real CLI smoke, disclosure text | Checklist | Operator machine, synthetic item |
@@ -33,7 +33,7 @@ Fast, deterministic levels carry the weight. Rust unit tests cover the pure logi
 | TS-13 | UC-04, T-09, TA-R1 | Integration | Med | Flood over body cap, rate, or depth; excess rejected or coalesced | 413/429; depth bounded |
 | TS-14 | UC-05, AA-D2 | Integration | High | Stub returns triage with proposal; priority set, proposal comment posted, status proposed | Events; status |
 | TS-15 | UC-05, T-05 | Unit | High | 30 open items; digest built; 20 entries, titles and priority only | Digest content |
-| TS-16 | UC-05, TA-R4 | Contract | High | Per-CLI fixtures parsed; final message + session_id extracted; argv correct; opencode rejected | Fields; argv; config error |
+| TS-16 | UC-05, TA-R4 | Contract | High | claude fixture parsed; final message + session_id extracted; argv correct; grok, codex, opencode rejected at startup | Fields; argv; config error |
 | TS-17 | UC-05, AA-D1 | Integration | High | Two requests on one item; runs serial, never hit active-run rejection | Non-overlapping starts |
 | TS-18 | UC-05, TA-R2 | Integration | High | 10 jobs race on one item; exactly one child at a time | Spawn count |
 | TS-19 | UC-05, TD-1 | Integration | Med | Semaphore 2, five items trigger; at most two children run | Peak = 2 |
@@ -55,7 +55,7 @@ Fast, deterministic levels carry the weight. Rust unit tests cover the pure logi
 | TS-35 | T-04, SA-R2 | Unit | High | Any agent config; argv built; read-only allowlist, no yolo, empty cwd; unrestrictable CLI refused | Argv assertions |
 | TS-36 | T-05 | Integration | High | Item B triage digest built while item A exists; digest exposes no bodies or comments of A | Prompt content |
 | TS-37 | T-06, SA-R3 | Integration | High | Forged `inbox-origin.json` naming another item; request posted; path cross-check refuses | 4xx; no event |
-| TS-38 | T-07, DA-R4 | Unit | High | Fake secret in comment, request, proposal; scanned; flagged or redacted before model or pane | Redacted text |
+| TS-38 | T-07, DA-R4 | Unit | High | Fake secret in comment, request, proposal; scanned; stored unchanged with a warning badge shown before confirm | Badge flag; stored text |
 | TS-39 | T-07 | Integration | Med | New store writes; files created with mode 0600 | File mode |
 | TS-40 | T-08 | Integration | Med | Full request lifecycle; each event audited metadata-only with actor, no body | Audit lines |
 | TS-41 | T-10 | Integration | Med | Missing bearer, foreign Origin, bad Host on new routes; each rejected | 401/403 |
@@ -77,7 +77,7 @@ Fast, deterministic levels carry the weight. Rust unit tests cover the pure logi
 | TS-57 | UC-07 | E2E | Med | Item with two targets converted; each worktree gets architect-first launch | Two prompts |
 | TS-60 | T-04, TD-6 | Unit | Critical | System-agent spawn built; child env lacks `SEBENZA_CONTROL_TOKEN` and is allowlisted | Env assertions |
 | TS-61 | UC-06c | Integration | High | Open request, no proposal; operator authors and confirms resolution; delivered, resolved | Events; sink text |
-| TS-62 | DA-R4, T-07 | Integration | High | Comment with fake secret; `redacted` tombstone appended; reader masks body in API and UI | Masked body |
+| TS-62 | DA-R4, T-07 | Integration | High | Operator redacts a comment; `redacted` tombstone appended; reader masks the body in API and UI | Masked body |
 | TS-63 | UC-05a | Integration | Med | Flagged request; operator calls retry-triage; job re-runs, proposal produced | Job; proposal event |
 | TS-64 | BR-02, T-08 | Integration | High | Agent then operator priority changes; `priority_changed` events record from, to, source | Events |
 | TS-65 | TD-6 | Integration | Med | `enabled=false`: no jobs spawn; hung stub times out; whole process group killed | No children; pgid gone |
@@ -116,7 +116,7 @@ Fast, deterministic levels carry the weight. Rust unit tests cover the pure logi
 - Synthetic drafts with placeholder projects (`acme-demo`) and fixed ULIDs; no real customer data, PHI, or PII.
 - Secret-scan cases use fabricated tokens (`sk-TEST-0000000000000000`); no real or expired credentials in fixtures.
 - Stub agent CLI script emits stream-json fixtures: valid triage, draft_help, convert; bad JSON; unknown field; non-zero exit; hang; slow.
-- Per-CLI contract fixtures: recorded, scrubbed stream samples for claude, grok, and codex, committed to the repo.
+- Contract fixtures: recorded, scrubbed claude stream samples committed to the repo; grok and codex are rejected for now.
 - Fake pane sink records `send_prompt` calls and simulates missing or mismatched panes.
 - Every store test uses a tempdir inbox root and a per-test control token; nothing touches `~/.ai/sebenza`.
 - E2E binds the daemon to loopback on an ephemeral port; no LLM egress in CI.
