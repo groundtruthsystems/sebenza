@@ -278,7 +278,7 @@
     {
       "id": "phase-5",
       "name": "Draft help and architect-first conversion",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -328,21 +328,22 @@
           "id": "phase-5-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "done"
         }
-      ]
+      ],
+      "checkpoint_sha": "d4f71d4"
     },
     {
       "id": "phase-6",
       "name": "Inbox UI",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-6-task-1",
           "name": "Write tests for Inbox UI components",
           "description": "Write failing vitest tests for priority control and sort, grouped comments, request card, merge view, convert dialog, and warnings.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-6-task-2",
