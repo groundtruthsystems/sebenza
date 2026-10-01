@@ -151,13 +151,14 @@
           "id": "phase-3-task-4",
           "name": "Implement SystemAgentService queue, semaphore and timeout",
           "description": "Add per-item serial queues, a global semaphore, an interactive priority lane, process-group timeout kill, and the kill switch.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "f4591f5"
         },
         {
           "id": "phase-3-task-5",
           "name": "Implement isolated argv, env allowlist and output schemas",
           "description": "Build read-only non-yolo argv with an empty cwd and token-free env, and validate versioned triage, draft_help and convert output.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-6",
