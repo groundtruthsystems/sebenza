@@ -92,13 +92,14 @@
           "id": "phase-2-task-4",
           "name": "Implement rate limits and metadata-only audit",
           "description": "Add body caps, per-caller rate limits, and audit records with the unauthenticated caller marker.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "a5a9db7"
         },
         {
           "id": "phase-2-task-5",
           "name": "Execute test scenarios TS-06, TS-11, TS-12, TS-13, TS-32, TS-37, TS-40, TS-41",
           "description": "Run and pass the phase's test-plan scenarios.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-06",
             "TS-11",
