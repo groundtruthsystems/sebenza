@@ -292,13 +292,14 @@
           "id": "phase-5-task-2",
           "name": "Implement draft-help job",
           "description": "Run draft-help through the item session and return a proposed body applied only via the hash-gated PUT.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "71d18c3"
         },
         {
           "id": "phase-5-task-3",
           "name": "Implement convert instructions and ArchitectFirstPromptBuilder",
           "description": "Generate per-target system instructions and build architect-first or direct prompts, recording both on conversions[].",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-5-task-4",
