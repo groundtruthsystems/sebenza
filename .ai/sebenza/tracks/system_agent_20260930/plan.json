@@ -26,13 +26,14 @@
           "id": "phase-1-task-3",
           "name": "Implement event sidecar and request fold",
           "description": "Add the single-writer append-only events.jsonl, the request state fold, and the server-owned session.json with 0600 files.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "8f07b0a"
         },
         {
           "id": "phase-1-task-4",
           "name": "Implement drop, delete and orphan sweep",
           "description": "Keep sidecars on Drop, delete sidecars before the .md on Delete, and sweep orphans at startup.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-5",
