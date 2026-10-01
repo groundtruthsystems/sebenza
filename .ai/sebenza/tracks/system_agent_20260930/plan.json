@@ -209,13 +209,14 @@
           "id": "phase-4-task-1",
           "name": "Write tests for triage and resolution flow",
           "description": "Write failing tests for triage application, failure and retry, confirm, author, reject, redeliver, sanitising, scanning, and redaction.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "7c6b66d"
         },
         {
           "id": "phase-4-task-2",
           "name": "Implement triage application and advice",
           "description": "Apply triage output to priority, proposals, and advice comments, flagging failed jobs and supporting retry-triage.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-4-task-3",
