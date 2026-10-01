@@ -165,6 +165,13 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         tracing::info!(count = recovered, "inbox: re-queued untriaged requests");
     }
 
+    // Confirmed resolutions reach their origin worktree's agent pane only
+    // through this sink, and only from confirm and redeliver (T-02).
+    inbox.set_pane_sink(Arc::new(services::pane_delivery::TmuxPaneSink::new(
+        manager.clone(),
+        terminal.clone(),
+    )));
+
     let state = AppState {
         manager,
         terminal,

@@ -1254,8 +1254,43 @@ impl InboxService {
         request_id: &str,
         caller: Option<String>,
     ) -> Result<RequestView, InboxServiceError> {
-        let _ = (id, request_id, caller);
-        todo!("phase-4-task-4")
+        let _decide = self.decisions.lock().unwrap_or_else(|e| e.into_inner());
+        let events = self.events(id)?;
+        let view = find_request(&events, request_id)?;
+        if view.status != RequestStatus::DeliveryFailed {
+            return Err(InboxServiceError::WrongState(
+                status_name(view.status),
+                "only a failed delivery can be redelivered",
+            ));
+        }
+        let text = view.confirmed_text.clone().ok_or_else(|| {
+            InboxServiceError::Invalid("the request has no confirmed resolution".to_string())
+        })?;
+        let confirmed = events
+            .iter()
+            .rev()
+            .find(|e| {
+                matches!(&e.kind, InboxEventKind::ResolutionConfirmed { request_id: r, .. } if r == request_id)
+            })
+            .map(|e| e.event_id.clone())
+            .unwrap_or_default();
+        let attempt = view.attempts + 1;
+        let mut record = AuditRecord::new("inbox.resolution.redeliver", id, AuthorKind::Operator)
+            .with_caller(&caller)
+            .with_worktree(&view.worktree);
+        record.request_id = Some(request_id.to_string());
+        record.attempt = Some(attempt);
+        self.audit.record(&record);
+        self.deliver_attempt(
+            id,
+            &view.worktree,
+            request_id,
+            &text,
+            attempt,
+            &caller,
+            &confirmed,
+        )?;
+        self.request(id, request_id)
     }
 
     /// Paste `text` for `attempt` and record the result. Idempotent on

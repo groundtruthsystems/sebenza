@@ -9,11 +9,12 @@
 
 use crate::adapters::terminal::TerminalManager;
 use crate::domain::inbox_events::WorktreeKey;
+use crate::server::{resolve_terminal_target, submit_delay_for_branch};
 use crate::services::project_manager::ProjectManager;
 use common::services::resolution_delivery::PaneSink;
 use std::sync::Arc;
 
-#[allow(unused_imports)]
+#[cfg(doc)]
 use crate::services::inbox_service::InboxService;
 
 /// Pastes into the agent pane of a registered project's worktree.
@@ -30,8 +31,41 @@ impl TmuxPaneSink {
 
 impl PaneSink for TmuxPaneSink {
     fn send(&self, worktree: &WorktreeKey, text: &str) -> Result<(), String> {
-        let _ = (&self.manager, &self.terminal, worktree, text);
-        todo!("phase-4-task-4")
+        let app = self
+            .manager
+            .list()
+            .into_iter()
+            .find(|app| app.path == worktree.project)
+            .ok_or_else(|| format!("no registered project at {}", worktree.project))?;
+        // The main checkout's pane is a login shell: pasting there would run
+        // the text as commands.
+        if app.lifecycle().is_main_branch(&worktree.branch) {
+            return Err(format!(
+                "{} is the main checkout, which has no agent pane",
+                worktree.branch
+            ));
+        }
+        // Resolve first: it reconciles a stale runtime view of the session.
+        let resolved = resolve_terminal_target(&app, &worktree.branch)?;
+        let runtime = app
+            .runtime
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_worktree_by_branch(&worktree.branch)
+            .ok_or_else(|| format!("Worktree not found: {}", worktree.branch))?;
+        if runtime.worktree_id != resolved.worktree_id || runtime.branch != worktree.branch {
+            return Err(format!(
+                "the pane found for {} belongs to another worktree",
+                worktree.branch
+            ));
+        }
+        if runtime.agent_name.is_none() {
+            return Err(format!("{} has no agent pane", worktree.branch));
+        }
+        let delay = submit_delay_for_branch(&app, &worktree.branch);
+        // Pane 0 is the agent's, as for the conversion's initial prompt.
+        self.terminal
+            .send_prompt(&resolved.attach_target, text, 0, None, delay)
     }
 }
 
