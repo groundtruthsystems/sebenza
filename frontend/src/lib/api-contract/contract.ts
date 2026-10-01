@@ -73,6 +73,8 @@ import {
   RetryInboxTriageResponseSchema,
   InboxAgentJobSchema,
   RedactInboxCommentResponseSchema,
+  InboxDraftHelpRequestSchema,
+  InboxDraftHelpResponseSchema,
 } from "./schemas";
 
 const c = initContract();
@@ -142,6 +144,7 @@ export const apiPaths = {
   retryInboxTriage: "/api/inbox/:id/requests/:rid/retry-triage",
   fetchInboxAgentJob: "/api/inbox/:id/agent/jobs/:jobId",
   streamInboxAgent: "/api/inbox/:id/agent/stream",
+  requestInboxDraftHelp: "/api/inbox/:id/agent/draft-help",
   redactInboxComment: "/api/inbox/:id/comments/:eventId/redact",
   fetchRegistry: "/api/registry",
   fetchRegistryFile: "/api/registry/file",
@@ -737,6 +740,16 @@ export const apiContract = c.router(
         403: ErrorResponseSchema,
         404: ErrorResponseSchema,
         500: ErrorResponseSchema,
+      },
+    },
+    requestInboxDraftHelp: {
+      method: "POST",
+      path: apiPaths.requestInboxDraftHelp,
+      body: InboxDraftHelpRequestSchema,
+      responses: {
+        200: InboxDraftHelpResponseSchema,
+        ...inboxDecisionErrors,
+        503: ErrorResponseSchema,
       },
     },
     redactInboxComment: {

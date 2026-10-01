@@ -1,6 +1,6 @@
 //! Inbox subcommands: `ls`, `show`, `new`, `edit`, `link`, `unlink`, `drop`, `rm`,
 //! `convert`, `job`, `priority`, `comment`, `comments`, `requests`, `confirm`,
-//! `reject`, `redeliver`, `retry-triage`, `agent-job`, `redact`.
+//! `reject`, `redeliver`, `retry-triage`, `agent-job`, `redact`, `draft-help`.
 //!
 //! The inbox is global — drafts exist before they belong to any project — so
 //! these talk to the hub routes rather than a project-prefixed base.
@@ -80,6 +80,14 @@ enum InboxCommand {
         id: String,
         event_id: String,
     },
+    /// Ask the system agent for a proposed body. `--watch` waits and prints
+    /// it; `--apply` also saves it, gated on the hash read before asking.
+    DraftHelp {
+        id: String,
+        instruction: Option<String>,
+        watch: bool,
+        apply: bool,
+    },
 }
 
 fn usage() -> String {
@@ -109,6 +117,9 @@ fn usage() -> String {
         "  sebenza-cli inbox retry-triage <id> <request-id>  Re-run triage on a flagged request",
         "  sebenza-cli inbox agent-job <id> <job-id>      Show a system agent job",
         "  sebenza-cli inbox redact <id> <event-id>       Mask a comment, request or proposal",
+        "  sebenza-cli inbox draft-help <id> [--instruction TEXT] [--watch|--apply]",
+        "                                                 Ask the system agent for a proposed body;",
+        "                                                 --apply saves it unless the body changed",
         "",
         "A convert target is project:branch:prompt, for example:",
         "  sebenza-cli inbox convert 01ARZ... ~/code/acme:fix-scorer:'rewrite the scorer'",
@@ -154,7 +165,12 @@ fn positional(args: &[String]) -> Vec<String> {
             skip_next = false;
             continue;
         }
-        if a == "--search" || a == "--base" || a == "--worktree" || a == "--body" {
+        if a == "--search"
+            || a == "--base"
+            || a == "--worktree"
+            || a == "--body"
+            || a == "--instruction"
+        {
             skip_next = true;
             continue;
         }
@@ -262,6 +278,12 @@ fn parse(args: &[String]) -> Result<Option<InboxCommand>> {
         "redact" => Ok(Some(InboxCommand::Redact {
             id: need(0, "draft id")?,
             event_id: need(1, "event id")?,
+        })),
+        "draft-help" => Ok(Some(InboxCommand::DraftHelp {
+            id: need(0, "draft id")?,
+            instruction: opt(args, "--instruction"),
+            watch: flag(args, "--watch") || flag(args, "--apply"),
+            apply: flag(args, "--apply"),
         })),
         other => Err(anyhow!("Unknown inbox command: {other}")),
     }
@@ -550,6 +572,68 @@ async fn edit_draft(http: &Http, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// Poll a system-agent job until it finishes.
+async fn wait_agent_job(http: &Http, id: &str, job_id: &str) -> Result<Value> {
+    loop {
+        let job = http.inbox_agent_job(id, job_id).await?;
+        match job.get("status").and_then(Value::as_str) {
+            Some("succeeded") | Some("failed") => return Ok(job),
+            _ => tokio::time::sleep(std::time::Duration::from_millis(700)).await,
+        }
+    }
+}
+
+/// `draft-help`: queue, optionally wait, optionally apply. The proposal is
+/// applied only through the hash-gated save, with the hash read *before* the
+/// agent was asked, so an edit made meanwhile is a 409, never overwritten.
+async fn draft_help(
+    http: &Http,
+    id: &str,
+    instruction: Option<&str>,
+    watch: bool,
+    apply: bool,
+) -> Result<()> {
+    let shown = http.inbox_get(id).await?;
+    let hash = shown
+        .get("bodyHash")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let started = http.inbox_draft_help(id, instruction).await?;
+    let job_id = started
+        .get("jobId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("server did not return a job id"))?
+        .to_string();
+    println!("job {job_id}");
+    if !watch {
+        println!("Follow it with: sebenza-cli inbox agent-job {id} {job_id}");
+        return Ok(());
+    }
+    let job = wait_agent_job(http, id, &job_id).await?;
+    if job.get("status").and_then(Value::as_str) != Some("succeeded") {
+        let err = job.get("error").and_then(Value::as_str).unwrap_or("");
+        return Err(anyhow!("draft help failed: {err}"));
+    }
+    let output = job.get("output").cloned().unwrap_or(Value::Null);
+    let proposed = output
+        .get("proposed_body")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let summary = output.get("summary").and_then(Value::as_str).unwrap_or("");
+    println!("Summary: {summary}");
+    println!();
+    println!("{proposed}");
+    if apply {
+        http.inbox_save_body(id, &hash, proposed)
+            .await
+            .map_err(|e| anyhow!("not applied: {e} (the body changed; merge it with `sebenza-cli inbox edit {id}`)"))?;
+        println!();
+        println!("Applied to {id}.");
+    }
+    Ok(())
+}
+
 pub async fn run(args: &[String], port: u16) -> i32 {
     let command = match parse(args) {
         Ok(Some(c)) => c,
@@ -724,6 +808,12 @@ pub async fn run(args: &[String], port: u16) -> i32 {
                 http.inbox_redact(&id, &event_id).await?;
                 println!("Redacted {event_id}.");
             }
+            InboxCommand::DraftHelp {
+                id,
+                instruction,
+                watch,
+                apply,
+            } => draft_help(&http, &id, instruction.as_deref(), watch, apply).await?,
             InboxCommand::Rm { id, yes } => {
                 http.inbox_delete(&id, yes).await?;
                 println!("Deleted {id}.");
@@ -1062,6 +1152,35 @@ mod tests {
             Some(InboxCommand::Redact { .. })
         ));
         assert!(parse(&a(&["redact", "D1"])).is_err());
+    }
+
+    #[test]
+    fn draft_help_takes_an_instruction_and_apply_implies_watch() {
+        match parse(&a(&["draft-help", "D1", "--instruction", "make it a spec"]))
+            .unwrap()
+            .unwrap()
+        {
+            InboxCommand::DraftHelp {
+                id,
+                instruction,
+                watch,
+                apply,
+            } => {
+                assert_eq!(id, "D1");
+                assert_eq!(instruction.as_deref(), Some("make it a spec"));
+                assert!(!watch && !apply);
+            }
+            _ => panic!("expected DraftHelp"),
+        }
+        match parse(&a(&["draft-help", "D1", "--apply"]))
+            .unwrap()
+            .unwrap()
+        {
+            InboxCommand::DraftHelp { watch, apply, .. } => assert!(watch && apply),
+            _ => panic!("expected DraftHelp"),
+        }
+        assert!(parse(&a(&["draft-help"])).is_err());
+        assert!(usage().contains("inbox draft-help "));
     }
 
     // TS-32: agentctl has no confirm; the operator CLI's usage names it.

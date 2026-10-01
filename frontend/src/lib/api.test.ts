@@ -536,6 +536,41 @@ describe("inbox priority, comments and requests", () => {
     expect(seen[0].url).toContain(`/api/inbox/${draft.id}/agent/jobs/01JOB`);
   });
 
+  it("requests draft help with the token and never touches the body", async () => {
+    const seen = recordFetch({ jobId: "01JOB" });
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+    const started = await api.requestInboxDraftHelp(draft.id, "make it a spec");
+    expect(started.jobId).toBe("01JOB");
+    expect(seen[0].url).toContain(`/api/inbox/${draft.id}/agent/draft-help`);
+    expect(seen[0].method).toBe("POST");
+    expect(seen[0].auth).toBe("Bearer tok");
+    expect(JSON.parse(seen[0].body)).toEqual({ instruction: "make it a spec" });
+
+    await api.requestInboxDraftHelp(draft.id);
+    expect(JSON.parse(seen[1].body)).toEqual({});
+    expect(seen.some((s) => s.url.endsWith("/body"))).toBe(false);
+  });
+
+  it("surfaces a disabled system agent as the server's message", async () => {
+    recordFetch({ error: "the system agent is disabled" }, 503);
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+    await expect(api.requestInboxDraftHelp(draft.id)).rejects.toThrow(
+      /disabled/,
+    );
+  });
+
+  it("parses a draft-help job's output", async () => {
+    const { InboxDraftHelpOutputSchema } = await import("./api-contract");
+    const out = InboxDraftHelpOutputSchema.parse({
+      jobKind: "draft_help",
+      proposed_body: "# Goal",
+      summary: "Added a goal.",
+    });
+    expect(out.proposed_body).toBe("# Goal");
+  });
+
   it("redacts a comment", async () => {
     const seen = recordFetch({ eventId: "01TOMB", targetEventId: "01EV" });
     window.__SEBENZA_CONTROL_TOKEN__ = "tok";

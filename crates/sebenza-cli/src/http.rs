@@ -777,6 +777,16 @@ impl Http {
             .await
     }
 
+    /// `POST /api/inbox/{id}/agent/draft-help` — returns the job id.
+    pub async fn inbox_draft_help(&self, id: &str, instruction: Option<&str>) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/agent/draft-help", self.hub);
+        let body = match instruction {
+            Some(i) => serde_json::json!({ "instruction": i }),
+            None => serde_json::json!({}),
+        };
+        self.inbox_decision(url, body).await
+    }
+
     /// `GET /api/inbox/jobs/{id}` — the CLI polls rather than holding a socket.
     pub async fn inbox_job(&self, job_id: &str) -> Result<Value> {
         self.get(&format!("{}/api/inbox/jobs/{job_id}", self.hub))

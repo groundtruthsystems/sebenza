@@ -1149,6 +1149,28 @@ export const InboxJobEventSchema = z.object({
   job: InboxAgentJobSchema,
 });
 
+/** `POST /api/inbox/:id/agent/draft-help`. `instruction` optionally steers
+ *  the proposal. */
+export const InboxDraftHelpRequestSchema = z.object({
+  instruction: z.string().optional(),
+});
+
+/** The queued job. Its result arrives on the job (GET or the `inbox.job`
+ *  stream) as {@link InboxDraftHelpOutputSchema}; it is never written to the
+ *  draft. Applying it is the hash-gated `PUT …/body`, a 409 when stale. */
+export const InboxDraftHelpResponseSchema = z.object({
+  jobId: z.string(),
+});
+
+/** A succeeded draft-help job's `output`. */
+export const InboxDraftHelpOutputSchema = z.object({
+  jobKind: z.literal("draft_help"),
+  proposed_body: z.string(),
+  summary: z.string(),
+});
+
+export type InboxDraftHelpOutput = z.infer<typeof InboxDraftHelpOutputSchema>;
+
 export const RedactInboxCommentResponseSchema = z.object({
   eventId: z.string(),
   targetEventId: z.string(),

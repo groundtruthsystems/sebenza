@@ -949,8 +949,39 @@ pub async fn draft_help(
     headers: HeaderMap,
     Json(body): Json<DraftHelpBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let _ = (state, id, headers, body);
-    todo!("phase-5-task-2")
+    use crate::services::system_agent::JobInput;
+    use crate::services::system_agent::output::MAX_NOTE_BYTES;
+    check(&headers, "POST")?;
+    let instruction = body
+        .instruction
+        .map(|i| i.trim().to_string())
+        .filter(|i| !i.is_empty());
+    if instruction
+        .as_ref()
+        .is_some_and(|i| i.len() > MAX_NOTE_BYTES)
+    {
+        return Err(ApiError::new(
+            400,
+            format!("instruction exceeds {MAX_NOTE_BYTES} bytes"),
+        ));
+    }
+    // An unknown draft is a 404 here rather than the queue's 400.
+    inbox(&state).get(&id)?;
+    let agent = state.system_agent.clone();
+    let draft_id = id.clone();
+    let job_id = tokio::task::spawn_blocking(move || {
+        agent.enqueue(&draft_id, JobInput::DraftHelp { instruction })
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
+    tracing::info!(
+        audit = "inbox.agent.draft_help",
+        draft_id = %id,
+        job_id = %job_id,
+        caller = caller_marker(&headers).as_deref().unwrap_or(""),
+        "draft help requested"
+    );
+    Ok(Json(serde_json::json!({ "jobId": job_id })))
 }
 
 /// One target the dialog wants an instruction for.

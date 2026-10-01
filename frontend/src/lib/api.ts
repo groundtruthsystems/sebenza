@@ -687,6 +687,19 @@ export async function fetchInboxAgentJob(id: string, jobId: string) {
   return hubApi.fetchInboxAgentJob({ params: { id, jobId } });
 }
 
+/** Ask the system agent for a proposed body. Returns the job id; the
+ *  proposal arrives on the job (`fetchInboxAgentJob` or the agent stream) and
+ *  is never written to the draft. Apply it with `saveInboxDraftBody` and the
+ *  hash the editor holds: a 409 means the body changed and needs a merge.
+ *  A 503 means the system agent is disabled. */
+export async function requestInboxDraftHelp(id: string, instruction?: string) {
+  return hubApi.requestInboxDraftHelp({
+    params: { id },
+    body: instruction ? { instruction } : {},
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
 /** Tombstone a comment, request, proposal or advice body; reads mask it. */
 export async function redactInboxComment(id: string, eventId: string) {
   return hubApi.redactInboxComment({
