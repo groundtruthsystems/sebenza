@@ -395,8 +395,8 @@
     {
       "id": "phase-7",
       "name": "Final verification",
-      "status": "blocked",
-      "blocked_reason": "Awaiting operator manual verification: TS-58 (live pane paste) and TS-59 (job metrics), plus final sign-off",
+      "status": "done",
+      "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-7-task-1",
@@ -415,21 +415,20 @@
         {
           "id": "phase-7-task-3",
           "name": "Execute end-to-end and manual scenarios",
-          "description": "Run the e2e scenarios and sign off the manual live-pane and metrics checks.",
-          "status": "blocked",
+          "description": "Run the e2e scenarios and sign off the manual live-pane and metrics checks; TS-56/TS-57 automated pass, TS-58/TS-59 accepted by operator during manual testing without a recorded live run.",
+          "status": "done",
           "test_scenarios": [
             "TS-56",
             "TS-57",
             "TS-58",
             "TS-59"
-          ],
-          "blocked_reason": "Awaiting operator manual verification: TS-58 (live pane paste) and TS-59 (job metrics), plus final sign-off"
+          ]
         },
         {
           "id": "phase-7-task-4",
           "name": "Re-run full test plan",
           "description": "Re-run every scenario against the finished feature, confirm coverage above 80%, and close any traceability gap.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-01",
             "TS-02",
@@ -504,9 +503,10 @@
           "id": "phase-7-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "done"
         }
-      ]
+      ],
+      "checkpoint_sha": "e23ce3a"
     }
   ]
 }
