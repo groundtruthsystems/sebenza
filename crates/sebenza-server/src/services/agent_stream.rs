@@ -92,6 +92,8 @@ struct RunState {
     tx: broadcast::Sender<StreamEvent>,
     live: Mutex<IndexMap<String, DraftMessage>>,
     interrupt: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    /// What awaiting callers get back; chat ignores it.
+    outcome: Mutex<RunOutcome>,
 }
 
 pub struct StartRunInput {
@@ -103,6 +105,52 @@ pub struct StartRunInput {
     pub permission_mode: Option<String>,
     pub resume_session_id: Option<String>,
     pub system_prompt: Option<String>,
+    /// The agent binary; `None` runs the provider's CLI from `PATH`.
+    pub binary: Option<String>,
+    /// Passed as `--model`; `None` keeps the CLI default (in-app chat).
+    pub model: Option<String>,
+    /// Tool restrictions; `None` leaves the CLI's own defaults (in-app chat).
+    pub tools: Option<ToolPolicy>,
+    /// Start the child with only `env` (no inherited environment) in its own
+    /// process group, so a timeout can kill everything it spawned.
+    pub isolated: bool,
+    /// Wall-clock limit; past it the child (and, when isolated, its whole
+    /// process group) is killed and the outcome is marked timed out.
+    pub timeout: Option<std::time::Duration>,
+}
+
+/// Which tools a headless run may use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolPolicy {
+    pub allowed: Vec<String>,
+    pub disallowed: Vec<String>,
+    /// Ignore every MCP server from user or project settings.
+    pub strict_mcp: bool,
+}
+
+/// How a run ended, for callers that await it rather than stream it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunOutcome {
+    pub turn_id: String,
+    /// The CLI's session id, from any line that carried one.
+    pub session_id: Option<String>,
+    /// The final assistant message (the `result` line's text).
+    pub final_message: Option<String>,
+    /// A spawn failure or an error the stream reported.
+    pub error: Option<String>,
+    /// `None` when the child was killed or never started.
+    pub exit_code: Option<i32>,
+    pub timed_out: bool,
+}
+
+impl RunOutcome {
+    /// Exited zero, in time, without a stream error, with a final message.
+    pub fn succeeded(&self) -> bool {
+        !self.timed_out
+            && self.error.is_none()
+            && self.exit_code == Some(0)
+            && self.final_message.is_some()
+    }
 }
 
 /// What a subscriber receives on connect: a replay of the active run's current
@@ -134,9 +182,24 @@ impl AgentStreamManager {
     /// Start a streaming turn for `input.provider`. Returns the new turn id, or an error if
     /// a turn is already running for this conversation.
     pub fn start_run(&self, input: StartRunInput) -> Result<String, String> {
-        if self.has_active_run(&input.conversation_id) {
-            return Err("The agent is already responding in this conversation".to_string());
-        }
+        self.start(input).map(|(turn_id, _done)| turn_id)
+    }
+
+    /// Start a turn and wait for it to end. Same rules as [`Self::start_run`],
+    /// but resolves to the run's final message, session id and exit status.
+    pub async fn run_to_completion(&self, input: StartRunInput) -> Result<RunOutcome, String> {
+        let (turn_id, done) = self.start(input)?;
+        Ok(done.await.unwrap_or_else(|_| RunOutcome {
+            turn_id,
+            error: Some("the run ended without reporting an outcome".to_string()),
+            ..RunOutcome::default()
+        }))
+    }
+
+    fn start(
+        &self,
+        input: StartRunInput,
+    ) -> Result<(String, tokio::sync::oneshot::Receiver<RunOutcome>), String> {
         let prefix = input.provider.id_prefix();
         let turn_id = format!("{prefix}-turn:{}", random_uuid());
         let (tx, _rx) = broadcast::channel::<StreamEvent>(1024);
@@ -146,11 +209,24 @@ impl AgentStreamManager {
             tx,
             live: Mutex::new(IndexMap::new()),
             interrupt: Mutex::new(None),
+            outcome: Mutex::new(RunOutcome {
+                turn_id: turn_id.clone(),
+                ..RunOutcome::default()
+            }),
         });
-        self.runs
-            .lock()
-            .unwrap()
-            .insert(input.conversation_id.clone(), run.clone());
+        {
+            // Check and insert under one lock, so two racing starts cannot
+            // both see the conversation idle (TA-R2).
+            let mut runs = self.runs.lock().unwrap();
+            if runs
+                .get(&input.conversation_id)
+                .is_some_and(|r| !r.completed.load(Ordering::Relaxed))
+            {
+                return Err("The agent is already responding in this conversation".to_string());
+            }
+            runs.insert(input.conversation_id.clone(), run.clone());
+        }
+        let (done_tx, done_rx) = tokio::sync::oneshot::channel();
 
         // Optimistic user message + running status, before the process starts.
         let user_msg = DraftMessage {
@@ -177,9 +253,10 @@ impl AgentStreamManager {
                 StreamProvider::Codex => run_codex(input, run.clone()).await,
             }
             finish_run(&run, "completed");
+            let _ = done_tx.send(run.outcome.lock().unwrap().clone());
         });
 
-        Ok(turn_id)
+        Ok((turn_id, done_rx))
     }
 
     /// Interrupt the active run, returning its turn id.
@@ -284,7 +361,8 @@ async fn run_messages_stream_agent(
     input: StartRunInput,
     run: Arc<RunState>,
 ) {
-    let mut command = tokio::process::Command::new(binary);
+    let binary = input.binary.clone().unwrap_or_else(|| binary.to_string());
+    let mut command = tokio::process::Command::new(&binary);
     command
         .args(&args)
         .current_dir(&input.cwd)
@@ -294,7 +372,17 @@ async fn run_messages_stream_agent(
             Stdio::null()
         })
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        // Nothing reads stderr; a piped one could fill and wedge the child.
+        .stderr(if input.isolated {
+            Stdio::null()
+        } else {
+            Stdio::piped()
+        });
+    if input.isolated {
+        // Only what the caller allowlisted, and a group of its own so a
+        // timeout reaches everything the agent started.
+        command.env_clear().process_group(0).kill_on_drop(true);
+    }
     for (k, v) in &input.env {
         command.env(k, v);
     }
@@ -302,12 +390,14 @@ async fn run_messages_stream_agent(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(e) => {
-            let _ = run.tx.send(StreamEvent::Error {
-                message: format!("failed to spawn {binary}: {e}"),
-            });
+            let message = format!("failed to spawn {binary}: {e}");
+            run.outcome.lock().unwrap().error = Some(message.clone());
+            let _ = run.tx.send(StreamEvent::Error { message });
             return;
         }
     };
+    let group = if input.isolated { child.id() } else { None };
+    let deadline = input.timeout.map(|t| tokio::time::Instant::now() + t);
 
     // Feed the prompt on stdin, then close it.
     if stdin_prompt && let Some(mut stdin) = child.stdin.take() {
@@ -316,8 +406,15 @@ async fn run_messages_stream_agent(
         } else {
             format!("{}\n", input.prompt)
         };
-        let _ = stdin.write_all(prompt.as_bytes()).await;
-        drop(stdin);
+        if deadline.is_some() {
+            // A child that never reads stdin must not stall us past the deadline.
+            tokio::spawn(async move {
+                let _ = stdin.write_all(prompt.as_bytes()).await;
+            });
+        } else {
+            let _ = stdin.write_all(prompt.as_bytes()).await;
+            drop(stdin);
+        }
     }
 
     let stdout = child.stdout.take();
@@ -327,12 +424,17 @@ async fn run_messages_stream_agent(
     let mut message_id: Option<String> = None;
     let mut block_index: i64 = 0;
 
+    let mut timed_out = false;
     if let Some(stdout) = stdout {
         let mut lines = BufReader::new(stdout).lines();
         loop {
             tokio::select! {
                 _ = &mut int_rx => {
                     let _ = child.start_kill();
+                    break;
+                }
+                _ = sleep_until_deadline(deadline) => {
+                    timed_out = true;
                     break;
                 }
                 line = lines.next_line() => {
@@ -348,11 +450,54 @@ async fn run_messages_stream_agent(
             }
         }
     }
-    let _ = child.wait().await;
+    // The stream can close while the child (or something it started) lives
+    // on, so the deadline also bounds the wait.
+    let status = if timed_out {
+        None
+    } else {
+        tokio::select! {
+            status = child.wait() => status.ok(),
+            _ = sleep_until_deadline(deadline) => {
+                timed_out = true;
+                None
+            }
+        }
+    };
+    if timed_out {
+        kill_group(group);
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+    let mut outcome = run.outcome.lock().unwrap();
+    outcome.timed_out = timed_out;
+    outcome.exit_code = status.and_then(|s| s.code());
 }
 
-/// Spawn `claude` and pump its stream-json output into the run's broadcast.
-async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
+/// Resolves at `deadline`, or never when there is none.
+async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
+/// SIGKILL the process group led by `pgid`. Uses `kill(1)` rather than a libc
+/// binding, which the workspace does not otherwise need.
+fn kill_group(pgid: Option<u32>) {
+    let Some(pgid) = pgid else {
+        return;
+    };
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pgid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// The `claude` argv for `input`. In-app chat sets none of `model` and
+/// `tools`, so its argv is exactly what it always was (TS-52).
+pub fn claude_args(input: &StartRunInput) -> Vec<String> {
     let mut args: Vec<String> = vec![
         "-p".into(),
         "--verbose".into(),
@@ -372,6 +517,31 @@ async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
         args.push("--append-system-prompt".into());
         args.push(sys.clone());
     }
+    if let Some(model) = &input.model {
+        args.push("--model".into());
+        args.push(model.clone());
+    }
+    if let Some(tools) = &input.tools {
+        if tools.strict_mcp {
+            args.push("--strict-mcp-config".into());
+        }
+        // One comma-joined value each: the flags are variadic, so a separate
+        // value per tool would swallow whatever argument came next.
+        if !tools.allowed.is_empty() {
+            args.push("--allowedTools".into());
+            args.push(tools.allowed.join(","));
+        }
+        if !tools.disallowed.is_empty() {
+            args.push("--disallowedTools".into());
+            args.push(tools.disallowed.join(","));
+        }
+    }
+    args
+}
+
+/// Spawn `claude` and pump its stream-json output into the run's broadcast.
+async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
+    let args = claude_args(&input);
     run_messages_stream_agent("claude", args, true, input, run).await;
 }
 
@@ -426,6 +596,18 @@ fn handle_stream_line(
     let Some(parsed) = parse_claude_stream_line(line) else {
         return;
     };
+    {
+        let mut outcome = run.outcome.lock().unwrap();
+        if let Some(sid) = &parsed.session_id {
+            outcome.session_id = Some(sid.clone());
+        }
+        if let Some(text) = &parsed.result_text {
+            outcome.final_message = Some(text.clone());
+        }
+        if let Some(err) = &parsed.error {
+            outcome.error = Some(err.clone());
+        }
+    }
 
     if let Some(mid) = parsed.message_start {
         *message_id = Some(mid);
@@ -650,5 +832,220 @@ mod stream_provider_tests {
                 BuiltinAgentId::Opencode => assert!(provider.is_none()),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod run_outcome_tests {
+    use super::*;
+    use std::time::Duration;
+
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// A fresh directory holding an executable `agent.sh` with `body`.
+    fn stub(body: &str) -> (std::path::PathBuf, String) {
+        use std::os::unix::fs::PermissionsExt;
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("sebenza-agent-stream-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("agent.sh");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        (dir, path.to_string_lossy().to_string())
+    }
+
+    fn input(binary: Option<String>, cwd: &std::path::Path) -> StartRunInput {
+        StartRunInput {
+            provider: StreamProvider::Claude,
+            conversation_id: format!("test:{}", random_uuid()),
+            cwd: cwd.to_string_lossy().to_string(),
+            prompt: "ping".into(),
+            env: HashMap::new(),
+            permission_mode: None,
+            resume_session_id: None,
+            system_prompt: None,
+            binary,
+            model: None,
+            tools: None,
+            isolated: false,
+            timeout: None,
+        }
+    }
+
+    fn fixture_path() -> String {
+        format!(
+            "{}/../common/src/adapters/testdata/claude_stream.jsonl",
+            env!("CARGO_MANIFEST_DIR")
+        )
+    }
+
+    // TS-52: in-app chat sets no model and no tool policy, and its argv is
+    // byte-for-byte what `run_claude` built before the system agent existed.
+    #[test]
+    fn chat_argv_is_unchanged() {
+        let mut chat = input(None, std::path::Path::new("/tmp"));
+        chat.resume_session_id = Some("sid".into());
+        chat.permission_mode = Some("bypassPermissions".into());
+        chat.system_prompt = Some("sys".into());
+        assert_eq!(
+            claude_args(&chat),
+            [
+                "-p",
+                "--verbose",
+                "--output-format",
+                "stream-json",
+                "--include-partial-messages",
+                "-r",
+                "sid",
+                "--permission-mode",
+                "bypassPermissions",
+                "--append-system-prompt",
+                "sys",
+            ]
+        );
+        let fresh = input(None, std::path::Path::new("/tmp"));
+        assert_eq!(
+            claude_args(&fresh),
+            [
+                "-p",
+                "--verbose",
+                "--output-format",
+                "stream-json",
+                "--include-partial-messages",
+            ]
+        );
+    }
+
+    #[test]
+    fn model_and_tool_policy_extend_the_argv() {
+        let mut run = input(None, std::path::Path::new("/tmp"));
+        run.model = Some("claude-sonnet-4-5".into());
+        run.tools = Some(ToolPolicy {
+            allowed: vec!["Read".into(), "Grep".into()],
+            disallowed: vec!["Bash".into(), "Write".into()],
+            strict_mcp: true,
+        });
+        let args = claude_args(&run);
+        let after = |flag: &str| {
+            let i = args.iter().position(|a| a == flag).expect(flag);
+            args[i + 1].clone()
+        };
+        assert_eq!(after("--model"), "claude-sonnet-4-5");
+        assert_eq!(after("--allowedTools"), "Read,Grep");
+        assert_eq!(after("--disallowedTools"), "Bash,Write");
+        assert!(args.iter().any(|a| a == "--strict-mcp-config"));
+    }
+
+    // TS-16: the recorded claude stream yields its final message and session id.
+    #[tokio::test]
+    async fn run_to_completion_returns_the_final_message_and_session_id() {
+        let (dir, bin) = stub(&format!("cat >/dev/null\ncat '{}'", fixture_path()));
+        let outcome = AgentStreamManager::new()
+            .run_to_completion(input(Some(bin), &dir))
+            .await
+            .expect("started");
+        assert_eq!(outcome.final_message.as_deref(), Some("pong"));
+        assert_eq!(
+            outcome.session_id.as_deref(),
+            Some("8fd04c17-2ee0-4a02-9867-118288169ac2")
+        );
+        assert_eq!(outcome.exit_code, Some(0));
+        assert!(!outcome.timed_out);
+        assert!(outcome.succeeded());
+    }
+
+    #[tokio::test]
+    async fn a_non_zero_exit_is_not_a_success() {
+        let (dir, bin) = stub(&format!("cat >/dev/null\ncat '{}'\nexit 3", fixture_path()));
+        let outcome = AgentStreamManager::new()
+            .run_to_completion(input(Some(bin), &dir))
+            .await
+            .unwrap();
+        assert_eq!(outcome.exit_code, Some(3));
+        assert!(!outcome.succeeded());
+    }
+
+    #[tokio::test]
+    async fn a_missing_binary_is_reported_not_panicked() {
+        let dir = std::env::temp_dir();
+        let outcome = AgentStreamManager::new()
+            .run_to_completion(input(Some("/nonexistent/agent".into()), &dir))
+            .await
+            .unwrap();
+        assert!(outcome.error.is_some());
+        assert!(!outcome.succeeded());
+    }
+
+    // TS-21 / TS-65: a hung child is killed at the deadline, and so is every
+    // process it started (the whole process group).
+    #[tokio::test]
+    async fn timeout_kills_the_whole_process_group() {
+        let (dir, bin) =
+            stub("cat >/dev/null\nsleep 300 &\necho $! > \"$(dirname \"$0\")/grandchild\"\nwait");
+        let mut run = input(Some(bin), &dir);
+        run.isolated = true;
+        run.env
+            .insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+        run.timeout = Some(Duration::from_millis(800));
+        let started = std::time::Instant::now();
+        let outcome = AgentStreamManager::new()
+            .run_to_completion(run)
+            .await
+            .unwrap();
+        assert!(outcome.timed_out);
+        assert!(!outcome.succeeded());
+        assert!(started.elapsed() < Duration::from_secs(10));
+        let pid = std::fs::read_to_string(dir.join("grandchild"))
+            .unwrap()
+            .trim()
+            .to_string();
+        assert!(process_gone(&pid), "grandchild {pid} survived the timeout");
+    }
+
+    /// True once `pid` no longer exists (or is only a zombie awaiting reaping).
+    fn process_gone(pid: &str) -> bool {
+        for _ in 0..50 {
+            match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Err(_) => return true,
+                Ok(stat) if stat.contains(") Z") => return true,
+                Ok(_) => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
+        false
+    }
+
+    #[tokio::test]
+    async fn an_isolated_child_sees_only_the_env_it_is_given() {
+        let (dir, bin) = stub(&format!(
+            "cat >/dev/null\nenv > \"$(dirname \"$0\")/env\"\ncat '{}'",
+            fixture_path()
+        ));
+        let mut run = input(Some(bin), &dir);
+        run.isolated = true;
+        run.env.insert("ONLY_ME".into(), "1".into());
+        run.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        AgentStreamManager::new()
+            .run_to_completion(run)
+            .await
+            .unwrap();
+        let env = std::fs::read_to_string(dir.join("env")).unwrap();
+        let keys: Vec<&str> = env.lines().filter_map(|l| l.split('=').next()).collect();
+        assert!(keys.contains(&"ONLY_ME"), "{env}");
+        assert!(!keys.contains(&"HOME"), "{env}");
+        assert!(!keys.contains(&"CARGO_MANIFEST_DIR"), "{env}");
+    }
+
+    // TS-52: one turn at a time per conversation is still enforced.
+    #[tokio::test]
+    async fn a_second_turn_in_the_same_conversation_is_still_rejected() {
+        let (dir, bin) = stub("cat >/dev/null\nsleep 2");
+        let manager = AgentStreamManager::new();
+        let first = input(Some(bin.clone()), &dir);
+        let mut second = input(Some(bin), &dir);
+        second.conversation_id = first.conversation_id.clone();
+        manager.start_run(first).expect("first turn starts");
+        assert!(manager.start_run(second).is_err());
     }
 }

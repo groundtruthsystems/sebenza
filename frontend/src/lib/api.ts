@@ -1,4 +1,10 @@
-import { AgentsUiConversationEventSchema, apiPaths, createApi } from "./api-contract";
+import {
+  AgentsUiConversationEventSchema,
+  InboxJobEventSchema,
+  apiPaths,
+  createApi,
+} from "./api-contract";
+import type { InboxAgentJob } from "./api-contract";
 import type {
   ActiveProjectWorktrees,
   AgentDetails,
@@ -27,7 +33,8 @@ import type {
 /** The active project's URL prefix, taken from the first path segment (the
  *  server serves each project under `/<prefix>/...` on the shared port). Empty
  *  when at the root before the bootstrap redirect picks a project. */
-export const activePrefix: string = window.location.pathname.split("/")[1] ?? "";
+export const activePrefix: string =
+  window.location.pathname.split("/")[1] ?? "";
 
 /** Base path for the active project's API + WebSocket calls. */
 export const apiBase: string = activePrefix ? `/${activePrefix}` : "";
@@ -98,8 +105,12 @@ export async function createWorktreeTab(branch: string): Promise<WorktreeTab> {
   return response.tab;
 }
 
-export async function createWorktreeShellTab(branch: string): Promise<WorktreeTab> {
-  const response = await api.createWorktreeShellTab({ params: { name: branch } });
+export async function createWorktreeShellTab(
+  branch: string,
+): Promise<WorktreeTab> {
+  const response = await api.createWorktreeShellTab({
+    params: { name: branch },
+  });
   return response.tab;
 }
 
@@ -115,12 +126,22 @@ export async function createWorktreeAgentTab(
   return response.tab;
 }
 
-export function selectWorktreeTab(branch: string, tabId: string): Promise<void> {
-  return api.selectWorktreeTab({ params: { name: branch, tabId } }).then(() => undefined);
+export function selectWorktreeTab(
+  branch: string,
+  tabId: string,
+): Promise<void> {
+  return api
+    .selectWorktreeTab({ params: { name: branch, tabId } })
+    .then(() => undefined);
 }
 
-export function deleteWorktreeTab(branch: string, tabId: string): Promise<void> {
-  return api.deleteWorktreeTab({ params: { name: branch, tabId } }).then(() => undefined);
+export function deleteWorktreeTab(
+  branch: string,
+  tabId: string,
+): Promise<void> {
+  return api
+    .deleteWorktreeTab({ params: { name: branch, tabId } })
+    .then(() => undefined);
 }
 
 export async function fetchWorktrees(): Promise<WorktreeInfo[]> {
@@ -134,7 +155,9 @@ export async function fetchWorktrees(): Promise<WorktreeInfo[]> {
  *  active project. Returns the raw snapshots — the caller runs the same
  *  `deriveTickerItems` used for the single-project ticker, so eligibility stays defined
  *  in one place. */
-export async function fetchActiveWorktrees(): Promise<ActiveProjectWorktrees[]> {
+export async function fetchActiveWorktrees(): Promise<
+  ActiveProjectWorktrees[]
+> {
   const response = await hubApi.fetchActiveWorktrees();
   return response.projects.map((project) => ({
     prefix: project.prefix,
@@ -143,7 +166,10 @@ export async function fetchActiveWorktrees(): Promise<ActiveProjectWorktrees[]> 
   }));
 }
 
-export async function setWorktreeLabel(branch: string, label: string | null): Promise<string | null> {
+export async function setWorktreeLabel(
+  branch: string,
+  label: string | null,
+): Promise<string | null> {
   const response = await api.setWorktreeLabel({
     params: { name: branch },
     body: { label },
@@ -151,13 +177,17 @@ export async function setWorktreeLabel(branch: string, label: string | null): Pr
   return response.label;
 }
 
-export function attachWorktreeConversation(branch: string): Promise<AgentsUiWorktreeConversationResponse> {
+export function attachWorktreeConversation(
+  branch: string,
+): Promise<AgentsUiWorktreeConversationResponse> {
   return api.attachAgentsWorktreeConversation({
     params: { name: branch },
   });
 }
 
-export function fetchWorktreeConversationHistory(branch: string): Promise<AgentsUiWorktreeConversationResponse> {
+export function fetchWorktreeConversationHistory(
+  branch: string,
+): Promise<AgentsUiWorktreeConversationResponse> {
   return api.fetchAgentsWorktreeConversationHistory({
     params: { name: branch },
   });
@@ -171,7 +201,10 @@ export function fetchTracks(branch: string): Promise<Tracks | null> {
 
 /** A single file under a worktree's `.ai/sebenza` dir
  *  (plan.json / spec.md / design.md / test-plan.md). */
-export function fetchTrackFile(branch: string, path: string): Promise<TrackFileResponse> {
+export function fetchTrackFile(
+  branch: string,
+  path: string,
+): Promise<TrackFileResponse> {
   return api.fetchTrackFile({ params: { name: branch }, query: { path } });
 }
 
@@ -183,7 +216,10 @@ export function fetchRegistry(): Promise<Portfolio> {
 
 /** A track file belonging to a *registered* project, addressed by its absolute
  *  registry `path` rather than by worktree. */
-export function fetchRegistryFile(project: string, path: string): Promise<TrackFileResponse> {
+export function fetchRegistryFile(
+  project: string,
+  path: string,
+): Promise<TrackFileResponse> {
   return hubApi.fetchRegistryFile({ query: { project, path } });
 }
 
@@ -197,23 +233,32 @@ export function sendWorktreeConversationMessage(
   });
 }
 
-export function interruptWorktreeConversation(branch: string): Promise<AgentsUiInterruptResponse> {
+export function interruptWorktreeConversation(
+  branch: string,
+): Promise<AgentsUiInterruptResponse> {
   return api.interruptAgentsWorktreeConversation({
     params: { name: branch },
   });
 }
 
 export function refreshWorktreeAgentTerminal(branch: string): Promise<void> {
-  return api.refreshWorktreeAgentTerminal({
-    params: { name: branch },
-  }).then(() => undefined);
+  return api
+    .refreshWorktreeAgentTerminal({
+      params: { name: branch },
+    })
+    .then(() => undefined);
 }
 
-export function launchWorktree(branch: string, launcherId: string): Promise<void> {
-  return api.launchWorktree({
-    params: { name: branch },
-    body: { launcherId },
-  }).then(() => undefined);
+export function launchWorktree(
+  branch: string,
+  launcherId: string,
+): Promise<void> {
+  return api
+    .launchWorktree({
+      params: { name: branch },
+      body: { launcherId },
+    })
+    .then(() => undefined);
 }
 
 function withWorktreeName(path: string, branch: string): string {
@@ -229,16 +274,19 @@ export function connectWorktreeConversationStream(
   },
 ): () => void {
   const socket = new WebSocket(
-    `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${apiBase}${
-      withWorktreeName(apiPaths.streamAgentsWorktreeConversation, branch)
-    }`,
+    `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${apiBase}${withWorktreeName(
+      apiPaths.streamAgentsWorktreeConversation,
+      branch,
+    )}`,
   );
   let closedByClient = false;
 
   socket.addEventListener("message", (event) => {
     if (typeof event.data !== "string") return;
     try {
-      callbacks.onEvent(AgentsUiConversationEventSchema.parse(JSON.parse(event.data)));
+      callbacks.onEvent(
+        AgentsUiConversationEventSchema.parse(JSON.parse(event.data)),
+      );
     } catch {
       callbacks.onError("Received malformed conversation stream data");
     }
@@ -264,11 +312,16 @@ export function fetchAgents(): Promise<AgentDetails[]> {
   return api.fetchAgents().then((response) => response.agents);
 }
 
-export function createAgent(body: UpsertCustomAgentRequest): Promise<AgentResponse> {
+export function createAgent(
+  body: UpsertCustomAgentRequest,
+): Promise<AgentResponse> {
   return api.createAgent({ body });
 }
 
-export function updateAgent(id: string, body: UpsertCustomAgentRequest): Promise<AgentResponse> {
+export function updateAgent(
+  id: string,
+  body: UpsertCustomAgentRequest,
+): Promise<AgentResponse> {
   return api.updateAgent({ params: { id }, body });
 }
 
@@ -276,7 +329,9 @@ export function deleteAgent(id: string): Promise<void> {
   return api.deleteAgent({ params: { id } }).then(() => undefined);
 }
 
-export function validateAgent(body: UpsertCustomAgentRequest): Promise<ValidateCustomAgentResponse> {
+export function validateAgent(
+  body: UpsertCustomAgentRequest,
+): Promise<ValidateCustomAgentResponse> {
   return api.validateAgent({ body });
 }
 
@@ -308,7 +363,10 @@ export async function setUpProject(
 ): Promise<{ prefix: string }> {
   const res = await hubApi.addProject({ body: { path } });
   if (!res.initializing) {
-    if (!res.project) throw new Error("Server accepted the project but returned nothing to open.");
+    if (!res.project)
+      throw new Error(
+        "Server accepted the project but returned nothing to open.",
+      );
     return { prefix: res.project.prefix };
   }
 
@@ -317,15 +375,20 @@ export async function setUpProject(
   while (Date.now() < deadline) {
     // A transient poll failure shouldn't fail the flow — the backend job keeps
     // running, so swallow it and retry until the deadline.
-    const inits = await hubApi.projectInits().then((r) => r.inits).catch((): ProjectInitState[] => []);
+    const inits = await hubApi
+      .projectInits()
+      .then((r) => r.inits)
+      .catch((): ProjectInitState[] => []);
     const state = inits.find((entry) => entry.path === res.path);
     if (state) {
       if (state.phase !== lastPhase) {
         lastPhase = state.phase;
         onPhase?.(state.phase);
       }
-      if (state.phase === "ready" && state.prefix) return { prefix: state.prefix };
-      if (state.phase === "failed") throw new Error(state.error ?? "Project setup failed.");
+      if (state.phase === "ready" && state.prefix)
+        return { prefix: state.prefix };
+      if (state.phase === "failed")
+        throw new Error(state.error ?? "Project setup failed.");
     }
     await delay(SETUP_POLL_INTERVAL_MS);
   }
@@ -337,11 +400,7 @@ export async function removeProject(prefix: string): Promise<void> {
 }
 
 export type ProjectBootstrap =
-  | "ready"
-  | "redirecting"
-  | "no-projects"
-  | "registry"
-  | "inbox";
+  "ready" | "redirecting" | "no-projects" | "registry" | "inbox";
 
 /** Decide what to mount before the app loads, based on the URL prefix and the
  *  known projects:
@@ -360,7 +419,8 @@ export async function ensureProjectPrefix(): Promise<ProjectBootstrap> {
   if (activePrefix === "registry") return "registry";
   if (activePrefix === "inbox") return "inbox";
   const projects = await fetchProjects().catch((): ProjectSummary[] => []);
-  if (projects.some((project) => project.prefix === activePrefix)) return "ready";
+  if (projects.some((project) => project.prefix === activePrefix))
+    return "ready";
   const target = projects[0]?.prefix;
   if (!target) return "no-projects";
   window.location.replace(`/${target}/`);
@@ -378,35 +438,47 @@ export function subscribeNotifications(
     try {
       const n = JSON.parse(e.data as string) as AppNotification;
       onInitial?.(n);
-    } catch { /* ignore malformed SSE data */ }
+    } catch {
+      /* ignore malformed SSE data */
+    }
   });
 
   es.addEventListener("notification", (e: MessageEvent) => {
     try {
       const n = JSON.parse(e.data as string) as AppNotification;
       onNotification(n);
-    } catch { /* ignore malformed SSE data */ }
+    } catch {
+      /* ignore malformed SSE data */
+    }
   });
 
   es.addEventListener("dismiss", (e: MessageEvent) => {
     try {
       const { id } = JSON.parse(e.data as string) as { id: number };
       onDismiss(id);
-    } catch { /* ignore malformed SSE data */ }
+    } catch {
+      /* ignore malformed SSE data */
+    }
   });
 
   return () => es.close();
 }
 
-export async function uploadFiles(worktree: string, files: File[]): Promise<FileUploadResult> {
+export async function uploadFiles(
+  worktree: string,
+  files: File[],
+): Promise<FileUploadResult> {
   const form = new FormData();
   for (const file of files) {
     form.append("files", file);
   }
-  const res = await fetch(`${apiBase}/api/worktrees/${encodeURIComponent(worktree)}/upload`, {
-    method: "POST",
-    body: form,
-  });
+  const res = await fetch(
+    `${apiBase}/api/worktrees/${encodeURIComponent(worktree)}/upload`,
+    {
+      method: "POST",
+      body: form,
+    },
+  );
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data as FileUploadResult;
@@ -441,7 +513,9 @@ function inboxAuthHeaders(): Record<string, string> {
 export async function loadInboxControlToken(): Promise<void> {
   if (window.__SEBENZA_CONTROL_TOKEN__) return;
   try {
-    const res = await fetch("/api/inbox/session", { credentials: "same-origin" });
+    const res = await fetch("/api/inbox/session", {
+      credentials: "same-origin",
+    });
     if (!res.ok) return;
     const data = (await res.json()) as { token?: string };
     if (data.token) window.__SEBENZA_CONTROL_TOKEN__ = data.token;
@@ -509,9 +583,32 @@ export async function deleteInboxDraft(id: string, confirmed = false) {
  *  background because git plus tmux is multiple seconds per target. */
 export async function convertInboxDraft(
   id: string,
-  targets: { projectPath: string; branch: string; prompt: string }[],
+  targets: {
+    projectPath: string;
+    branch: string;
+    prompt: string;
+    baseBranch?: string | null;
+    agentId?: string | null;
+    systemInstruction?: string | null;
+    architectFirst?: boolean;
+  }[],
 ) {
   return hubApi.convertInboxDraft({
+    params: { id },
+    body: { targets },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Ask the system agent for a `systemInstruction` per target, for the
+ *  convert dialog to show and the operator to edit. Waits (bounded) for the
+ *  job; on `fallback` every instruction is null and the conversion goes
+ *  ahead with the operator prompt alone. */
+export async function requestConvertInstructions(
+  id: string,
+  targets: { project: string; branch: string; prompt?: string }[],
+) {
+  return hubApi.requestConvertInstructions({
     params: { id },
     body: { targets },
     extraHeaders: inboxAuthHeaders(),
@@ -522,6 +619,154 @@ export async function convertInboxDraft(
  *  so that is the access check. */
 export async function fetchConversionJob(jobId: string) {
   return hubApi.fetchConversionJob({ params: { id: jobId } });
+}
+
+/** Set (`P0`-`P3`) or clear (`null`) the operator priority override. While
+ *  an override stands the system agent cannot move it. */
+export async function setInboxPriority(
+  id: string,
+  priority: "P0" | "P1" | "P2" | "P3" | null,
+) {
+  return hubApi.setInboxPriority({
+    params: { id },
+    body: { priority },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** The overall thread plus one thread per converted worktree. */
+export async function fetchInboxComments(id: string) {
+  return hubApi.fetchInboxComments({ params: { id } });
+}
+
+/** Post an operator comment, to a worktree's thread or (no `worktree`) the
+ *  overall one. */
+export async function postInboxComment(
+  id: string,
+  body: string,
+  worktree?: { project: string; branch: string },
+) {
+  return hubApi.postInboxComment({
+    params: { id },
+    body: worktree ? { body, worktree } : { body },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Every request worktree agents raised against the item, with its state. */
+export async function fetchInboxRequests(id: string) {
+  return hubApi.fetchInboxRequests({ params: { id } });
+}
+
+/** Confirm a request's resolution and deliver it to its worktree.
+ *  `contentHash` must be the hash of the text the operator was shown (the
+ *  proposal, or `body` when authoring one); `body` with a proposal is an
+ *  edit. A stale hash is a 409 and nothing is delivered. */
+export async function confirmInboxRequest(
+  id: string,
+  requestId: string,
+  confirm: { contentHash: string; body?: string },
+) {
+  return hubApi.confirmInboxRequest({
+    params: { id, rid: requestId },
+    body: confirm,
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Reject a proposal (or a request) with a reason; it reopens. */
+export async function rejectInboxRequest(
+  id: string,
+  requestId: string,
+  reason: string,
+) {
+  return hubApi.rejectInboxRequest({
+    params: { id, rid: requestId },
+    body: { reason },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Retry a failed delivery as the next attempt. */
+export async function redeliverInboxRequest(id: string, requestId: string) {
+  return hubApi.redeliverInboxRequest({
+    params: { id, rid: requestId },
+    body: {},
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Re-run triage on an open (typically flagged) request. */
+export async function retryInboxTriage(id: string, requestId: string) {
+  return hubApi.retryInboxTriage({
+    params: { id, rid: requestId },
+    body: {},
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** One system-agent job's state and validated result. */
+export async function fetchInboxAgentJob(id: string, jobId: string) {
+  return hubApi.fetchInboxAgentJob({ params: { id, jobId } });
+}
+
+/** Ask the system agent for a proposed body. Returns the job id; the
+ *  proposal arrives on the job (`fetchInboxAgentJob` or the agent stream) and
+ *  is never written to the draft. Apply it with `saveInboxDraftBody` and the
+ *  hash the editor holds: a 409 means the body changed and needs a merge.
+ *  A 503 means the system agent is disabled. */
+export async function requestInboxDraftHelp(id: string, instruction?: string) {
+  return hubApi.requestInboxDraftHelp({
+    params: { id },
+    body: instruction ? { instruction } : {},
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Tombstone a comment, request, proposal or advice body; reads mask it. */
+export async function redactInboxComment(id: string, eventId: string) {
+  return hubApi.redactInboxComment({
+    params: { id, eventId },
+    body: {},
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Follow an item's system-agent jobs: each known job, then every change,
+ *  as `inbox.job` events. Returns a function that closes the stream. */
+export function connectInboxAgentStream(
+  id: string,
+  callbacks: {
+    onJob: (job: InboxAgentJob) => void;
+    onError: (message: string) => void;
+    onClose?: () => void;
+  },
+): () => void {
+  const socket = new WebSocket(
+    `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${apiPaths.streamInboxAgent.replace(
+      ":id",
+      encodeURIComponent(id),
+    )}`,
+  );
+  let closedByClient = false;
+  socket.addEventListener("message", (event) => {
+    if (typeof event.data !== "string") return;
+    try {
+      callbacks.onJob(InboxJobEventSchema.parse(JSON.parse(event.data)).job);
+    } catch {
+      callbacks.onError("Received malformed agent job data");
+    }
+  });
+  socket.addEventListener("error", () => {
+    callbacks.onError("Agent job stream connection failed");
+  });
+  socket.addEventListener("close", () => {
+    if (!closedByClient) callbacks.onClose?.();
+  });
+  return () => {
+    closedByClient = true;
+    socket.close();
+  };
 }
 
 /** Base branches for an arbitrary project, by URL prefix.

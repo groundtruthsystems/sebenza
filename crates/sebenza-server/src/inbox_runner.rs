@@ -7,7 +7,8 @@
 use crate::services::project_manager::ProjectApp;
 use common::adapters::fs::get_worktree_storage_paths;
 use common::services::inbox_convert::{
-    ConversionRunner, ConversionTarget, NOTE_REL_PATH, ORIGIN_REL_PATH, WRITTEN_REL_PATHS,
+    ConversionRunner, ConversionTarget, NOTE_REL_PATH, ORIGIN_REL_PATH, SEBENZA_INDEX_REL_PATH,
+    WRITTEN_REL_PATHS,
 };
 use common::services::lifecycle_service::{CreateMode, CreateWorktreesInput};
 use std::path::Path;
@@ -128,12 +129,23 @@ impl ConversionRunner for ServerConversionRunner {
         std::fs::write(&origin, body.to_string()).map_err(|e| e.to_string())
     }
 
+    /// `target.prompt` here is the launch prompt `run_conversion_item` built
+    /// (architect-first, direct, or the operator's verbatim), not the raw
+    /// request text.
     fn send_prompt(&self, target: &ConversionTarget, _worktree_path: &str) -> Result<(), String> {
         let app = self.project_for(&target.project_path)?;
         let resolved = resolve_terminal_target(&app, &target.branch)?;
         let delay = submit_delay_for_branch(&app, &target.branch);
         self.terminal
             .send_prompt(&resolved.attach_target, &target.prompt, 0, None, delay)
+    }
+
+    /// The project, not the new worktree: the workspace is what the operator
+    /// set up, and the architect reads it from the checkout either way.
+    fn has_sebenza_workspace(&self, target: &ConversionTarget) -> bool {
+        Path::new(&target.project_path)
+            .join(SEBENZA_INDEX_REL_PATH)
+            .is_file()
     }
 
     fn now(&self) -> String {

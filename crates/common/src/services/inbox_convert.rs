@@ -18,8 +18,12 @@ use serde::{Deserialize, Serialize};
 /// is a denial-of-service against the developer's own machine.
 pub const MAX_TARGETS: usize = 10;
 
+/// The longest `systemInstruction` a target may carry, in bytes. The same
+/// cap the system agent's own output is held to.
+pub const MAX_SYSTEM_INSTRUCTION_BYTES: usize = 32 * 1024;
+
 /// One worktree to create from a draft.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversionTarget {
     /// Absolute path of the project to create the worktree in.
@@ -27,8 +31,18 @@ pub struct ConversionTarget {
     pub branch: String,
     pub base_branch: Option<String>,
     pub agent_id: Option<String>,
-    /// The prompt this worktree's agent is started with.
+    /// The operator's prompt for this worktree's agent.
     pub prompt: String,
+    /// The system agent's instruction for this worktree, as the operator
+    /// reviewed (and perhaps edited) it. Absent when the agent was down
+    /// (UC-07a): the launch prompt then carries the item note and the
+    /// operator prompt alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_instruction: Option<String>,
+    /// Launch architect-first when the project has a Sebenza workspace.
+    /// Absent means yes; `false` asks for a direct instruction (UC-07b).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub architect_first: Option<bool>,
 }
 
 /// Why a request was refused before anything ran.
@@ -64,6 +78,10 @@ pub enum TargetError {
     EmptyPrompt {
         index: usize,
     },
+    /// The system instruction is over [`MAX_SYSTEM_INSTRUCTION_BYTES`].
+    SystemInstructionTooLong {
+        index: usize,
+    },
 }
 
 impl std::fmt::Display for TargetError {
@@ -91,6 +109,10 @@ impl std::fmt::Display for TargetError {
             Self::EmptyPrompt { index } => {
                 write!(f, "target {index}: prompt is empty")
             }
+            Self::SystemInstructionTooLong { index } => write!(
+                f,
+                "target {index}: system instruction exceeds {MAX_SYSTEM_INSTRUCTION_BYTES} bytes"
+            ),
         }
     }
 }
@@ -161,6 +183,14 @@ pub fn validate_targets(
         if target.prompt.trim().is_empty() {
             errors.push(TargetError::EmptyPrompt { index });
         }
+
+        if target
+            .system_instruction
+            .as_ref()
+            .is_some_and(|s| s.len() > MAX_SYSTEM_INSTRUCTION_BYTES)
+        {
+            errors.push(TargetError::SystemInstructionTooLong { index });
+        }
     }
     errors
 }
@@ -179,6 +209,14 @@ pub struct ConversionOutcome {
     pub base_branch: Option<String>,
     pub agent_id: Option<String>,
     pub prompt: String,
+    /// The system instruction the launch carried, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_instruction: Option<String>,
+    /// Whether the worktree was launched architect-first. False for a direct
+    /// instruction or the operator prompt alone, and for records that predate
+    /// the field.
+    #[serde(default)]
+    pub architect_first: bool,
     /// `"created"` or `"failed"`.
     pub outcome: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -196,6 +234,8 @@ impl ConversionOutcome {
             base_branch: target.base_branch.clone(),
             agent_id: target.agent_id.clone(),
             prompt: target.prompt.clone(),
+            system_instruction: target.system_instruction.clone(),
+            architect_first: false,
             outcome: "created".to_string(),
             worktree_path: Some(worktree_path),
             error: None,
@@ -210,6 +250,8 @@ impl ConversionOutcome {
             base_branch: target.base_branch.clone(),
             agent_id: target.agent_id.clone(),
             prompt: target.prompt.clone(),
+            system_instruction: target.system_instruction.clone(),
+            architect_first: false,
             outcome: "failed".to_string(),
             worktree_path: None,
             error: Some(error),
@@ -257,11 +299,22 @@ pub trait ConversionRunner {
     /// ends rather than only from the inbox.
     fn record_origin(&self, worktree_path: &str, draft_id: &str) -> Result<(), String>;
 
-    /// Send the target's prompt, now that the note is in place.
+    /// Send the target's prompt, now that the note is in place. `target.prompt`
+    /// is the launch prompt [`ArchitectFirstPromptBuilder`] built, not
+    /// necessarily the operator's verbatim text.
     fn send_prompt(&self, target: &ConversionTarget, worktree_path: &str) -> Result<(), String>;
+
+    /// True when the target's project has a Sebenza workspace
+    /// ([`SEBENZA_INDEX_REL_PATH`]), so an architect-first launch can work.
+    fn has_sebenza_workspace(&self, _target: &ConversionTarget) -> bool {
+        false
+    }
 
     fn now(&self) -> String;
 }
+
+/// The file whose presence marks a project as having a Sebenza workspace.
+pub const SEBENZA_INDEX_REL_PATH: &str = ".ai/sebenza/index.md";
 
 /// Where the draft copy lands inside a converted worktree.
 pub const NOTE_REL_PATH: &str = ".ai/sebenza/inbox-note.md";
@@ -301,25 +354,46 @@ where
     R: ConversionRunner,
     F: FnMut(&ConversionOutcome),
 {
-    targets
-        .iter()
-        .map(|target| {
-            let outcome = run_one(runner, draft_id, body, target);
-            on_outcome(&outcome);
-            outcome
-        })
-        .collect()
+    let item = ConversionItem {
+        draft_id,
+        title: "",
+        body,
+    };
+    run_conversion_item(runner, &item, targets, |o| on_outcome(o))
 }
 
 /// One target, start to finish. Every early return is a recorded failure, never
 /// a silent skip.
 fn run_one<R: ConversionRunner>(
     runner: &R,
-    draft_id: &str,
-    body: &str,
+    item: &ConversionItem<'_>,
     target: &ConversionTarget,
 ) -> ConversionOutcome {
-    let fail = |e: String| ConversionOutcome::failed(target, e, runner.now());
+    let (draft_id, body) = (item.draft_id, item.body);
+    let system_instruction = target
+        .system_instruction
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let architect_first = target.architect_first.unwrap_or(true);
+    // Only ask about the workspace when the answer can change the prompt.
+    let sebenza_workspace = architect_first && runner.has_sebenza_workspace(target);
+    let launch = ArchitectFirstPromptBuilder::build(&LaunchPromptInput {
+        title: item.title,
+        note_path: NOTE_REL_PATH,
+        operator_prompt: &target.prompt,
+        system_instruction,
+        architect_first,
+        sebenza_workspace,
+    });
+    // The record keeps the operator's prompt; the launch mode and the
+    // instruction ride alongside it.
+    let record = |mut outcome: ConversionOutcome| {
+        outcome.system_instruction = system_instruction.map(str::to_string);
+        outcome.architect_first = launch.mode == LaunchMode::ArchitectFirst;
+        outcome
+    };
+    let fail = |e: String| record(ConversionOutcome::failed(target, e, runner.now()));
 
     let worktree_path = match runner.create_worktree(target) {
         Ok(path) => path,
@@ -341,10 +415,18 @@ fn run_one<R: ConversionRunner>(
     // not worth discarding a worktree that is otherwise ready to work.
     let _ = runner.record_origin(&worktree_path, draft_id);
 
-    if let Err(e) = runner.send_prompt(target, &worktree_path) {
+    let launched = ConversionTarget {
+        prompt: launch.text.clone(),
+        ..target.clone()
+    };
+    if let Err(e) = runner.send_prompt(&launched, &worktree_path) {
         return fail(e);
     }
-    ConversionOutcome::created(target, worktree_path, runner.now())
+    record(ConversionOutcome::created(
+        target,
+        worktree_path,
+        runner.now(),
+    ))
 }
 
 #[cfg(test)]
@@ -358,6 +440,8 @@ mod tests {
             base_branch: None,
             agent_id: Some("claude".to_string()),
             prompt: "do the thing".to_string(),
+            system_instruction: None,
+            architect_first: None,
         }
     }
 
@@ -962,18 +1046,25 @@ fn looks_like_key(text: &str, prefix: &str, min_tail: usize) -> bool {
 /// Returns one advisory per distinct pattern, not per occurrence: the point is
 /// to prompt a look, and twelve copies of the same warning only buries it.
 pub fn scan_for_secrets(text: &str) -> Vec<Advisory> {
-    let mut out = Vec::new();
-    for (label, prefix, min_tail) in SECRET_PATTERNS {
-        if looks_like_key(text, prefix, min_tail) {
-            out.push(Advisory {
-                kind: "secret".to_string(),
-                message: format!(
-                    "This draft looks like it contains {label} text. It will be copied into every worktree and sent to the agent."
-                ),
-            });
-        }
-    }
-    out
+    secret_hit_names(text)
+        .into_iter()
+        .map(|label| Advisory {
+            kind: "secret".to_string(),
+            message: format!(
+                "This draft looks like it contains {label} text. It will be copied into every worktree and sent to the agent."
+            ),
+        })
+        .collect()
+}
+
+/// The label of each secret pattern found in `text`, once per pattern. The
+/// names, never the matched text, are what comments and requests record.
+pub fn secret_hit_names(text: &str) -> Vec<&'static str> {
+    SECRET_PATTERNS
+        .iter()
+        .filter(|(_, prefix, min_tail)| looks_like_key(text, prefix, *min_tail))
+        .map(|(label, _, _)| *label)
+        .collect()
 }
 
 /// Warn when a target's worktree will not be sandboxed.
@@ -992,4 +1083,405 @@ pub fn sandbox_advisory(branch: &str, sandboxed: bool) -> Option<Advisory> {
             "{branch} will run unsandboxed, so anything pasted into this draft reaches an agent with shell access."
         ),
     })
+}
+
+// --- Launch prompts -------------------------------------------------------
+
+/// How a converted worktree's agent is started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchMode {
+    /// Run the Sebenza architect on this worktree's portion first (UC-07).
+    ArchitectFirst,
+    /// The item note, the operator prompt and any system instruction, no
+    /// architect (UC-07b).
+    Direct,
+}
+
+/// The prompt a worktree is launched with, and how it was built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaunchPrompt {
+    pub mode: LaunchMode,
+    pub text: String,
+}
+
+/// What [`ArchitectFirstPromptBuilder`] builds from.
+#[derive(Debug, Clone, Copy)]
+pub struct LaunchPromptInput<'a> {
+    /// The inbox item's title.
+    pub title: &'a str,
+    /// Worktree-relative path of the item's full description.
+    pub note_path: &'a str,
+    pub operator_prompt: &'a str,
+    pub system_instruction: Option<&'a str>,
+    /// The operator wants architect-first (the default).
+    pub architect_first: bool,
+    /// The target project has a Sebenza workspace.
+    pub sebenza_workspace: bool,
+}
+
+/// Builds the launch prompt for one converted worktree. Pure: no I/O.
+pub struct ArchitectFirstPromptBuilder;
+
+impl ArchitectFirstPromptBuilder {
+    /// Every prompt points the agent at the item note, so a worktree always
+    /// starts with the inbox content, never the operator prompt alone.
+    ///
+    /// - architect-first wanted and the project has a Sebenza workspace: run
+    ///   the `sebenza-architect` skill on this worktree's portion first, with
+    ///   the item note, the operator instruction and the system instruction
+    ///   (when the agent produced one — UC-07a omits it);
+    /// - otherwise: a direct instruction combining them (UC-07b).
+    pub fn build(input: &LaunchPromptInput<'_>) -> LaunchPrompt {
+        let system = input
+            .system_instruction
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let operator = input.operator_prompt.trim();
+        let note = input.note_path;
+        let title = input.title.trim();
+        let item = if title.is_empty() {
+            format!("The inbox item is described in full at `{note}`.")
+        } else {
+            format!("The inbox item \"{title}\" is described in full at `{note}`.")
+        };
+        let operator_block = if operator.is_empty() {
+            String::new()
+        } else {
+            format!("Operator instruction:\n{operator}\n\n")
+        };
+        let system_block = system
+            .map(|s| format!("System instruction:\n{s}\n\n"))
+            .unwrap_or_default();
+        let inputs = match (operator.is_empty(), system.is_some()) {
+            (false, true) => {
+                " together with the operator instruction and the system instruction below"
+            }
+            (false, false) => " together with the operator instruction below",
+            (true, true) => " together with the system instruction below",
+            (true, false) => "",
+        };
+        if input.architect_first && input.sebenza_workspace {
+            let text = format!(
+                "Start with the Sebenza architect. Before anything else, run the \
+                 `sebenza-architect` skill (\"design this feature\") to architect this \
+                 worktree's portion of the overall inbox item. Other worktrees may own other \
+                 portions, so design only what this worktree is asked for.\n\n\
+                 {item} Read it first and give it to the architect as the feature \
+                 description{inputs}.\n\n\
+                 {operator_block}{system_block}\
+                 Once the design is approved, continue with the Sebenza workflow."
+            );
+            return LaunchPrompt {
+                mode: LaunchMode::ArchitectFirst,
+                text,
+            };
+        }
+        LaunchPrompt {
+            mode: LaunchMode::Direct,
+            text: format!(
+                "{item} Read it first: it is the context for this work.\n\n\
+                 {operator_block}{system_block}"
+            )
+            .trim_end()
+            .to_string(),
+        }
+    }
+}
+
+/// The draft a wave converts, as the launch prompts describe it.
+#[derive(Debug, Clone, Copy)]
+pub struct ConversionItem<'a> {
+    pub draft_id: &'a str,
+    pub title: &'a str,
+    pub body: &'a str,
+}
+
+/// [`run_conversion`], with the item's title available to the launch prompt.
+pub fn run_conversion_item<R, F>(
+    runner: &R,
+    item: &ConversionItem<'_>,
+    targets: &[ConversionTarget],
+    on_outcome: F,
+) -> Vec<ConversionOutcome>
+where
+    R: ConversionRunner,
+    F: FnMut(&ConversionOutcome),
+{
+    let mut on_outcome = on_outcome;
+    targets
+        .iter()
+        .map(|target| {
+            let outcome = run_one(runner, item, target);
+            on_outcome(&outcome);
+            outcome
+        })
+        .collect()
+}
+
+/// [`scan_for_secrets`] over the body, and over the item's comments too: they
+/// reach the system agent and inform every system instruction.
+///
+/// Body hits read as today; comment hits are reported once per pattern
+/// across every comment, separately from the body's, and never quote the
+/// matched text.
+pub fn scan_item_for_secrets(body: &str, comments: &[&str]) -> Vec<Advisory> {
+    let mut advisories = scan_for_secrets(body);
+    let mut labels: Vec<&'static str> = Vec::new();
+    for label in comments.iter().flat_map(|c| secret_hit_names(c)) {
+        if !labels.contains(&label) {
+            labels.push(label);
+        }
+    }
+    advisories.extend(labels.into_iter().map(|label| Advisory {
+        kind: "secret".to_string(),
+        message: format!(
+            "A comment on this draft looks like it contains {label} text. Comments inform the system instructions sent to each worktree's agent."
+        ),
+    }));
+    advisories
+}
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    const OPERATOR: &str = "Build the CSV importer";
+    const SYSTEM: &str = "Scope the parser only; the upload UI is another worktree.";
+
+    fn input(
+        system_instruction: Option<&str>,
+        architect_first: bool,
+        sebenza_workspace: bool,
+    ) -> LaunchPromptInput<'_> {
+        LaunchPromptInput {
+            title: "Bulk importer",
+            note_path: NOTE_REL_PATH,
+            operator_prompt: OPERATOR,
+            system_instruction,
+            architect_first,
+            sebenza_workspace,
+        }
+    }
+
+    // TS-45: architect-first carries the item, the operator prompt and the
+    // system instruction, and puts the architect step first.
+    #[test]
+    fn an_architect_first_prompt_carries_the_item_the_operator_and_the_system_instruction() {
+        let p = ArchitectFirstPromptBuilder::build(&input(Some(SYSTEM), true, true));
+        assert_eq!(p.mode, LaunchMode::ArchitectFirst);
+        for needle in [
+            "sebenza-architect",
+            "design this feature",
+            NOTE_REL_PATH,
+            "Bulk importer",
+            OPERATOR,
+            SYSTEM,
+            "portion",
+        ] {
+            assert!(p.text.contains(needle), "missing {needle:?} in {}", p.text);
+        }
+        assert!(
+            p.text.find("sebenza-architect").unwrap() < p.text.find(OPERATOR).unwrap(),
+            "the architect step comes first"
+        );
+    }
+
+    // TS-48: architect_first=false gives a direct instruction, no wrapper.
+    #[test]
+    fn without_architect_first_the_prompt_is_a_direct_instruction() {
+        let p = ArchitectFirstPromptBuilder::build(&input(Some(SYSTEM), false, true));
+        assert_eq!(p.mode, LaunchMode::Direct);
+        assert!(p.text.contains(OPERATOR));
+        assert!(p.text.contains(SYSTEM));
+        assert!(p.text.contains(NOTE_REL_PATH));
+        assert!(!p.text.contains("sebenza-architect"));
+        assert!(!p.text.contains("design this feature"));
+    }
+
+    // UC-07b: no Sebenza workspace means the architect cannot run.
+    #[test]
+    fn a_project_without_a_sebenza_workspace_gets_a_direct_instruction() {
+        let p = ArchitectFirstPromptBuilder::build(&input(Some(SYSTEM), true, false));
+        assert_eq!(p.mode, LaunchMode::Direct);
+        assert!(!p.text.contains("sebenza-architect"));
+        assert!(p.text.contains(SYSTEM));
+    }
+
+    // TS-47 (unit): with no system instruction the worktree still gets the
+    // item note and the operator prompt, and architect-first still applies.
+    #[test]
+    fn without_a_system_instruction_the_item_note_and_operator_prompt_still_go_out() {
+        for (si, af, ws, mode) in [
+            (None, true, true, LaunchMode::ArchitectFirst),
+            (None, false, false, LaunchMode::Direct),
+            (Some("   "), true, false, LaunchMode::Direct),
+        ] {
+            let p = ArchitectFirstPromptBuilder::build(&input(si, af, ws));
+            assert_eq!(p.mode, mode);
+            assert!(p.text.contains(NOTE_REL_PATH), "{}", p.text);
+            assert!(p.text.contains("Bulk importer"), "{}", p.text);
+            assert!(p.text.contains(OPERATOR), "{}", p.text);
+            assert!(!p.text.contains("System instruction:"), "{}", p.text);
+            assert_ne!(p.text, OPERATOR, "never the operator prompt alone");
+        }
+        let p = ArchitectFirstPromptBuilder::build(&input(None, true, true));
+        assert!(p.text.find("sebenza-architect").unwrap() < p.text.find(OPERATOR).unwrap());
+    }
+
+    struct PromptSpy {
+        workspace: bool,
+        sent: RefCell<Vec<String>>,
+    }
+
+    impl ConversionRunner for PromptSpy {
+        fn create_worktree(&self, t: &ConversionTarget) -> Result<String, String> {
+            Ok(format!("/wt/{}", t.branch))
+        }
+        fn write_note(&self, _p: &str, _b: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn exclude_note(&self, _p: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn record_origin(&self, _p: &str, _d: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn send_prompt(&self, t: &ConversionTarget, _p: &str) -> Result<(), String> {
+            self.sent.borrow_mut().push(t.prompt.clone());
+            Ok(())
+        }
+        fn has_sebenza_workspace(&self, _t: &ConversionTarget) -> bool {
+            self.workspace
+        }
+        fn now(&self) -> String {
+            "t".into()
+        }
+    }
+
+    fn target(branch: &str, si: Option<&str>, af: Option<bool>) -> ConversionTarget {
+        ConversionTarget {
+            project_path: "/code/acme".into(),
+            branch: branch.into(),
+            prompt: "do the thing".into(),
+            system_instruction: si.map(str::to_string),
+            architect_first: af,
+            ..Default::default()
+        }
+    }
+
+    const ITEM: ConversionItem<'static> = ConversionItem {
+        draft_id: "01DRAFT",
+        title: "Bulk importer",
+        body: "# notes",
+    };
+
+    #[test]
+    fn each_target_is_launched_with_its_built_prompt_and_both_fields_are_recorded() {
+        let spy = PromptSpy {
+            workspace: true,
+            sent: RefCell::new(vec![]),
+        };
+        let targets = vec![
+            target("arch", Some(SYSTEM), None),
+            target("direct", Some(SYSTEM), Some(false)),
+            target("plain", None, None),
+        ];
+        let outcomes = run_conversion_item(&spy, &ITEM, &targets, |_| {});
+        let sent = spy.sent.into_inner();
+
+        assert!(sent[0].contains("sebenza-architect") && sent[0].contains("Bulk importer"));
+        assert!(outcomes[0].architect_first);
+        assert_eq!(outcomes[0].system_instruction.as_deref(), Some(SYSTEM));
+
+        assert!(!sent[1].contains("sebenza-architect") && sent[1].contains(SYSTEM));
+        assert!(!outcomes[1].architect_first);
+        assert_eq!(outcomes[1].system_instruction.as_deref(), Some(SYSTEM));
+
+        // No system instruction still means the item note and architect-first.
+        assert!(sent[2].contains("sebenza-architect") && sent[2].contains(NOTE_REL_PATH));
+        assert!(sent[2].contains("do the thing"));
+        assert!(outcomes[2].architect_first);
+        assert_eq!(outcomes[2].system_instruction, None);
+
+        // The record keeps the operator's prompt, not the built one.
+        assert!(outcomes.iter().all(|o| o.prompt == "do the thing"));
+    }
+
+    #[test]
+    fn without_a_workspace_architect_first_falls_back_to_direct() {
+        let spy = PromptSpy {
+            workspace: false,
+            sent: RefCell::new(vec![]),
+        };
+        let outcomes = run_conversion_item(&spy, &ITEM, &[target("x", Some(SYSTEM), None)], |_| {});
+        assert!(!outcomes[0].architect_first);
+        assert!(!spy.sent.borrow()[0].contains("sebenza-architect"));
+    }
+
+    #[test]
+    fn an_oversized_system_instruction_is_refused() {
+        let known = vec!["/code/acme".to_string()];
+        let big = "x".repeat(MAX_SYSTEM_INSTRUCTION_BYTES + 1);
+        let errors = validate_targets(&[target("x", Some(&big), None)], &known);
+        assert_eq!(
+            errors,
+            vec![TargetError::SystemInstructionTooLong { index: 0 }]
+        );
+        let at_cap = "x".repeat(MAX_SYSTEM_INSTRUCTION_BYTES);
+        assert_eq!(
+            validate_targets(&[target("x", Some(&at_cap), Some(false))], &known),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn the_request_schema_takes_both_fields_and_defaults_them() {
+        let t: ConversionTarget = serde_json::from_str(
+            r#"{"projectPath":"/code/acme","branch":"x","baseBranch":null,"agentId":null,
+                "prompt":"p","systemInstruction":"si","architectFirst":false}"#,
+        )
+        .unwrap();
+        assert_eq!(t.system_instruction.as_deref(), Some("si"));
+        assert_eq!(t.architect_first, Some(false));
+        let old: ConversionTarget = serde_json::from_str(
+            r#"{"projectPath":"/code/acme","branch":"x","baseBranch":null,"agentId":null,"prompt":"p"}"#,
+        )
+        .unwrap();
+        assert_eq!(old.system_instruction, None);
+        assert_eq!(old.architect_first, None);
+    }
+
+    #[test]
+    fn a_record_from_before_system_instructions_still_reads() {
+        let old: ConversionOutcome = serde_yaml::from_str(
+            "projectPath: /code/acme\nbranch: x\nagentId: null\nprompt: p\noutcome: created\nat: t\n",
+        )
+        .unwrap();
+        assert_eq!(old.system_instruction, None);
+        assert!(!old.architect_first);
+
+        let mut new =
+            ConversionOutcome::created(&target("x", Some("si"), None), "/wt".into(), "t".into());
+        new.architect_first = true;
+        let v = serde_json::to_value(&new).unwrap();
+        assert_eq!(v["systemInstruction"], "si");
+        assert_eq!(v["architectFirst"], true);
+    }
+
+    // TS-49: the secret scan covers the item's comments as well as its body.
+    #[test]
+    fn the_secret_scan_covers_comments_as_well_as_the_body() {
+        let fake = "sk-TEST-0000000000000000";
+        let hits = scan_item_for_secrets("A clean body.", &["fine", &format!("key: {fake}")]);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].kind, "secret");
+        assert!(hits[0].message.contains("comment"), "{}", hits[0].message);
+        assert!(!hits[0].message.contains(fake), "never echo the secret");
+
+        // Body and comments are reported separately; repeats only once.
+        let both = scan_item_for_secrets(fake, &[fake, fake]);
+        assert_eq!(both.len(), 2, "{both:?}");
+        assert!(scan_item_for_secrets("clean", &["also clean"]).is_empty());
+    }
 }

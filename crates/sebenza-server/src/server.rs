@@ -54,6 +54,8 @@ pub struct AppState {
     pub inbox: Arc<crate::services::inbox_service::InboxService>,
     /// In-flight and recent conversion fan-outs. Server-wide, like the inbox.
     pub inbox_jobs: Arc<crate::services::inbox_jobs::ConversionJobManager>,
+    /// The per-item inbox system agent (triage, draft-help, convert jobs).
+    pub system_agent: Arc<crate::services::system_agent::SystemAgentService>,
     pub frontend_dist: Option<PathBuf>,
 }
 
@@ -192,6 +194,7 @@ pub fn spawn_background_loops(state: AppState) {
 
 /// A JSON error body `{ "error": "..." }` with an HTTP status (mirrors
 /// `ErrorResponseSchema`).
+#[derive(Debug)]
 pub struct ApiError {
     pub status: StatusCode,
     pub message: String,
@@ -337,6 +340,54 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/inbox/{id}/conversions",
             get(crate::inbox_routes::get_draft_conversions),
+        )
+        .route(
+            "/api/inbox/{id}/priority",
+            axum::routing::patch(crate::inbox_routes::patch_priority),
+        )
+        .route(
+            "/api/inbox/{id}/comments",
+            get(crate::inbox_routes::list_comments).post(crate::inbox_routes::post_comment),
+        )
+        .route(
+            "/api/inbox/{id}/requests",
+            get(crate::inbox_routes::list_requests),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/confirm",
+            post(crate::inbox_routes::confirm_request),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/reject",
+            post(crate::inbox_routes::reject_request),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/redeliver",
+            post(crate::inbox_routes::redeliver_request),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/retry-triage",
+            post(crate::inbox_routes::retry_triage),
+        )
+        .route(
+            "/api/inbox/{id}/agent/jobs/{job_id}",
+            get(crate::inbox_routes::get_agent_job),
+        )
+        .route(
+            "/api/inbox/{id}/agent/stream",
+            get(crate::inbox_routes::ws_agent_jobs),
+        )
+        .route(
+            "/api/inbox/{id}/agent/draft-help",
+            post(crate::inbox_routes::draft_help),
+        )
+        .route(
+            "/api/inbox/{id}/convert/instructions",
+            post(crate::inbox_routes::convert_instructions),
+        )
+        .route(
+            "/api/inbox/{id}/comments/{event_id}/redact",
+            post(crate::inbox_routes::redact_comment),
         )
         // Per-project routes, scoped under `/<prefix>`.
         .route("/{prefix}/api/config", get(get_config))
@@ -1597,6 +1648,11 @@ fn prepare_agent_send(
         permission_mode: (profile.yolo == Some(true)).then(|| "bypassPermissions".to_string()),
         resume_session_id,
         system_prompt: profile.system_prompt.clone(),
+        binary: None,
+        model: None,
+        tools: None,
+        isolated: false,
+        timeout: None,
     })
 }
 
@@ -2109,7 +2165,9 @@ async fn remove_project(
 
 /// Agent → backend control channel. Applies a runtime event to whichever
 /// project owns the worktree id, recording a notification. Bearer-token authed.
-async fn runtime_event(
+/// Inbox ingress (`inbox.request`, `inbox.comment`) is routed to the inbox
+/// instead; it names its item, not a project.
+pub(crate) async fn runtime_event(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
@@ -2124,8 +2182,17 @@ async fn runtime_event(
         return Err(ApiError::new(401, "Unauthorized".to_string()));
     }
 
+    // Every legitimate event is a few hundred bytes; an inbox request is
+    // capped well below this again (T-09).
+    if body.len() > crate::services::inbox_limits::MAX_INGRESS_BYTES {
+        return Err(ApiError::new(413, "Runtime event too large".to_string()));
+    }
     let raw: serde_json::Value = serde_json::from_slice(&body)
         .map_err(|_| ApiError::new(400, "Invalid JSON".to_string()))?;
+    // `sebenza-agentctl request|comment` share this channel (AA-D4).
+    if let Some(outcome) = crate::inbox_routes::inbox_runtime_event(&state, &raw).await {
+        return outcome;
+    }
     let event = crate::domain::events::parse_runtime_event(&raw)
         .ok_or_else(|| ApiError::new(400, "Invalid runtime event body".to_string()))?;
 

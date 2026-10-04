@@ -5,18 +5,25 @@
 //! [`guard_inbox_request`] — a control token *and* a same-origin check, neither
 //! substituting for the other.
 
-use crate::domain::model::{DraftStatus, FileRevision, InboxDraft, InboxDraftView};
+use crate::adapters::inbox_store::EventAuthor;
+use crate::domain::inbox_events::{Thread, WorktreeKey, request_id_of};
+use crate::domain::model::{
+    DraftStatus, FileRevision, InboxDraft, InboxDraftView, Priority, PrioritySource,
+};
 use crate::domain::policies::{
-    InboxGuard, InboxGuardDenial, guard_inbox_request, is_safe_project_path, origin_is_acceptable,
+    InboxGuard, InboxGuardDenial, allowed_hosts_from_env, guard_inbox_request, host_is_allowed,
+    is_safe_project_path, origin_is_acceptable, sanitize_caller_marker,
 };
 use crate::inbox_runner::ServerConversionRunner;
 use crate::services::inbox_convert::{
-    Advisory, ConversionTarget, sandbox_advisory, scan_for_secrets, validate_targets,
+    Advisory, ConversionTarget, sandbox_advisory, scan_item_for_secrets, validate_targets,
 };
 use crate::services::inbox_jobs::{JobEvent, JobSnapshot, JobSubscription};
 use crate::services::inbox_service::{
-    DraftSummary, InboxService, InboxServiceError, ListQuery, ProjectLink,
+    CommentGroups, DraftSummary, InboxService, InboxServiceError, ListQuery, ProjectLink,
+    parse_worktree_ingress,
 };
+use crate::services::system_agent::{EnqueueError, JobRecord};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
 use axum::http::HeaderMap;
@@ -61,8 +68,13 @@ pub struct DraftSummaryWire {
     pub id: String,
     pub title: String,
     pub status: DraftStatus,
+    pub created_at: String,
     pub updated_at: String,
     pub project: Option<ProjectLinkWire>,
+    pub priority: Priority,
+    pub priority_source: PrioritySource,
+    /// A request needs the operator (triage or delivery failed).
+    pub flagged: bool,
     pub is_raw: bool,
 }
 
@@ -72,8 +84,12 @@ impl From<DraftSummary> for DraftSummaryWire {
             id: s.id,
             title: s.title,
             status: s.status,
+            created_at: s.created_at,
             updated_at: s.updated_at,
             project: s.project.map(Into::into),
+            priority: s.priority,
+            priority_source: s.priority_source,
+            flagged: s.flagged,
             is_raw: s.is_raw,
         }
     }
@@ -93,6 +109,9 @@ pub struct DraftWire {
     pub body: String,
     pub body_hash: String,
     pub project: Option<ProjectLinkWire>,
+    pub priority: Priority,
+    /// `operator` while an override stands; the agent may not move it then.
+    pub priority_source: PrioritySource,
     /// Every wave this draft has produced, so a second conversion can start
     /// from the last one rather than a blank form.
     pub conversions: Vec<serde_yaml::Value>,
@@ -118,6 +137,8 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
             updated_at: d.frontmatter.updated_at,
             body: d.body,
             project: link.map(Into::into),
+            priority: d.frontmatter.priority,
+            priority_source: d.frontmatter.priority_source,
             conversions: d.frontmatter.conversions,
             raw: None,
         },
@@ -134,6 +155,8 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
             body: String::new(),
             body_hash: String::new(),
             project: None,
+            priority: Priority::default(),
+            priority_source: PrioritySource::default(),
             conversions: Vec::new(),
             raw: Some(RawWire {
                 text: raw_text,
@@ -161,6 +184,21 @@ impl From<InboxServiceError> for ApiError {
             InboxServiceError::Store(InboxStoreError::Conflict { .. }) => {
                 ApiError::new(409, err.to_string())
             }
+            InboxServiceError::Store(InboxStoreError::Unparsed { .. }) => {
+                ApiError::new(422, err.to_string())
+            }
+            InboxServiceError::Invalid(_) => ApiError::new(400, err.to_string()),
+            InboxServiceError::TooLarge { .. } => ApiError::new(413, err.to_string()),
+            InboxServiceError::RateLimited | InboxServiceError::TooManyOpenRequests(_) => {
+                ApiError::new(429, err.to_string())
+            }
+            InboxServiceError::ForeignWorktree(_) => ApiError::new(403, err.to_string()),
+            InboxServiceError::UnknownRequest(_) | InboxServiceError::UnknownEvent(_) => {
+                ApiError::new(404, err.to_string())
+            }
+            InboxServiceError::HashMismatch | InboxServiceError::WrongState(..) => {
+                ApiError::new(409, err.to_string())
+            }
             other => ApiError::new(500, other.to_string()),
         }
     }
@@ -180,6 +218,7 @@ fn check(headers: &HeaderMap, method: &str) -> Result<(), ApiError> {
     let origin = header(axum::http::header::ORIGIN);
     let referer = header(axum::http::header::REFERER);
     let host = header(axum::http::header::HOST).unwrap_or_default();
+    check_host(&host)?;
     let self_origin = format!("http://{host}");
 
     let expected =
@@ -201,6 +240,17 @@ fn check(headers: &HeaderMap, method: &str) -> Result<(), ApiError> {
             403,
             "Cross-origin request refused".to_string(),
         )),
+    }
+}
+
+/// Refuse a `Host` that is not this loopback daemon (T-10). The origin check
+/// trusts `Host` to say what "same origin" means, so on its own it waves
+/// through a DNS-rebinding page whose `Origin` and `Host` agree.
+fn check_host(host: &str) -> Result<(), ApiError> {
+    if host_is_allowed(Some(host), &allowed_hosts_from_env()) {
+        Ok(())
+    } else {
+        Err(ApiError::new(403, "Host not allowed".to_string()))
     }
 }
 
@@ -377,6 +427,7 @@ pub async fn inbox_session(headers: HeaderMap) -> Result<Json<serde_json::Value>
         headers.get(name)?.to_str().ok().map(str::to_string)
     };
     let host = header(axum::http::header::HOST).unwrap_or_default();
+    check_host(&host)?;
     let self_origin = format!("http://{host}");
     if !origin_is_acceptable(
         header(axum::http::header::ORIGIN).as_deref(),
@@ -440,7 +491,7 @@ pub async fn convert_draft(
     // heuristic that gets switched off.
     let mut advisories: Vec<Advisory> = Vec::new();
     if let InboxDraftView::Parsed(ref d) = view {
-        advisories.extend(scan_for_secrets(&d.body));
+        advisories.extend(item_secret_advisories(&svc, &id, &d.body));
     }
     for target in &body.targets {
         let sandboxed = state
@@ -470,10 +521,15 @@ pub async fn convert_draft(
     let targets = body.targets.clone();
     let draft_id = id.clone();
     let job = job_id.clone();
+    let fill_state = state.clone();
 
-    // The fan-out is blocking (git, tmux), so it owns a blocking thread rather
-    // than stalling the async runtime.
-    tokio::task::spawn_blocking(move || {
+    // Drafting instructions waits on the system agent, so it runs inside the
+    // job, after the job id is returned. The fan-out itself is blocking (git,
+    // tmux), so it then owns a blocking thread rather than stalling the
+    // async runtime.
+    tokio::spawn(async move {
+        let targets = fill_missing_instructions(&fill_state, &draft_id, targets, &headers).await;
+        let _ = tokio::task::spawn_blocking(move || {
         let span = tracing::info_span!("inbox_convert", job_id = %job, draft_id = %draft_id, targets = targets.len());
         let _enter = span.enter();
         match svc.convert_streaming(&draft_id, &targets, &runner, |outcome| {
@@ -496,11 +552,34 @@ pub async fn convert_draft(
             Ok(_) => jobs.finish(&job),
             Err(e) => jobs.fail(&job, e.to_string()),
         }
+    })
+    .await;
     });
 
     Ok(Json(
         serde_json::json!({ "jobId": job_id, "advisories": advisories }),
     ))
+}
+
+/// The secret scan over a draft's body and its conversational events
+/// (comments, requests, proposals, advice), redactions applied. Advisory
+/// only: a log that cannot be read just scans the body.
+fn item_secret_advisories(svc: &InboxService, id: &str, body: &str) -> Vec<Advisory> {
+    use crate::domain::inbox_events::InboxEventKind;
+    let bodies: Vec<String> = svc
+        .events(id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|e| match e.kind {
+            InboxEventKind::Comment { body, .. }
+            | InboxEventKind::Proposal { body, .. }
+            | InboxEventKind::Advice { body, .. } => Some(body),
+            InboxEventKind::RequestOpened { title, body, .. } => Some(format!("{title}\n{body}")),
+            _ => None,
+        })
+        .collect();
+    let refs: Vec<&str> = bodies.iter().map(String::as_str).collect();
+    scan_item_for_secrets(body, &refs)
 }
 
 /// `GET /api/inbox/jobs/{id}` — a job's state.
@@ -581,5 +660,2245 @@ async fn conversion_job_socket(mut socket: WebSocket, subscription: JobSubscript
             // stream a gap the client would silently treat as complete.
             Err(_) => return,
         }
+    }
+}
+
+// --- Priority, comments and requests ---------------------------------------
+
+/// The unauthenticated `X-Sebenza-Caller` marker (T-01), normalised.
+fn caller_marker(headers: &HeaderMap) -> Option<String> {
+    sanitize_caller_marker(
+        headers
+            .get("x-sebenza-caller")
+            .and_then(|v| v.to_str().ok()),
+    )
+}
+
+/// `PATCH /api/inbox/{id}/priority` — `{"priority": "P0"}` sets the operator
+/// override; `{"priority": null}` clears it and hands control back to the
+/// agent. The key is required, so an empty body cannot clear by accident.
+pub async fn patch_priority(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<DraftWire>, ApiError> {
+    check(&headers, "PATCH")?;
+    let priority = match body.get("priority") {
+        None => {
+            return Err(ApiError::new(
+                400,
+                "priority is required; send null to clear the override".to_string(),
+            ));
+        }
+        Some(serde_json::Value::Null) => None,
+        Some(v) => Some(
+            serde_json::from_value::<Priority>(v.clone())
+                .map_err(|_| ApiError::new(400, format!("unknown priority {v}")))?,
+        ),
+    };
+    let svc = inbox(&state);
+    svc.set_priority(&id, priority, caller_marker(&headers))?;
+    let (view, link) = svc.get(&id)?;
+    Ok(Json(to_wire(view, link)))
+}
+
+/// `GET /api/inbox/{id}/comments` — the overall thread plus one per worktree.
+pub async fn list_comments(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<CommentGroups>, ApiError> {
+    Ok(Json(inbox(&state).list_comments(&id)?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostCommentBody {
+    pub body: String,
+    /// A worktree thread; absent or null posts to the overall thread.
+    #[serde(default)]
+    pub worktree: Option<WorktreeKey>,
+}
+
+/// `POST /api/inbox/{id}/comments` — an operator comment.
+pub async fn post_comment(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<PostCommentBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let thread = body
+        .worktree
+        .map(Thread::Worktree)
+        .unwrap_or(Thread::Overall);
+    // The token holder is the operator as far as the server can tell; the
+    // marker records what the caller claimed to be (T-01).
+    let author = EventAuthor {
+        caller: caller_marker(&headers),
+        ..EventAuthor::operator()
+    };
+    let svc = inbox(&state);
+    let event = svc.add_comment(&id, author, thread, &body.body)?;
+    Ok(Json(
+        serde_json::json!({ "comment": svc.comment_view(&event) }),
+    ))
+}
+
+/// `GET /api/inbox/{id}/requests` — every request, folded from the log.
+pub async fn list_requests(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let requests = inbox(&state).list_requests(&id)?;
+    Ok(Json(serde_json::json!({ "requests": requests })))
+}
+
+// --- Decisions, triage retry, agent jobs and redaction ------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfirmBody {
+    /// The edited or operator-authored text; absent confirms the proposal.
+    #[serde(default)]
+    pub body: Option<String>,
+    /// `content_hash` of the text the operator was shown (T-12).
+    pub content_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectBody {
+    pub reason: String,
+}
+
+impl From<EnqueueError> for ApiError {
+    fn from(err: EnqueueError) -> Self {
+        let status = match err {
+            EnqueueError::Disabled | EnqueueError::NoRuntime => 503,
+            EnqueueError::QueueFull(_) => 429,
+            EnqueueError::Invalid(_) => 400,
+            EnqueueError::UnknownRequest(_) => 404,
+            EnqueueError::NotRetryable(_) => 409,
+        };
+        ApiError::new(status, err.to_string())
+    }
+}
+
+/// Run a blocking inbox call off the async runtime. Confirm and redeliver
+/// paste through tmux, so they must not stall a runtime thread.
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, InboxServiceError> + Send + 'static,
+) -> Result<T, ApiError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".to_string()))?
+        .map_err(ApiError::from)
+}
+
+/// The read-side guard for routes that carry agent output: the Host
+/// allowlist and, when a browser names an origin, the same-origin check.
+/// Reads need no token, like every other inbox GET.
+fn check_read(headers: &HeaderMap) -> Result<(), ApiError> {
+    let header = |name: axum::http::HeaderName| -> Option<String> {
+        headers.get(name)?.to_str().ok().map(str::to_string)
+    };
+    let host = header(axum::http::header::HOST).unwrap_or_default();
+    check_host(&host)?;
+    if origin_is_acceptable(
+        header(axum::http::header::ORIGIN).as_deref(),
+        header(axum::http::header::REFERER).as_deref(),
+        &format!("http://{host}"),
+    ) {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            403,
+            "Cross-origin request refused".to_string(),
+        ))
+    }
+}
+
+/// `POST /api/inbox/{id}/requests/{rid}/confirm` — confirm and deliver.
+///
+/// `contentHash` binds the confirm to the text the operator was shown (the
+/// proposal, or the authored `body` when there is none); a stale hash is a
+/// 409 and nothing is delivered (T-12). The control token is the only
+/// credential, so a worktree agent holding it is accepted here too; the
+/// audit records its unauthenticated caller marker (T-01, accepted).
+pub async fn confirm_request(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<ConfirmBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let request = blocking(move || {
+        svc.confirm_resolution(&id, &rid, body.body.as_deref(), &body.content_hash, caller)
+    })
+    .await?;
+    Ok(Json(serde_json::json!({ "request": request })))
+}
+
+/// `POST /api/inbox/{id}/requests/{rid}/reject` — back to open, with a reason.
+pub async fn reject_request(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<RejectBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let request = blocking(move || svc.reject_request(&id, &rid, &body.reason, caller)).await?;
+    Ok(Json(serde_json::json!({ "request": request })))
+}
+
+/// `POST /api/inbox/{id}/requests/{rid}/redeliver` — retry a failed delivery.
+pub async fn redeliver_request(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let request = blocking(move || svc.redeliver(&id, &rid, caller)).await?;
+    Ok(Json(serde_json::json!({ "request": request })))
+}
+
+/// `POST /api/inbox/{id}/requests/{rid}/retry-triage` — re-run triage on an
+/// open (typically flagged) request as its next attempt.
+pub async fn retry_triage(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let agent = state.system_agent.clone();
+    let job_id = tokio::task::spawn_blocking(move || agent.retry_triage(&id, &rid))
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
+    Ok(Json(serde_json::json!({ "jobId": job_id })))
+}
+
+/// `GET /api/inbox/{id}/agent/jobs/{jobId}` — one system-agent job. A job
+/// of another item is a 404, as is an unknown or expired id.
+pub async fn get_agent_job(
+    State(state): State<AppState>,
+    Path((id, job_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<JobRecord>, ApiError> {
+    check_read(&headers)?;
+    state
+        .system_agent
+        .job(&job_id)
+        .filter(|j| j.draft_id == id)
+        .map(Json)
+        .ok_or_else(|| ApiError::new(404, "Unknown system agent job".to_string()))
+}
+
+/// `GET /api/inbox/{id}/agent/stream` — a WebSocket of `inbox.job` events
+/// for one item: each of its known jobs first, then every state change.
+pub async fn ws_agent_jobs(
+    ws: WebSocketUpgrade,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    State(state): State<AppState>,
+) -> Response {
+    if let Err(e) = check_read(&headers) {
+        return e.into_response();
+    }
+    let agent = state.system_agent.clone();
+    ws.on_upgrade(move |socket| agent_job_socket(socket, agent, id))
+}
+
+fn job_event(job: &JobRecord) -> Option<String> {
+    serde_json::to_string(&serde_json::json!({ "type": "inbox.job", "job": job })).ok()
+}
+
+async fn agent_job_socket(
+    mut socket: WebSocket,
+    agent: Arc<crate::services::system_agent::SystemAgentService>,
+    draft_id: String,
+) {
+    // Subscribe before the snapshot, so a change between the two is not lost.
+    let mut updates = agent.subscribe();
+    let snapshot = |agent: &crate::services::system_agent::SystemAgentService| {
+        agent
+            .jobs_for(&draft_id)
+            .iter()
+            .filter_map(job_event)
+            .collect::<Vec<_>>()
+    };
+    for text in snapshot(&agent) {
+        if socket.send(Message::Text(text.into())).await.is_err() {
+            return;
+        }
+    }
+    loop {
+        tokio::select! {
+            update = updates.recv() => {
+                let texts = match update {
+                    Ok(job) if job.draft_id == draft_id => job_event(&job).into_iter().collect(),
+                    Ok(_) => continue,
+                    // Lagged: resend the item's jobs rather than leave a gap.
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => snapshot(&agent),
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+                };
+                for text in texts {
+                    if socket.send(Message::Text(text.into())).await.is_err() {
+                        return;
+                    }
+                }
+            }
+            incoming = socket.recv() => {
+                if !matches!(incoming, Some(Ok(_))) {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+// --- Draft help and conversion instructions ---------------------------------
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftHelpBody {
+    /// Optional steer for the proposal ("make it shorter").
+    #[serde(default)]
+    pub instruction: Option<String>,
+}
+
+/// `POST /api/inbox/{id}/agent/draft-help` — queue a draft-help job and return
+/// its id. The proposal arrives on the job (GET or WS); it is never written to
+/// the draft. Applying it is the hash-gated `PUT …/body` (FR-29).
+pub async fn draft_help(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<DraftHelpBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    use crate::services::system_agent::JobInput;
+    use crate::services::system_agent::output::MAX_NOTE_BYTES;
+    check(&headers, "POST")?;
+    let instruction = body
+        .instruction
+        .map(|i| i.trim().to_string())
+        .filter(|i| !i.is_empty());
+    if instruction
+        .as_ref()
+        .is_some_and(|i| i.len() > MAX_NOTE_BYTES)
+    {
+        return Err(ApiError::new(
+            400,
+            format!("instruction exceeds {MAX_NOTE_BYTES} bytes"),
+        ));
+    }
+    // An unknown draft is a 404 here rather than the queue's 400.
+    inbox(&state).get(&id)?;
+    let agent = state.system_agent.clone();
+    let draft_id = id.clone();
+    let job_id = tokio::task::spawn_blocking(move || {
+        agent.enqueue(&draft_id, JobInput::DraftHelp { instruction })
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
+    tracing::info!(
+        audit = "inbox.agent.draft_help",
+        draft_id = %id,
+        job_id = %job_id,
+        caller = caller_marker(&headers).as_deref().unwrap_or(""),
+        "draft help requested"
+    );
+    Ok(Json(serde_json::json!({ "jobId": job_id })))
+}
+
+/// One target the dialog wants an instruction for.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct InstructionTargetBody {
+    /// Absolute path of a registered project.
+    pub project: String,
+    pub branch: String,
+    /// The operator's prompt so far; may be empty.
+    #[serde(default)]
+    pub prompt: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertInstructionsBody {
+    pub targets: Vec<InstructionTargetBody>,
+}
+
+/// One target's instruction, for the dialog to show and the operator to edit.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct InstructionTargetWire {
+    pub project: String,
+    pub branch: String,
+    /// How the agent was asked about this target (`<project name>/<branch>`).
+    pub key: String,
+    /// `None` when the agent was unavailable or failed: convert with the
+    /// operator prompt alone (UC-07a).
+    pub system_instruction: Option<String>,
+    /// The project has `.ai/sebenza/index.md`, so architect-first can run.
+    pub sebenza_workspace: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConvertInstructionsResponse {
+    pub job_id: Option<String>,
+    /// `succeeded`, `failed`, `unavailable` or `pending`.
+    pub status: &'static str,
+    /// True when no instruction is coming: convert with the operator prompt.
+    pub fallback: bool,
+    pub error: Option<String>,
+    pub targets: Vec<InstructionTargetWire>,
+    pub advisories: Vec<Advisory>,
+}
+
+/// How each target is named to the agent: `<project dir name>/<branch>`,
+/// or the full path where two targets would share a short name.
+fn instruction_keys(targets: &[InstructionTargetBody]) -> Vec<String> {
+    let short: Vec<String> = targets
+        .iter()
+        .map(|t| {
+            let name = std::path::Path::new(&t.project)
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_else(|| t.project.clone());
+            format!("{name}/{}", t.branch)
+        })
+        .collect();
+    short
+        .iter()
+        .zip(targets)
+        .map(|(key, t)| {
+            if short.iter().filter(|k| *k == key).count() > 1 {
+                format!("{}/{}", t.project.trim_end_matches('/'), t.branch)
+            } else {
+                key.clone()
+            }
+        })
+        .collect()
+}
+
+/// Longest the route waits for the instruction job past its own timeout.
+const INSTRUCTIONS_WAIT_SLACK_SECS: u64 = 15;
+/// Longest the route ever holds a request open.
+const INSTRUCTIONS_WAIT_CAP_SECS: u64 = 300;
+
+/// `POST /api/inbox/{id}/convert/instructions` — ask the system agent for a
+/// `systemInstruction` per target (FR-30), drawn from the item and its
+/// comments, for the convert dialog to show and the operator to edit.
+///
+/// Waits for the job, bounded by the agent's timeout plus slack, because
+/// the dialog has nothing to show until it ends. The answer is always a 200
+/// with a `status`:
+/// - `succeeded`: each target carries its `systemInstruction`;
+/// - `unavailable` (agent disabled, not running, or its queue is full) or
+///   `failed`: `fallback` is true and every instruction is null; convert
+///   with the operator prompt alone (UC-07a);
+/// - `pending`: the bound elapsed first; follow `jobId` on
+///   `GET …/agent/jobs/{jobId}` or the agent stream, whose convert output
+///   names each target by its `key`.
+///
+/// Nothing is written: the instructions reach a worktree only when the
+/// operator submits them with the convert request.
+pub async fn convert_instructions(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ConvertInstructionsBody>,
+) -> Result<Json<ConvertInstructionsResponse>, ApiError> {
+    use crate::services::inbox_convert::TargetError;
+    check(&headers, "POST")?;
+    let svc = inbox(&state);
+    let draft = match svc.get(&id)?.0 {
+        InboxDraftView::Parsed(d) => d,
+        InboxDraftView::Raw { .. } => {
+            return Err(ApiError::new(422, "the draft does not parse".to_string()));
+        }
+    };
+
+    // The operator may ask before writing a prompt; everything else is
+    // checked exactly as convert will check it.
+    let known: Vec<String> = state
+        .manager
+        .list()
+        .iter()
+        .map(|a| a.path.clone())
+        .collect();
+    let as_targets: Vec<ConversionTarget> = body
+        .targets
+        .iter()
+        .map(|t| ConversionTarget {
+            project_path: t.project.clone(),
+            branch: t.branch.clone(),
+            prompt: t.prompt.clone(),
+            ..Default::default()
+        })
+        .collect();
+    let errors: Vec<String> = validate_targets(&as_targets, &known)
+        .into_iter()
+        .filter(|e| !matches!(e, TargetError::EmptyPrompt { .. }))
+        .map(|e| e.to_string())
+        .collect();
+    if !errors.is_empty() {
+        return Err(ApiError::new(400, errors.join("; ")));
+    }
+
+    let advisories = item_secret_advisories(&svc, &id, &draft.body);
+    let drafted = draft_system_instructions(&state, &id, &body.targets, &headers).await?;
+    Ok(Json(ConvertInstructionsResponse {
+        job_id: drafted.job_id,
+        status: drafted.status,
+        fallback: drafted.fallback,
+        error: drafted.error,
+        targets: drafted.targets,
+        advisories,
+    }))
+}
+
+/// What one round of instruction drafting produced.
+struct DraftedInstructions {
+    job_id: Option<String>,
+    status: &'static str,
+    fallback: bool,
+    error: Option<String>,
+    targets: Vec<InstructionTargetWire>,
+}
+
+/// Ask the item's system agent for one instruction per target and wait for
+/// it, bounded. Never fails for agent reasons: an unavailable agent, a failed
+/// job, or the bound elapsing each come back as a status with no
+/// instructions, so convert can proceed without them (UC-07a).
+async fn draft_system_instructions(
+    state: &AppState,
+    id: &str,
+    body_targets: &[InstructionTargetBody],
+    headers: &HeaderMap,
+) -> Result<DraftedInstructions, ApiError> {
+    use crate::services::inbox_convert::SEBENZA_INDEX_REL_PATH;
+    use crate::services::system_agent::{JobInput, JobOutput, JobStatus};
+    let keys = instruction_keys(body_targets);
+    let mut targets: Vec<InstructionTargetWire> = body_targets
+        .iter()
+        .zip(&keys)
+        .map(|(t, key)| InstructionTargetWire {
+            project: t.project.clone(),
+            branch: t.branch.clone(),
+            key: key.clone(),
+            system_instruction: None,
+            sebenza_workspace: std::path::Path::new(&t.project)
+                .join(SEBENZA_INDEX_REL_PATH)
+                .is_file(),
+        })
+        .collect();
+    let respond = |job_id, status, fallback, error, targets| DraftedInstructions {
+        job_id,
+        status,
+        fallback,
+        error,
+        targets,
+    };
+
+    let operator_prompt = body_targets
+        .iter()
+        .zip(&keys)
+        .filter(|(t, _)| !t.prompt.trim().is_empty())
+        .map(|(t, key)| format!("{key}: {}", t.prompt.trim()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let input = JobInput::Convert {
+        targets: keys.clone(),
+        operator_prompt: (!operator_prompt.is_empty()).then_some(operator_prompt),
+    };
+    let agent = state.system_agent.clone();
+    let draft_id = id.to_string();
+    let enqueued = tokio::task::spawn_blocking(move || agent.enqueue(&draft_id, input))
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
+    let job_id = match enqueued {
+        Ok(job_id) => job_id,
+        Err(
+            e @ (EnqueueError::Disabled | EnqueueError::NoRuntime | EnqueueError::QueueFull(_)),
+        ) => {
+            tracing::info!(draft_id = %id, "convert instructions unavailable: {e}");
+            return Ok(respond(
+                None,
+                "unavailable",
+                true,
+                Some(e.to_string()),
+                targets,
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    tracing::info!(
+        audit = "inbox.agent.convert_instructions",
+        draft_id = %id,
+        job_id = %job_id,
+        targets = keys.len(),
+        caller = caller_marker(headers).as_deref().unwrap_or(""),
+        "convert instructions requested"
+    );
+
+    let bound = std::time::Duration::from_secs(
+        state
+            .system_agent
+            .config()
+            .timeout_secs
+            .saturating_add(INSTRUCTIONS_WAIT_SLACK_SECS)
+            .min(INSTRUCTIONS_WAIT_CAP_SECS),
+    );
+    let job = match tokio::time::timeout(bound, state.system_agent.wait(&job_id)).await {
+        Ok(Some(job)) => job,
+        Ok(None) => {
+            return Ok(respond(
+                Some(job_id),
+                "failed",
+                true,
+                Some("the instruction job was lost".to_string()),
+                targets,
+            ));
+        }
+        Err(_) => return Ok(respond(Some(job_id), "pending", false, None, targets)),
+    };
+    match (job.status, &job.output) {
+        (JobStatus::Succeeded, Some(JobOutput::Convert(out))) => {
+            for target in &mut targets {
+                target.system_instruction = out
+                    .targets
+                    .iter()
+                    .find(|o| o.project == target.key)
+                    .map(|o| o.system_instruction.clone());
+            }
+            Ok(respond(Some(job_id), "succeeded", false, None, targets))
+        }
+        _ => Ok(respond(
+            Some(job_id),
+            "failed",
+            true,
+            Some(
+                job.error
+                    .unwrap_or_else(|| "the instruction job produced no instructions".into()),
+            ),
+            targets,
+        )),
+    }
+}
+
+/// Fill in a system instruction for every target the operator did not
+/// review one for, so a plain "Create" still briefs each worktree from the
+/// item (UC-07). Targets that already carry one keep it; on any agent failure
+/// the targets are returned unchanged and conversion proceeds (UC-07a).
+async fn fill_missing_instructions(
+    state: &AppState,
+    id: &str,
+    mut targets: Vec<ConversionTarget>,
+    headers: &HeaderMap,
+) -> Vec<ConversionTarget> {
+    let missing: Vec<usize> = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, t)| t.system_instruction.is_none())
+        .map(|(i, _)| i)
+        .collect();
+    if missing.is_empty() {
+        return targets;
+    }
+    let ask: Vec<InstructionTargetBody> = missing
+        .iter()
+        .map(|&i| InstructionTargetBody {
+            project: targets[i].project_path.clone(),
+            branch: targets[i].branch.clone(),
+            prompt: targets[i].prompt.clone(),
+        })
+        .collect();
+    match draft_system_instructions(state, id, &ask, headers).await {
+        Ok(drafted) => {
+            if drafted.status != "succeeded" {
+                tracing::info!(
+                    draft_id = %id,
+                    status = drafted.status,
+                    error = drafted.error.as_deref().unwrap_or(""),
+                    "convert: no system instructions, launching with the item note and operator prompt"
+                );
+            }
+            for (&i, wire) in missing.iter().zip(drafted.targets) {
+                targets[i].system_instruction = wire.system_instruction;
+            }
+        }
+        Err(e) => {
+            tracing::warn!(draft_id = %id, "convert: drafting instructions failed: {}", e.message)
+        }
+    }
+    targets
+}
+
+/// `POST /api/inbox/{id}/comments/{eventId}/redact` — tombstone a comment,
+/// request, proposal or advice body (FR-11). The original line stays in the
+/// log; every read masks it. Redacting twice returns the first tombstone.
+pub async fn redact_comment(
+    State(state): State<AppState>,
+    Path((id, event_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let target = event_id.clone();
+    let tombstone = blocking(move || svc.redact(&id, &target, caller)).await?;
+    Ok(Json(serde_json::json!({
+        "eventId": tombstone.event_id,
+        "targetEventId": event_id,
+    })))
+}
+
+/// Handle a `/api/runtime/events` body if it is inbox ingress
+/// (`sebenza-agentctl request|comment`). `None` when it is an ordinary
+/// runtime event. The bearer check has already happened.
+pub async fn inbox_runtime_event(
+    state: &AppState,
+    raw: &serde_json::Value,
+) -> Option<Result<Json<serde_json::Value>, ApiError>> {
+    let ingress = match parse_worktree_ingress(raw)? {
+        Ok(ingress) => ingress,
+        Err(msg) => return Some(Err(ApiError::new(400, msg))),
+    };
+    let svc = inbox(state);
+    let outcome = tokio::task::spawn_blocking(move || svc.ingest(&ingress)).await;
+    Some(match outcome {
+        Err(_) => Err(ApiError::new(500, "task panicked".to_string())),
+        Ok(Err(e)) => Err(e.into()),
+        Ok(Ok(event)) => Ok(Json(serde_json::json!({
+            "ok": true,
+            "eventId": event.event_id,
+            "requestId": request_id_of(&event.kind),
+        }))),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Route-level tests: each handler is driven directly with a tempdir
+    //! store, a pinned control token, and a capturing audit sink, so nothing
+    //! touches `~/.ai/sebenza` or the operator's real token.
+
+    use super::*;
+    use crate::adapters::inbox_store::{FrontmatterAuthor, FrontmatterPatch, InboxStore};
+    use crate::adapters::projects_registry::ProjectsRegistry;
+    use crate::domain::inbox_events::{AuthorKind, InboxEventKind};
+    use crate::services::inbox_convert::ConversionOutcome;
+    use crate::services::inbox_limits::{InboxLimits, RateLimit};
+    use crate::services::inbox_service::{AuditRecord, AuditSink};
+    use axum::http::HeaderValue;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TOKEN: &str = "route-test-token";
+    const HOST: &str = "127.0.0.1:5111";
+    static SEQ: AtomicUsize = AtomicUsize::new(0);
+
+    #[derive(Default)]
+    struct Captured(Mutex<Vec<AuditRecord>>);
+    impl AuditSink for Captured {
+        fn record(&self, r: &AuditRecord) {
+            self.0.lock().unwrap().push(r.clone());
+        }
+    }
+
+    /// Records every paste; never touches tmux.
+    #[derive(Default)]
+    struct FakePane(Mutex<Vec<(crate::domain::inbox_events::WorktreeKey, String)>>);
+    impl common::services::resolution_delivery::PaneSink for FakePane {
+        fn send(
+            &self,
+            worktree: &crate::domain::inbox_events::WorktreeKey,
+            text: &str,
+        ) -> Result<(), String> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((worktree.clone(), text.to_string()));
+            Ok(())
+        }
+    }
+
+    struct Fixture {
+        state: AppState,
+        store: InboxStore,
+        audit: Arc<Captured>,
+        pane: Arc<FakePane>,
+        base: std::path::PathBuf,
+        /// The stub agent's directory, when the system agent is enabled.
+        stub_dir: Option<std::path::PathBuf>,
+    }
+
+    fn fixture_with(limits: InboxLimits) -> Fixture {
+        fixture_inner(limits, None)
+    }
+
+    /// A fixture whose system agent is enabled and runs the stub CLI in
+    /// `mode`, with the production result sink.
+    fn agent_fixture(mode: &str) -> Fixture {
+        fixture_inner(InboxLimits::default(), Some(mode))
+    }
+
+    fn fixture_inner(limits: InboxLimits, agent_mode: Option<&str>) -> Fixture {
+        crate::adapters::control_token::pin_control_token(TOKEN);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let base =
+            std::env::temp_dir().join(format!("sebenza-inbox-routes-{}-{}", std::process::id(), n));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).expect("temp base");
+        let audit = Arc::new(Captured::default());
+        let inbox = InboxService::new(
+            InboxStore::with_dir(base.join("inbox")),
+            ProjectsRegistry::with_file(base.join("projects.json")),
+        )
+        .with_limits(limits)
+        .with_audit_sink(audit.clone());
+        let pane = Arc::new(FakePane::default());
+        inbox.set_pane_sink(pane.clone());
+        let inbox = Arc::new(inbox);
+        let agent_stream = Arc::new(crate::services::agent_stream::AgentStreamManager::new());
+        // Disabled unless asked: then only ever the stub CLI.
+        let (agent_config, agent_options, stub_dir) = match agent_mode {
+            Some(mode) => {
+                let (c, o, dir) = crate::services::system_agent::stub_agent_for_tests(&base, mode);
+                (c, o, Some(dir))
+            }
+            None => (Default::default(), Default::default(), None),
+        };
+        let system_agent = crate::services::system_agent::SystemAgentService::new(
+            agent_config,
+            inbox.clone(),
+            agent_stream.clone(),
+            agent_options,
+        );
+        if stub_dir.is_some() {
+            system_agent.set_sink(Arc::new(
+                crate::services::system_agent::apply::TriageApplier::new(inbox.clone()),
+            ));
+        }
+        let state = AppState {
+            manager: Arc::new(crate::services::project_manager::ProjectManager::new(
+                ProjectsRegistry::with_file(base.join("server-projects.json")),
+                "http://127.0.0.1:5111".into(),
+            )),
+            terminal: Arc::new(crate::adapters::terminal::TerminalManager::new(0)),
+            agent_stream,
+            project_inits: Arc::new(
+                crate::services::project_init_service::ProjectInitTracker::new(),
+            ),
+            inbox,
+            inbox_jobs: Arc::new(crate::services::inbox_jobs::ConversionJobManager::new()),
+            system_agent,
+            frontend_dist: None,
+        };
+        Fixture {
+            state,
+            store: InboxStore::with_dir(base.join("inbox")),
+            audit,
+            pane,
+            base,
+            stub_dir,
+        }
+    }
+
+    fn fixture() -> Fixture {
+        fixture_with(InboxLimits::default())
+    }
+
+    /// A same-origin, token-bearing request, as the SPA sends it.
+    fn good_headers() -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert(
+            "authorization",
+            HeaderValue::from_static("Bearer route-test-token"),
+        );
+        h.insert("host", HeaderValue::from_static(HOST));
+        h.insert("origin", HeaderValue::from_static("http://127.0.0.1:5111"));
+        h
+    }
+
+    fn without(mut h: HeaderMap, name: &str) -> HeaderMap {
+        h.remove(name);
+        h
+    }
+
+    fn with(mut h: HeaderMap, name: &'static str, value: &'static str) -> HeaderMap {
+        h.insert(name, HeaderValue::from_static(value));
+        h
+    }
+
+    fn new_draft(f: &Fixture) -> String {
+        f.state.inbox.create("Idea").expect("create").id
+    }
+
+    fn convert_into(f: &Fixture, id: &str, project: &str, branch: &str, path: &str) {
+        let target = crate::services::inbox_convert::ConversionTarget {
+            project_path: project.into(),
+            branch: branch.into(),
+            base_branch: None,
+            agent_id: None,
+            prompt: "go".into(),
+            system_instruction: None,
+            architect_first: None,
+        };
+        let mut all = match f.store.get(id).expect("get") {
+            InboxDraftView::Parsed(d) => d.frontmatter.conversions,
+            _ => panic!("unparsed"),
+        };
+        all.push(
+            serde_yaml::to_value(ConversionOutcome::created(&target, path.into(), "t".into()))
+                .unwrap(),
+        );
+        f.store
+            .merge_frontmatter(
+                id,
+                FrontmatterAuthor::Job,
+                FrontmatterPatch {
+                    conversions: Some(all),
+                    ..Default::default()
+                },
+            )
+            .expect("record conversion");
+    }
+
+    fn converted(f: &Fixture) -> String {
+        let id = new_draft(f);
+        convert_into(f, &id, "/code/acme-demo", "feat-x", "/wt/acme-demo/feat-x");
+        id
+    }
+
+    async fn patch(
+        f: &Fixture,
+        id: &str,
+        h: HeaderMap,
+        body: serde_json::Value,
+    ) -> Result<DraftWire, ApiError> {
+        patch_priority(State(f.state.clone()), Path(id.to_string()), h, Json(body))
+            .await
+            .map(|Json(w)| w)
+    }
+
+    async fn comment(
+        f: &Fixture,
+        id: &str,
+        h: HeaderMap,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ApiError> {
+        let body: PostCommentBody = serde_json::from_value(body).expect("comment body");
+        post_comment(State(f.state.clone()), Path(id.to_string()), h, Json(body))
+            .await
+            .map(|Json(v)| v)
+    }
+
+    /// POST a raw body to `/api/runtime/events`, as agentctl does.
+    async fn runtime(
+        f: &Fixture,
+        bearer: Option<&str>,
+        raw: Vec<u8>,
+    ) -> Result<serde_json::Value, ApiError> {
+        let mut h = HeaderMap::new();
+        if let Some(t) = bearer {
+            h.insert(
+                "authorization",
+                HeaderValue::from_str(&format!("Bearer {t}")).unwrap(),
+            );
+        }
+        crate::server::runtime_event(State(f.state.clone()), h, axum::body::Bytes::from(raw))
+            .await
+            .map(|Json(v)| v)
+    }
+
+    fn request_payload(id: &str, path: &str, branch: &str, body: &str) -> Vec<u8> {
+        serde_json::json!({
+            "type": "inbox.request",
+            "worktreeId": "wt-id-1",
+            "branch": branch,
+            "draftId": id,
+            "worktreePath": path,
+            "title": "Need a decision",
+            "body": body,
+            "caller": "worktree",
+        })
+        .to_string()
+        .into_bytes()
+    }
+
+    fn status(r: Result<impl Sized, ApiError>) -> u16 {
+        match r {
+            Ok(_) => 200,
+            Err(e) => e.status.as_u16(),
+        }
+    }
+
+    // --- TS-06: priority ------------------------------------------------------
+
+    #[tokio::test]
+    async fn priority_override_then_clear() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let w = patch(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"priority": "P0"}),
+        )
+        .await
+        .expect("set");
+        assert_eq!(w.priority, Priority::P0);
+        assert_eq!(w.priority_source, PrioritySource::Operator);
+
+        let w = patch(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"priority": null}),
+        )
+        .await
+        .expect("clear");
+        assert_eq!(w.priority, Priority::P0);
+        assert_eq!(
+            w.priority_source,
+            PrioritySource::Agent,
+            "control is back with the agent"
+        );
+
+        let (view, _) = f.state.inbox.get(&id).expect("get");
+        let InboxDraftView::Parsed(d) = view else {
+            panic!("parsed")
+        };
+        assert_eq!(d.frontmatter.priority_source, PrioritySource::Agent);
+
+        let actions: Vec<_> = f.audit.0.lock().unwrap().iter().map(|r| r.action).collect();
+        assert_eq!(
+            actions,
+            ["inbox.priority.changed", "inbox.priority.override_cleared"]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_priority_patch_without_the_key_or_with_a_bad_value_is_a_400() {
+        let f = fixture();
+        let id = new_draft(&f);
+        assert_eq!(
+            status(patch(&f, &id, good_headers(), serde_json::json!({})).await),
+            400
+        );
+        assert_eq!(
+            status(
+                patch(
+                    &f,
+                    &id,
+                    good_headers(),
+                    serde_json::json!({"priority": "P9"})
+                )
+                .await
+            ),
+            400
+        );
+    }
+
+    #[tokio::test]
+    async fn the_list_and_the_item_carry_priority_and_sort_by_it() {
+        let f = fixture();
+        let first = new_draft(&f);
+        let _second = new_draft(&f);
+        patch(
+            &f,
+            &first,
+            good_headers(),
+            serde_json::json!({"priority": "P0"}),
+        )
+        .await
+        .expect("set");
+
+        let Json(list) = list_drafts(State(f.state.clone()), Query(ListParams::default()))
+            .await
+            .expect("list");
+        let drafts = list["drafts"].as_array().expect("drafts");
+        assert_eq!(drafts[0]["id"], first.as_str(), "P0 sorts first");
+        assert_eq!(drafts[0]["priority"], "P0");
+        assert_eq!(drafts[0]["prioritySource"], "operator");
+        assert_eq!(drafts[1]["priority"], "P2");
+        // The UI orders by created and flags items needing the operator.
+        assert!(
+            drafts[0]["createdAt"]
+                .as_str()
+                .is_some_and(|c| !c.is_empty())
+        );
+        assert_eq!(drafts[0]["flagged"], false);
+
+        let Json(item) = get_draft(State(f.state.clone()), Path(first.clone()))
+            .await
+            .expect("get");
+        assert_eq!(item.priority, Priority::P0);
+    }
+
+    // --- TS-32: the token in a worktree's hands (accepted T-01) --------------
+
+    #[tokio::test]
+    async fn a_worktree_caller_with_the_token_can_set_priority_and_is_marked() {
+        let f = fixture();
+        let id = new_draft(&f);
+        // What a worktree agent could do with the token it holds: no Origin,
+        // its own marker. Accepted residual risk, so this succeeds.
+        let h = with(
+            without(good_headers(), "origin"),
+            "x-sebenza-caller",
+            "worktree",
+        );
+        patch(&f, &id, h, serde_json::json!({"priority": "P0"}))
+            .await
+            .expect("accepted: succeeds");
+
+        let records = f.audit.0.lock().unwrap().clone();
+        assert_eq!(records[0].actor, AuthorKind::Operator);
+        assert_eq!(records[0].caller.as_deref(), Some("worktree"));
+        let events = f.state.inbox.events(&id).expect("events");
+        assert_eq!(events.last().unwrap().caller.as_deref(), Some("worktree"));
+    }
+
+    // --- TS-41: guard on every new mutating route ----------------------------
+
+    #[tokio::test]
+    async fn new_routes_refuse_a_missing_token_a_foreign_origin_and_a_bad_host() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let cases = [
+            (without(good_headers(), "authorization"), 401),
+            (with(good_headers(), "authorization", "Bearer wrong"), 401),
+            (with(good_headers(), "origin", "http://evil.test"), 403),
+            // DNS rebinding: Host and Origin agree, but neither is us.
+            (
+                with(
+                    with(good_headers(), "host", "evil.test:5111"),
+                    "origin",
+                    "http://evil.test:5111",
+                ),
+                403,
+            ),
+            (without(good_headers(), "host"), 403),
+        ];
+        for (h, want) in cases {
+            assert_eq!(
+                status(patch(&f, &id, h.clone(), serde_json::json!({"priority": "P0"})).await),
+                want,
+                "PATCH priority {h:?}"
+            );
+            assert_eq!(
+                status(comment(&f, &id, h.clone(), serde_json::json!({"body": "hi"})).await),
+                want,
+                "POST comments {h:?}"
+            );
+        }
+        assert!(
+            f.state.inbox.events(&id).expect("events").is_empty(),
+            "nothing written"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_token_route_refuses_a_rebinding_host() {
+        let _f = fixture();
+        let h = with(
+            with(HeaderMap::new(), "host", "evil.test:5111"),
+            "origin",
+            "http://evil.test:5111",
+        );
+        assert_eq!(status(inbox_session(h).await), 403);
+        let ok = with(HeaderMap::new(), "host", HOST);
+        assert_eq!(status(inbox_session(ok).await), 200);
+    }
+
+    // --- comments -------------------------------------------------------------
+
+    #[tokio::test]
+    async fn an_operator_comment_round_trips_into_its_group() {
+        let f = fixture();
+        let id = converted(&f);
+        comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "overall"}),
+        )
+        .await
+        .expect("overall");
+        let v = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "here", "worktree": {"project": "/code/acme-demo", "branch": "feat-x"}}),
+        )
+        .await
+        .expect("worktree");
+        assert_eq!(v["comment"]["body"], "here");
+
+        let Json(groups) = list_comments(State(f.state.clone()), Path(id.clone()))
+            .await
+            .expect("groups");
+        assert_eq!(groups.overall.len(), 1);
+        assert_eq!(groups.worktrees[0].comments[0].body, "here");
+
+        let stray = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "x", "worktree": {"project": "/nope", "branch": "b"}}),
+        )
+        .await;
+        assert_eq!(status(stray), 400);
+    }
+
+    #[tokio::test]
+    async fn an_oversized_comment_is_a_413() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let huge = "x".repeat(crate::services::inbox_limits::MAX_BODY_BYTES + 1);
+        assert_eq!(
+            status(comment(&f, &id, good_headers(), serde_json::json!({"body": huge})).await),
+            413
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_draft_is_a_404() {
+        let f = fixture();
+        let missing = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        assert_eq!(
+            status(list_comments(State(f.state.clone()), Path(missing.into())).await),
+            404
+        );
+        assert_eq!(
+            status(list_requests(State(f.state.clone()), Path(missing.into())).await),
+            404
+        );
+    }
+
+    // --- TS-11 / TS-12 / TS-37 / TS-13: agentctl ingress ----------------------
+
+    #[tokio::test]
+    async fn an_agentctl_request_lands_open_in_its_worktree_group() {
+        let f = fixture();
+        let id = converted(&f);
+        let v = runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", "Which db?"),
+        )
+        .await
+        .expect("accepted");
+        assert_eq!(v["ok"], true);
+        assert!(v["requestId"].is_string());
+
+        let Json(list) = list_requests(State(f.state.clone()), Path(id.clone()))
+            .await
+            .expect("requests");
+        let r = &list["requests"][0];
+        assert_eq!(r["status"], "open");
+        assert_eq!(r["worktree"]["project"], "/code/acme-demo");
+        assert_eq!(r["worktree"]["branch"], "feat-x");
+
+        let events = f.state.inbox.events(&id).expect("events");
+        assert_eq!(events[0].author, AuthorKind::WorktreeAgent);
+        assert!(matches!(
+            events[0].kind,
+            InboxEventKind::RequestOpened { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_agentctl_comment_lands_in_its_worktree_group() {
+        let f = fixture();
+        let id = converted(&f);
+        let raw = serde_json::json!({
+            "type": "inbox.comment", "worktreeId": "wt-id-1", "branch": "feat-x",
+            "draftId": id, "worktreePath": "/wt/acme-demo/feat-x", "body": "progress",
+        });
+        runtime(&f, Some(TOKEN), raw.to_string().into_bytes())
+            .await
+            .expect("accepted");
+        let groups = f.state.inbox.list_comments(&id).expect("groups");
+        assert_eq!(groups.worktrees[0].comments[0].body, "progress");
+    }
+
+    #[tokio::test]
+    async fn ingress_without_the_token_is_a_401() {
+        let f = fixture();
+        let id = converted(&f);
+        let r = runtime(
+            &f,
+            None,
+            request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", "b"),
+        )
+        .await;
+        assert_eq!(status(r), 401);
+        assert!(f.state.inbox.events(&id).expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_request_from_a_worktree_not_in_conversions_is_refused() {
+        let f = fixture();
+        let id = converted(&f);
+        let r = runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/rogue", "feat-x", "b"),
+        )
+        .await;
+        assert_eq!(status(r), 403);
+        assert!(f.state.inbox.events(&id).expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_forged_origin_naming_another_item_is_refused() {
+        let f = fixture();
+        let _mine = converted(&f);
+        let theirs = new_draft(&f);
+        convert_into(&f, &theirs, "/code/beta", "feat-y", "/wt/beta/feat-y");
+        let r = runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&theirs, "/wt/acme-demo/feat-x", "feat-x", "b"),
+        )
+        .await;
+        assert_eq!(status(r), 403);
+        assert!(f.state.inbox.events(&theirs).expect("events").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_flood_is_capped_by_size_rate_and_depth() {
+        let f = fixture_with(InboxLimits {
+            requests: RateLimit {
+                max: 2,
+                window: std::time::Duration::from_secs(60),
+            },
+            ..InboxLimits::default()
+        });
+        let id = converted(&f);
+        let ok = || request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", "b");
+
+        let huge = "x".repeat(crate::services::inbox_limits::MAX_INGRESS_BYTES + 1);
+        let r = runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", &huge),
+        )
+        .await;
+        assert_eq!(status(r), 413, "raw payload over the ingress cap");
+
+        let body_over = "x".repeat(crate::services::inbox_limits::MAX_BODY_BYTES + 1);
+        let r = runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", &body_over),
+        )
+        .await;
+        assert_eq!(status(r), 413, "body over the field cap");
+
+        assert_eq!(status(runtime(&f, Some(TOKEN), ok()).await), 200);
+        assert_eq!(status(runtime(&f, Some(TOKEN), ok()).await), 200);
+        assert_eq!(status(runtime(&f, Some(TOKEN), ok()).await), 429);
+        assert_eq!(f.state.inbox.list_requests(&id).unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_malformed_inbox_event_is_a_400() {
+        let f = fixture();
+        let raw = serde_json::json!({"type": "inbox.request", "branch": "b"});
+        assert_eq!(
+            status(runtime(&f, Some(TOKEN), raw.to_string().into_bytes()).await),
+            400
+        );
+    }
+
+    // --- Decisions, retry, jobs and redaction (phase 4) -----------------------
+
+    /// A converted item with one request from feat-x, proposed by triage.
+    fn proposed(f: &Fixture, text: &str) -> (String, String, String) {
+        let id = converted(f);
+        let e = f
+            .state
+            .inbox
+            .open_request(
+                &id,
+                crate::adapters::inbox_store::EventAuthor::worktree_agent(),
+                crate::domain::inbox_events::WorktreeKey {
+                    project: "/code/acme-demo".into(),
+                    branch: "feat-x".into(),
+                },
+                "Need a decision",
+                "Which loader?",
+            )
+            .expect("request");
+        let rid = request_id_of(&e.kind).unwrap().to_string();
+        f.state
+            .inbox
+            .record_proposal(&id, &rid, text, "r")
+            .expect("proposal")
+            .expect("open");
+        let hash = f
+            .state
+            .inbox
+            .request(&id, &rid)
+            .unwrap()
+            .proposal_hash
+            .unwrap();
+        (id, rid, hash)
+    }
+
+    fn ids(id: &str, rid: &str) -> Path<(String, String)> {
+        Path((id.to_string(), rid.to_string()))
+    }
+
+    async fn confirm(
+        f: &Fixture,
+        id: &str,
+        rid: &str,
+        h: HeaderMap,
+        body: serde_json::Value,
+    ) -> Result<serde_json::Value, ApiError> {
+        let body: ConfirmBody = serde_json::from_value(body).expect("confirm body");
+        confirm_request(State(f.state.clone()), ids(id, rid), h, Json(body))
+            .await
+            .map(|Json(v)| v)
+    }
+
+    async fn reject(
+        f: &Fixture,
+        id: &str,
+        rid: &str,
+        h: HeaderMap,
+        reason: &str,
+    ) -> Result<serde_json::Value, ApiError> {
+        reject_request(
+            State(f.state.clone()),
+            ids(id, rid),
+            h,
+            Json(RejectBody {
+                reason: reason.into(),
+            }),
+        )
+        .await
+        .map(|Json(v)| v)
+    }
+
+    // TS-25 over HTTP: confirm delivers once and returns the resolved request.
+    #[tokio::test]
+    async fn confirm_delivers_and_returns_the_request() {
+        let f = fixture();
+        let (id, rid, hash) = proposed(&f, "Use the loader.");
+        let v = confirm(
+            &f,
+            &id,
+            &rid,
+            good_headers(),
+            serde_json::json!({"contentHash": hash}),
+        )
+        .await
+        .expect("confirm");
+        assert_eq!(v["request"]["status"], "resolved");
+        assert_eq!(v["request"]["attempts"], 1);
+        assert_eq!(f.pane.0.lock().unwrap().len(), 1);
+    }
+
+    // TS-42 / TS-31 over HTTP: a stale or tampered hash is a 409; nothing sent.
+    #[tokio::test]
+    async fn confirm_with_the_wrong_hash_is_a_409() {
+        let f = fixture();
+        let (id, rid, _) = proposed(&f, "Use the loader.");
+        let r = confirm(
+            &f,
+            &id,
+            &rid,
+            good_headers(),
+            serde_json::json!({"contentHash": "deadbeef"}),
+        )
+        .await;
+        assert_eq!(status(r), 409);
+        assert!(f.pane.0.lock().unwrap().is_empty());
+    }
+
+    // TS-61 over HTTP: no proposal; the operator authors the resolution.
+    #[tokio::test]
+    async fn an_authored_resolution_is_confirmed_over_http() {
+        let f = fixture();
+        let (id, rid, hash) = proposed(&f, "Use the loader.");
+        reject(&f, &id, &rid, good_headers(), "no")
+            .await
+            .expect("reject");
+        let text = "Use tests/helpers/loader.rs";
+        let v = confirm(
+            &f,
+            &id,
+            &rid,
+            good_headers(),
+            serde_json::json!({
+                "body": text,
+                "contentHash": crate::domain::inbox_events::content_hash(text),
+            }),
+        )
+        .await
+        .expect("confirm");
+        assert_eq!(v["request"]["status"], "resolved");
+        assert_eq!(v["request"]["confirmedText"], text);
+        let _ = hash;
+    }
+
+    // TS-32 (confirm half): a worktree caller with the token is accepted
+    // (T-01) and audited as operator with its marker.
+    #[tokio::test]
+    async fn a_worktree_caller_with_the_token_can_confirm_and_is_marked() {
+        let f = fixture();
+        let (id, rid, hash) = proposed(&f, "Use the loader.");
+        let h = with(good_headers(), "x-sebenza-caller", "worktree");
+        confirm(&f, &id, &rid, h, serde_json::json!({"contentHash": hash}))
+            .await
+            .expect("accepted residual T-01");
+        let audit = f.audit.0.lock().unwrap();
+        let rec = audit
+            .iter()
+            .find(|r| r.action == "inbox.resolution.confirmed")
+            .expect("audited");
+        assert_eq!(rec.actor, AuthorKind::Operator);
+        assert_eq!(rec.caller.as_deref(), Some("worktree"));
+    }
+
+    // TS-29 over HTTP.
+    #[tokio::test]
+    async fn reject_reopens_with_the_reason() {
+        let f = fixture();
+        let (id, rid, _) = proposed(&f, "Use the loader.");
+        let v = reject(&f, &id, &rid, good_headers(), "Wrong loader")
+            .await
+            .expect("reject");
+        assert_eq!(v["request"]["status"], "open");
+        assert_eq!(v["request"]["lastReason"], "Wrong loader");
+        assert_eq!(status(reject(&f, &id, &rid, good_headers(), "").await), 400);
+        assert!(f.pane.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn redeliver_needs_a_failed_delivery_and_unknown_requests_are_404() {
+        let f = fixture();
+        let (id, rid, _) = proposed(&f, "Use the loader.");
+        let r = redeliver_request(State(f.state.clone()), ids(&id, &rid), good_headers()).await;
+        assert_eq!(status(r), 409);
+        let r = redeliver_request(State(f.state.clone()), ids(&id, "ghost"), good_headers()).await;
+        assert_eq!(status(r), 404);
+        assert!(f.pane.0.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn retry_triage_with_the_agent_disabled_is_a_503() {
+        let f = fixture();
+        let (id, rid, _) = proposed(&f, "x");
+        f.state.inbox.reject_request(&id, &rid, "no", None).unwrap();
+        let r = retry_triage(State(f.state.clone()), ids(&id, &rid), good_headers()).await;
+        assert_eq!(status(r), 503);
+        let r = retry_triage(State(f.state.clone()), ids(&id, "ghost"), good_headers()).await;
+        assert_eq!(status(r), 503, "the kill switch is checked first");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_agent_job_is_a_404_and_a_bad_host_a_403() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let r = get_agent_job(State(f.state.clone()), ids(&id, "01NOJOB"), good_headers()).await;
+        assert_eq!(status(r), 404);
+        let h = with(good_headers(), "host", "evil.test:5111");
+        let r = get_agent_job(State(f.state.clone()), ids(&id, "01NOJOB"), h).await;
+        assert_eq!(status(r), 403);
+    }
+
+    // TS-62 over HTTP: redaction masks the comment in the API.
+    #[tokio::test]
+    async fn redact_masks_the_comment() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let v = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "oops sk-TEST-0000000000000000000000"}),
+        )
+        .await
+        .expect("comment");
+        assert_eq!(v["comment"]["warnings"][0], "OpenAI-style key");
+        let event_id = v["comment"]["eventId"].as_str().unwrap().to_string();
+        let r = redact_comment(State(f.state.clone()), ids(&id, &event_id), good_headers())
+            .await
+            .map(|Json(v)| v)
+            .expect("redact");
+        assert_eq!(r["targetEventId"], event_id);
+        let groups = f.state.inbox.list_comments(&id).unwrap();
+        assert_eq!(
+            groups.overall[0].body,
+            crate::domain::inbox_events::REDACTED_BODY
+        );
+        let r = redact_comment(State(f.state.clone()), ids(&id, "01GHOST"), good_headers()).await;
+        assert_eq!(status(r), 404);
+    }
+
+    // TS-41: every new mutating route refuses a missing token, a foreign
+    // origin and a bad host, and writes nothing.
+    #[tokio::test]
+    async fn decision_routes_refuse_a_missing_token_a_foreign_origin_and_a_bad_host() {
+        let f = fixture();
+        let (id, rid, hash) = proposed(&f, "Use the loader.");
+        let before = f.store.read_events(&id).unwrap().len();
+        let cases = [
+            (without(good_headers(), "authorization"), 401),
+            (with(good_headers(), "origin", "http://evil.test"), 403),
+            (
+                with(
+                    with(good_headers(), "host", "evil.test:5111"),
+                    "origin",
+                    "http://evil.test:5111",
+                ),
+                403,
+            ),
+        ];
+        for (h, want) in cases {
+            let body = serde_json::json!({"contentHash": hash});
+            assert_eq!(status(confirm(&f, &id, &rid, h.clone(), body).await), want);
+            assert_eq!(status(reject(&f, &id, &rid, h.clone(), "no").await), want);
+            let r = redeliver_request(State(f.state.clone()), ids(&id, &rid), h.clone()).await;
+            assert_eq!(status(r), want);
+            let r = retry_triage(State(f.state.clone()), ids(&id, &rid), h.clone()).await;
+            assert_eq!(status(r), want);
+            let r = redact_comment(State(f.state.clone()), ids(&id, &rid), h.clone()).await;
+            assert_eq!(status(r), want);
+        }
+        assert_eq!(
+            f.store.read_events(&id).unwrap().len(),
+            before,
+            "nothing written"
+        );
+        assert!(f.pane.0.lock().unwrap().is_empty());
+    }
+
+    /// TS-31: enumerate every inbox route the router mounts. Only the
+    /// confirm and redeliver handlers call into delivery, and they are
+    /// mounted only at the confirm and redeliver paths; nothing else in the
+    /// server calls confirm or redeliver.
+    #[test]
+    fn only_confirm_and_redeliver_routes_reach_delivery() {
+        let server = include_str!("server.rs");
+        let mut routes: Vec<(String, Vec<String>)> = Vec::new();
+        for chunk in server.split(".route(").skip(1) {
+            let Some(start) = chunk.find('"') else {
+                continue;
+            };
+            let path: String = chunk[start + 1..]
+                .chars()
+                .take_while(|c| *c != '"')
+                .collect();
+            if !path.starts_with("/api/inbox") {
+                continue;
+            }
+            let handlers = chunk
+                .match_indices("crate::inbox_routes::")
+                .map(|(i, m)| {
+                    chunk[i + m.len()..]
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect::<String>()
+                })
+                .collect();
+            routes.push((path, handlers));
+        }
+        assert!(routes.len() >= 16, "found {} inbox routes", routes.len());
+
+        let src = include_str!("inbox_routes.rs");
+        let src = &src[..src.find("#[cfg(test)]").unwrap()];
+        let delivering: Vec<String> = src
+            .split("pub async fn ")
+            .skip(1)
+            .filter(|body| body.contains(".confirm_resolution(") || body.contains(".redeliver("))
+            .map(|body| {
+                body.chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect()
+            })
+            .collect();
+        assert_eq!(delivering, ["confirm_request", "redeliver_request"]);
+        for (path, handlers) in &routes {
+            for h in handlers.iter().filter(|h| delivering.contains(h)) {
+                assert!(
+                    path.ends_with("/confirm") || path.ends_with("/redeliver"),
+                    "{h} mounted at {path}"
+                );
+            }
+        }
+        for (name, other) in [
+            ("server.rs", server),
+            ("inbox_runner.rs", include_str!("inbox_runner.rs")),
+            ("main.rs", include_str!("main.rs")),
+            (
+                "system_agent/mod.rs",
+                include_str!("services/system_agent/mod.rs"),
+            ),
+            (
+                "system_agent/apply.rs",
+                include_str!("services/system_agent/apply.rs"),
+            ),
+            (
+                "pane_delivery.rs",
+                include_str!("services/pane_delivery.rs"),
+            ),
+        ] {
+            for call in [".confirm_resolution(", ".redeliver("] {
+                assert!(!other.contains(call), "{name} calls {call}");
+            }
+        }
+    }
+
+    // --- Draft help and conversion instructions ----------------------------
+
+    use crate::services::system_agent::{JobRecord as AgentJob, JobStatus};
+
+    async fn finish(f: &Fixture, job_id: &str) -> AgentJob {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            f.state.system_agent.wait(job_id),
+        )
+        .await
+        .expect("job finished in time")
+        .expect("known job")
+    }
+
+    fn draft_bytes(f: &Fixture, id: &str) -> Vec<u8> {
+        std::fs::read(f.base.join("inbox").join(format!("{id}.md"))).expect("draft file")
+    }
+
+    fn stub_prompts(f: &Fixture) -> Vec<String> {
+        let log = f.stub_dir.as_ref().expect("stub").join("log");
+        let mut out = vec![];
+        for entry in std::fs::read_dir(log).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with("prompt.") {
+                out.push(std::fs::read_to_string(entry.path()).unwrap());
+            }
+        }
+        out
+    }
+
+    async fn body_hash(f: &Fixture, id: &str) -> String {
+        get_draft(State(f.state.clone()), Path(id.to_string()))
+            .await
+            .expect("get")
+            .0
+            .body_hash
+    }
+
+    async fn save(
+        f: &Fixture,
+        id: &str,
+        hash: &str,
+        body: &str,
+    ) -> Result<Json<DraftWire>, ApiError> {
+        save_draft_body(
+            State(f.state.clone()),
+            Path(id.to_string()),
+            good_headers(),
+            Json(SaveBodyBody {
+                expected_hash: hash.to_string(),
+                body: body.to_string(),
+            }),
+        )
+        .await
+    }
+
+    async fn help(
+        f: &Fixture,
+        id: &str,
+        instruction: Option<&str>,
+        headers: HeaderMap,
+    ) -> Result<Json<serde_json::Value>, ApiError> {
+        draft_help(
+            State(f.state.clone()),
+            Path(id.to_string()),
+            headers,
+            Json(DraftHelpBody {
+                instruction: instruction.map(str::to_string),
+            }),
+        )
+        .await
+    }
+
+    async fn proposal_of(f: &Fixture, id: &str, job_id: &str) -> serde_json::Value {
+        let job = finish(f, job_id).await;
+        assert_eq!(job.status, JobStatus::Succeeded, "{:?}", job.error);
+        let got = get_agent_job(
+            State(f.state.clone()),
+            Path((id.to_string(), job_id.to_string())),
+            good_headers(),
+        )
+        .await
+        .expect("job route")
+        .0;
+        serde_json::to_value(&got).unwrap()["output"].clone()
+    }
+
+    // TS-01: draft-help returns a proposed body; the draft file is unchanged.
+    #[tokio::test]
+    async fn draft_help_returns_a_proposed_body_and_leaves_the_draft_untouched() {
+        let f = agent_fixture("ok");
+        let id = new_draft(&f);
+        let hash = body_hash(&f, &id).await;
+        let _ = save(&f, &id, &hash, "rough notes about an importer")
+            .await
+            .expect("save");
+        let before = draft_bytes(&f, &id);
+
+        let started = help(&f, &id, Some("make it a spec"), good_headers())
+            .await
+            .expect("queued")
+            .0;
+        let job_id = started["jobId"].as_str().expect("jobId").to_string();
+        let output = proposal_of(&f, &id, &job_id).await;
+
+        assert_eq!(output["jobKind"], "draft_help");
+        assert!(
+            output["proposed_body"]
+                .as_str()
+                .unwrap()
+                .contains("Ship the importer"),
+            "{output}"
+        );
+        assert!(!output["summary"].as_str().unwrap().is_empty());
+        assert_eq!(
+            draft_bytes(&f, &id),
+            before,
+            "draft-help never writes the draft"
+        );
+        let prompts = stub_prompts(&f);
+        assert!(
+            prompts.iter().any(
+                |p| p.contains("make it a spec") && p.contains("rough notes about an importer")
+            )
+        );
+    }
+
+    // TS-03: the body changed after the proposal; applying it with the old
+    // hash is a 409 and nothing is overwritten.
+    #[tokio::test]
+    async fn applying_a_proposal_over_a_changed_body_is_a_409_and_overwrites_nothing() {
+        let f = agent_fixture("ok");
+        let id = new_draft(&f);
+        let shown = body_hash(&f, &id).await;
+        let job_id = help(&f, &id, None, good_headers()).await.expect("queued").0["jobId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let proposed = proposal_of(&f, &id, &job_id).await["proposed_body"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // The operator kept typing while the agent worked.
+        let _ = save(&f, &id, &shown, "edited meanwhile")
+            .await
+            .expect("edit");
+        let after_edit = draft_bytes(&f, &id);
+
+        assert_eq!(status(save(&f, &id, &shown, &proposed).await), 409);
+        assert_eq!(draft_bytes(&f, &id), after_edit, "nothing overwritten");
+
+        // Once merged against the fresh hash, it applies.
+        let fresh = body_hash(&f, &id).await;
+        let saved = save(&f, &id, &fresh, &proposed)
+            .await
+            .expect("merged save")
+            .0;
+        assert_eq!(saved.body, proposed);
+    }
+
+    #[tokio::test]
+    async fn draft_help_needs_the_agent_the_token_and_a_known_draft() {
+        let off = fixture();
+        let id = new_draft(&off);
+        assert_eq!(status(help(&off, &id, None, good_headers()).await), 503);
+        assert_eq!(
+            status(help(&off, &id, None, without(good_headers(), "authorization")).await),
+            401
+        );
+        assert_eq!(
+            status(
+                help(
+                    &off,
+                    &id,
+                    None,
+                    with(good_headers(), "origin", "http://evil.test")
+                )
+                .await
+            ),
+            403
+        );
+        let on = agent_fixture("ok");
+        assert_eq!(
+            status(help(&on, "01ARZ3NDEKTSV4RRFFQ69G5FAV", None, good_headers()).await),
+            404
+        );
+    }
+
+    /// A tempdir project registered with the server and the inbox, with a
+    /// Sebenza workspace when `workspace`.
+    fn project(f: &Fixture, name: &str, workspace: bool) -> String {
+        let dir = f.base.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        if workspace {
+            std::fs::create_dir_all(dir.join(".ai/sebenza")).unwrap();
+            std::fs::write(dir.join(".ai/sebenza/index.md"), "# index").unwrap();
+        }
+        let app = f.state.manager.add_ephemeral(&dir.to_string_lossy());
+        ProjectsRegistry::with_file(f.base.join("projects.json")).add(
+            crate::adapters::projects_registry::ProjectEntry {
+                path: app.path.clone(),
+                name: name.to_string(),
+                added_at: 0,
+            },
+        );
+        app.path.clone()
+    }
+
+    async fn instructions(
+        f: &Fixture,
+        id: &str,
+        targets: serde_json::Value,
+        headers: HeaderMap,
+    ) -> Result<Json<ConvertInstructionsResponse>, ApiError> {
+        let body: ConvertInstructionsBody =
+            serde_json::from_value(serde_json::json!({ "targets": targets })).unwrap();
+        convert_instructions(
+            State(f.state.clone()),
+            Path(id.to_string()),
+            headers,
+            Json(body),
+        )
+        .await
+    }
+
+    // TS-44: an item with comments gets a system instruction per target.
+    #[tokio::test]
+    async fn convert_instructions_return_a_system_instruction_per_target() {
+        let f = agent_fixture("fixture:convert_instructions");
+        let path = project(&f, "acme-demo", true);
+        let id = new_draft(&f);
+        f.state
+            .inbox
+            .add_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Overall,
+                "the parser must stream",
+            )
+            .unwrap();
+
+        let resp = instructions(
+            &f,
+            &id,
+            serde_json::json!([{ "project": path, "branch": "feat-x", "prompt": "Build the importer" }]),
+            good_headers(),
+        )
+        .await
+        .expect("instructions")
+        .0;
+
+        assert_eq!(resp.status, "succeeded", "{:?}", resp.error);
+        assert!(!resp.fallback);
+        let job_id = resp.job_id.clone().expect("job id");
+        assert_eq!(resp.targets.len(), 1);
+        let t = &resp.targets[0];
+        assert_eq!(t.key, "acme-demo/feat-x");
+        assert_eq!(t.project, path);
+        assert!(t.sebenza_workspace);
+        assert_eq!(
+            t.system_instruction.as_deref(),
+            Some("Architect the streaming parser only; the upload UI is another worktree.")
+        );
+        let prompt = stub_prompts(&f).pop().expect("prompt");
+        assert!(prompt.contains("JOB-KIND: convert"));
+        assert!(
+            prompt.contains("the parser must stream"),
+            "comments inform it"
+        );
+        assert!(prompt.contains("acme-demo/feat-x"));
+        assert!(prompt.contains("Build the importer"));
+        assert_eq!(
+            f.state.system_agent.job(&job_id).unwrap().kind,
+            crate::services::system_agent::JobKind::Convert
+        );
+    }
+
+    /// Records each launch prompt; never touches git or tmux.
+    #[derive(Default)]
+    struct LaunchSpy(Mutex<Vec<String>>);
+    impl crate::services::inbox_convert::ConversionRunner for LaunchSpy {
+        fn create_worktree(&self, t: &ConversionTarget) -> Result<String, String> {
+            Ok(format!("/wt/{}", t.branch))
+        }
+        fn write_note(&self, _p: &str, _b: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn exclude_note(&self, _p: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn record_origin(&self, _p: &str, _d: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn send_prompt(&self, t: &ConversionTarget, _p: &str) -> Result<(), String> {
+            self.0.lock().unwrap().push(t.prompt.clone());
+            Ok(())
+        }
+        fn has_sebenza_workspace(&self, _t: &ConversionTarget) -> bool {
+            true
+        }
+        fn now(&self) -> String {
+            "t".into()
+        }
+    }
+
+    /// Convert with what the dialog would submit after `resp`: the operator
+    /// prompt, plus each target's instruction when there is one.
+    fn convert_with(f: &Fixture, id: &str, resp: &ConvertInstructionsResponse) -> Vec<String> {
+        let targets: Vec<ConversionTarget> = resp
+            .targets
+            .iter()
+            .map(|t| ConversionTarget {
+                project_path: t.project.clone(),
+                branch: t.branch.clone(),
+                prompt: "Build the importer".into(),
+                system_instruction: t.system_instruction.clone(),
+                ..Default::default()
+            })
+            .collect();
+        let spy = LaunchSpy::default();
+        f.state.inbox.convert(id, &targets, &spy).expect("convert");
+        spy.0.into_inner().unwrap()
+    }
+
+    /// UC-07a: no system instruction, but the worktree is still briefed from
+    /// the item note and still starts with the architect.
+    fn assert_falls_back_with_context(sent: &[String]) {
+        assert_eq!(sent.len(), 1);
+        let p = &sent[0];
+        assert!(p.contains("Build the importer"), "{p}");
+        assert!(p.contains(".ai/sebenza/inbox-note.md"), "{p}");
+        assert!(p.contains("sebenza-architect"), "{p}");
+        assert!(!p.contains("System instruction:"), "{p}");
+    }
+
+    // TS-47: with the agent disabled the dialog falls back, and convert
+    // launches with the item note and the operator prompt.
+    #[tokio::test]
+    async fn with_the_agent_disabled_instructions_fall_back_and_convert_uses_the_operator_prompt() {
+        let f = fixture();
+        let path = project(&f, "acme-demo", true);
+        let id = new_draft(&f);
+        let resp = instructions(
+            &f,
+            &id,
+            serde_json::json!([{ "project": path, "branch": "feat-x", "prompt": "Build the importer" }]),
+            good_headers(),
+        )
+        .await
+        .expect("a fallback is not an error")
+        .0;
+        assert_eq!(resp.status, "unavailable");
+        assert!(resp.fallback);
+        assert_eq!(resp.job_id, None);
+        assert_eq!(resp.targets[0].system_instruction, None);
+
+        assert_falls_back_with_context(&convert_with(&f, &id, &resp));
+        let history = f.state.inbox.conversion_history(&id).unwrap();
+        assert_eq!(history[0].system_instruction, None);
+        assert!(history[0].architect_first);
+    }
+
+    // TS-47: a failed instruction job falls back the same way.
+    #[tokio::test]
+    async fn a_failed_instruction_job_falls_back_to_the_operator_prompt() {
+        let f = agent_fixture("exit");
+        let path = project(&f, "acme-demo", true);
+        let id = new_draft(&f);
+        let resp = instructions(
+            &f,
+            &id,
+            serde_json::json!([{ "project": path, "branch": "feat-x", "prompt": "Build the importer" }]),
+            good_headers(),
+        )
+        .await
+        .expect("a fallback is not an error")
+        .0;
+        assert_eq!(resp.status, "failed");
+        assert!(resp.fallback);
+        assert!(resp.error.is_some());
+        assert_eq!(resp.targets[0].system_instruction, None);
+        assert_falls_back_with_context(&convert_with(&f, &id, &resp));
+    }
+
+    // TS-57-adjacent: instructions that do arrive launch architect-first and
+    // are recorded on conversions[].
+    #[tokio::test]
+    async fn returned_instructions_launch_architect_first_and_are_recorded() {
+        let f = agent_fixture("fixture:convert_instructions");
+        let path = project(&f, "acme-demo", true);
+        let id = new_draft(&f);
+        let resp = instructions(
+            &f,
+            &id,
+            serde_json::json!([{ "project": path, "branch": "feat-x", "prompt": "Build the importer" }]),
+            good_headers(),
+        )
+        .await
+        .unwrap()
+        .0;
+        let sent = convert_with(&f, &id, &resp);
+        assert!(sent[0].contains("sebenza-architect"));
+        assert!(sent[0].contains("Architect the streaming parser only"));
+        let history = f.state.inbox.conversion_history(&id).unwrap();
+        assert!(history[0].architect_first);
+        assert!(history[0].system_instruction.is_some());
+    }
+
+    // UC-07: a plain "Create" with no reviewed instruction asks the agent
+    // itself; a reviewed instruction is kept; an unavailable agent leaves the
+    // targets unchanged.
+    #[tokio::test]
+    async fn convert_fills_missing_instructions_and_keeps_reviewed_ones() {
+        let f = agent_fixture("fixture:convert_instructions");
+        let path = project(&f, "acme-demo", true);
+        let id = new_draft(&f);
+        let plain = ConversionTarget {
+            project_path: path.clone(),
+            branch: "feat-x".into(),
+            prompt: "Build the importer".into(),
+            ..Default::default()
+        };
+        let filled =
+            fill_missing_instructions(&f.state, &id, vec![plain.clone()], &good_headers()).await;
+        assert!(
+            filled[0]
+                .system_instruction
+                .as_deref()
+                .is_some_and(|s| s.contains("Architect the streaming parser only")),
+            "{filled:?}"
+        );
+
+        let reviewed = ConversionTarget {
+            system_instruction: Some("Operator-edited".into()),
+            ..plain.clone()
+        };
+        let kept = fill_missing_instructions(&f.state, &id, vec![reviewed], &good_headers()).await;
+        assert_eq!(
+            kept[0].system_instruction.as_deref(),
+            Some("Operator-edited")
+        );
+
+        let off = fixture();
+        let path = project(&off, "acme-demo", true);
+        let id = new_draft(&off);
+        let plain = ConversionTarget {
+            project_path: path,
+            ..plain
+        };
+        let unchanged =
+            fill_missing_instructions(&off.state, &id, vec![plain], &good_headers()).await;
+        assert_eq!(unchanged[0].system_instruction, None);
+    }
+
+    // TS-49 (route): comments are scanned too, and targets are validated.
+    #[tokio::test]
+    async fn instructions_validate_targets_guard_the_route_and_scan_comments() {
+        let f = fixture();
+        let path = project(&f, "acme-demo", false);
+        let id = new_draft(&f);
+        f.state
+            .inbox
+            .add_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Overall,
+                "use sk-TEST-0000000000000000",
+            )
+            .unwrap();
+        let ok = serde_json::json!([{ "project": path, "branch": "feat-x" }]);
+
+        let resp = instructions(&f, &id, ok.clone(), good_headers())
+            .await
+            .expect("ok")
+            .0;
+        assert!(!resp.targets[0].sebenza_workspace);
+        assert!(
+            resp.advisories
+                .iter()
+                .any(|a| a.kind == "secret" && a.message.contains("comment")),
+            "{:?}",
+            resp.advisories
+        );
+
+        let unknown = serde_json::json!([{ "project": "/code/not-registered", "branch": "x" }]);
+        assert_eq!(
+            status(instructions(&f, &id, unknown, good_headers()).await),
+            400
+        );
+        assert_eq!(
+            status(
+                instructions(
+                    &f,
+                    &id,
+                    ok.clone(),
+                    without(good_headers(), "authorization")
+                )
+                .await
+            ),
+            401
+        );
+        assert_eq!(
+            status(
+                instructions(
+                    &f,
+                    &id,
+                    ok.clone(),
+                    with(good_headers(), "host", "evil.test")
+                )
+                .await
+            ),
+            403
+        );
+        assert_eq!(
+            status(instructions(&f, "01ARZ3NDEKTSV4RRFFQ69G5FAV", ok, good_headers()).await),
+            404
+        );
+    }
+
+    // The real runner launches architect-first only where the project has
+    // a Sebenza workspace.
+    #[tokio::test]
+    async fn the_server_runner_detects_a_sebenza_workspace() {
+        use crate::services::inbox_convert::ConversionRunner;
+        let f = fixture();
+        let with = project(&f, "with-workspace", true);
+        let without = project(&f, "without-workspace", false);
+        let runner = ServerConversionRunner::new(f.state.clone());
+        let target = |p: &str| ConversionTarget {
+            project_path: p.to_string(),
+            ..Default::default()
+        };
+        assert!(runner.has_sebenza_workspace(&target(&with)));
+        assert!(!runner.has_sebenza_workspace(&target(&without)));
     }
 }

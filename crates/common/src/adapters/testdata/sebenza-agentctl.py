@@ -10,15 +10,22 @@ from pathlib import Path
 
 
 CONTROL_ENV_PATH = Path(__file__).resolve().with_name("control.env")
+RUNTIME_ENV_PATH = Path(__file__).resolve().with_name("runtime.env")
+# Written into the worktree (not the git dir) when an inbox item is converted.
+INBOX_ORIGIN_REL_PATH = Path(".ai") / "sebenza" / "inbox-origin.json"
 CONTROL_REQUEST_TIMEOUT_SECONDS = 2
 
 
 def read_control_env():
+    return read_env_file(CONTROL_ENV_PATH)
+
+
+def read_env_file(path):
     env = {}
     try:
-        content = CONTROL_ENV_PATH.read_text()
+        content = path.read_text()
     except OSError as error:
-        raise RuntimeError(f"failed to read control.env: {error}") from error
+        raise RuntimeError(f"failed to read {path.name}: {error}") from error
 
     for raw_line in content.splitlines():
         line = raw_line.strip()
@@ -76,6 +83,16 @@ def build_parser():
     subparsers.add_parser("grok-permission-prompt")
     subparsers.add_parser("grok-stop")
 
+    # Inbox: a worktree agent may ask for help and comment, on the inbox item this
+    # worktree was converted from. It deliberately cannot decide anything - there is
+    # no command to approve, rank or launch work; those stay with the operator.
+    request = subparsers.add_parser("request", help="ask the operator for help on this worktree's origin inbox item")
+    request.add_argument("--title", help="one line; defaults to the first line of the body")
+    request.add_argument("--body", required=True, help="the request text, or - to read stdin")
+
+    comment = subparsers.add_parser("comment", help="comment on this worktree's thread of its origin inbox item")
+    comment.add_argument("--body", required=True, help="the comment text, or - to read stdin")
+
     return parser
 
 
@@ -100,6 +117,12 @@ def build_payload(command, args, control_env):
     if command == "runtime-error":
         payload["type"] = "runtime_error"
         payload["message"] = args.message
+        return payload
+    if command == "request":
+        payload["type"] = "inbox.request"
+        return payload
+    if command == "comment":
+        payload["type"] = "inbox.comment"
         return payload
     if command == "conversation-started":
         # sessionId is attached by the caller, which reads it from the hook payload.
@@ -226,13 +249,83 @@ def send_payload(payload, control_env):
                 print(f"control endpoint returned HTTP {response.status}", file=sys.stderr)
                 return False
     except urllib.error.HTTPError as error:
-        print(f"control endpoint returned HTTP {error.code}", file=sys.stderr)
+        print(f"control endpoint returned HTTP {error.code}{error_detail(error)}", file=sys.stderr)
         return False
     except Exception as error:
         print(f"failed to send runtime event: {error}", file=sys.stderr)
         return False
 
     return True
+
+
+def error_detail(error):
+    """The server's `{"error": ...}` message, so an agent learns why it was refused."""
+    try:
+        parsed = json.loads(error.read().decode("utf-8", "replace"))
+    except Exception:
+        return ""
+    message = parsed.get("error") if isinstance(parsed, dict) else None
+    return f": {message}" if isinstance(message, str) and message else ""
+
+
+def resolve_worktree_path():
+    """This worktree's checkout. agentctl lives under the git dir, not the worktree,
+    so the path comes from the environment Sebenza wrote, then the cwd."""
+    path = os.environ.get("SEBENZA_WORKTREE_PATH")
+    if not path:
+        try:
+            path = read_env_file(RUNTIME_ENV_PATH).get("SEBENZA_WORKTREE_PATH")
+        except RuntimeError:
+            path = None
+    return path or os.getcwd()
+
+
+def read_origin_draft_id(worktree_path):
+    try:
+        data = json.loads((Path(worktree_path) / INBOX_ORIGIN_REL_PATH).read_text())
+    except (OSError, ValueError):
+        return None
+    draft_id = data.get("draftId") if isinstance(data, dict) else None
+    return draft_id if isinstance(draft_id, str) and draft_id else None
+
+
+def read_body(value):
+    return (sys.stdin.read() if value == "-" else value).strip()
+
+
+def send_inbox(command, args, control_env):
+    """File a request or comment against this worktree's origin inbox item.
+
+    The server cross-checks the worktree path against the item's conversions, so a
+    copied or edited inbox-origin.json is refused rather than trusted.
+    """
+    worktree_path = resolve_worktree_path()
+    draft_id = read_origin_draft_id(worktree_path)
+    if not draft_id:
+        print(
+            f"this worktree was not converted from an inbox item (no {INBOX_ORIGIN_REL_PATH}); nothing sent",
+            file=sys.stderr,
+        )
+        return 1
+    body = read_body(args.body)
+    if not body:
+        print("--body is empty; nothing sent", file=sys.stderr)
+        return 1
+
+    payload = build_payload(command, args, control_env)
+    payload.update(
+        {
+            "draftId": draft_id,
+            "worktreePath": worktree_path,
+            "body": body,
+            # Self-declared and unauthenticated; the server records it as such.
+            "caller": "worktree",
+        }
+    )
+    title = getattr(args, "title", None)
+    if title and title.strip():
+        payload["title"] = title.strip()
+    return 0 if send_payload(payload, control_env) else 1
 
 
 def main():
@@ -254,6 +347,9 @@ def main():
     if missing:
         print(f"missing control env keys: {', '.join(missing)}", file=sys.stderr)
         return 1
+
+    if parsed.command in ("request", "comment"):
+        return send_inbox(parsed.command, parsed, control_env)
 
     if parsed.command == "codex-session-start":
         send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="idle"), control_env), control_env)

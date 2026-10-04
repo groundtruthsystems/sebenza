@@ -9,7 +9,15 @@ import {
   loadInboxControlToken,
   patchInboxDraft,
   saveInboxDraftBody,
+  setInboxPriority,
+  connectInboxAgentStream,
+  fetchInboxAgentJob,
+  requestInboxDraftHelp,
 } from "./api";
+import type { InboxAgentJob, InboxDraftHelpOutput } from "./api-contract";
+import { DraftHelpPanel, DraftMergeView } from "./DraftHelp";
+import PhiNotice from "./PhiNotice";
+import InboxActivity from "./InboxActivity";
 import MDEditor from "@uiw/react-md-editor";
 import NavRail from "./NavRail";
 import NewDraftDialog from "./NewDraftDialog";
@@ -21,6 +29,13 @@ import { fetchProjects } from "./api";
 import { renderDraftMarkdown } from "./inboxMarkdown";
 import { createDebouncer, saveDraftBody, type DraftLike } from "./inbox-editor";
 import type { ProjectSummary } from "./types";
+import PriorityControl, { PriorityBadge } from "./InboxPriority";
+import {
+  draftHelpOutput,
+  sortInboxItems,
+  type Priority,
+  type PrioritySource,
+} from "./inbox-collab";
 
 const AUTOSAVE_MS = 800;
 
@@ -36,8 +51,13 @@ interface Summary {
   id: string;
   title: string;
   status: DraftStatus;
+  createdAt?: string;
   updatedAt: string;
   project: ProjectLink | null;
+  priority?: Priority;
+  prioritySource?: PrioritySource;
+  /** A request's triage or delivery failed and waits on the operator. */
+  flagged?: boolean;
   isRaw: boolean;
 }
 
@@ -46,6 +66,8 @@ interface Draft extends DraftLike {
   title: string;
   status: DraftStatus;
   project: ProjectLink | null;
+  priority?: Priority;
+  prioritySource?: PrioritySource;
   raw: { text: string; error: string } | null;
   conversions?: {
     projectPath: string;
@@ -55,6 +77,19 @@ interface Draft extends DraftLike {
     outcome: string;
     error?: string;
   }[];
+}
+
+/** The worktrees an item was converted into, for the comment composer. */
+function worktreesOf(draft: Draft): { project: string; branch: string }[] {
+  const seen = new Map<string, { project: string; branch: string }>();
+  for (const c of draft.conversions ?? []) {
+    if (c.outcome !== "created") continue;
+    seen.set(`${c.projectPath}\u0000${c.branch}`, {
+      project: c.projectPath,
+      branch: c.branch,
+    });
+  }
+  return [...seen.values()];
 }
 
 export default function InboxView() {
@@ -85,6 +120,28 @@ export default function InboxView() {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState("");
 
+  /** The newest agent-job frame for the open item. */
+  const [lastJob, setLastJob] = useState<InboxAgentJob | null>(null);
+  const [streamDown, setStreamDown] = useState(false);
+
+  // Draft help: the job we are waiting on, its result, and — when the body
+  // moved underneath it — the merge the operator must resolve.
+  const [showHelp, setShowHelp] = useState(false);
+  const [helpPending, setHelpPending] = useState(false);
+  const [helpError, setHelpError] = useState("");
+  const [helpProposal, setHelpProposal] = useState<InboxDraftHelpOutput | null>(null);
+  const helpJobRef = useRef<string | null>(null);
+  /** Finished jobs seen on the stream, in case one lands before its id. */
+  const finishedJobs = useRef(new Map<string, InboxAgentJob>());
+  const [merge, setMerge] = useState<{
+    theirs: string;
+    label: string;
+    mine: string;
+    /** What a save of the merged text is checked against. */
+    base: DraftLike;
+  } | null>(null);
+  const [mergeSaving, setMergeSaving] = useState(false);
+
   const loadedRef = useRef<DraftLike>({ body: "", bodyHash: "" });
   const debouncer = useMemo(() => createDebouncer(AUTOSAVE_MS), []);
 
@@ -94,7 +151,9 @@ export default function InboxView() {
         search: search || undefined,
         includeDropped,
       });
-      setDrafts(data.drafts);
+      // The server already orders the list; sorting again keeps a stale
+      // response or a test fixture from ever disagreeing with it.
+      setDrafts(sortInboxItems(data.drafts as Summary[]));
     } catch (err) {
       setStatus((err as Error).message);
     }
@@ -118,9 +177,82 @@ export default function InboxView() {
 
   useEffect(() => () => debouncer.cancel(), [debouncer]);
 
+  // Follow the open item's system-agent jobs: triage results refresh the
+  // requests, a draft-help result fills the proposal.
+  const parsedId = draft && !draft.raw ? draft.id : null;
+  useEffect(() => {
+    if (!parsedId) return;
+    setLastJob(null);
+    setStreamDown(false);
+    finishedJobs.current.clear();
+    return connectInboxAgentStream(parsedId, {
+      onJob: (job) => {
+        if (job.status === "succeeded" || job.status === "failed") {
+          finishedJobs.current.set(job.jobId, job);
+        }
+        setLastJob(job);
+      },
+      onError: (message) => {
+        setStatus(message);
+        setStreamDown(true);
+      },
+      onClose: () => setStreamDown(true),
+    });
+  }, [parsedId]);
+
+  /** Settle the pending draft-help job from a finished frame. */
+  const settleHelp = useCallback((job: InboxAgentJob) => {
+    if (job.jobId !== helpJobRef.current) return;
+    if (job.status !== "succeeded" && job.status !== "failed") return;
+    helpJobRef.current = null;
+    setHelpPending(false);
+    const output = draftHelpOutput(job);
+    if (output) setHelpProposal(output);
+    else setHelpError(job.error ?? "Draft help returned no proposal.");
+  }, []);
+
+  useEffect(() => {
+    if (lastJob?.kind === "draft_help") settleHelp(lastJob);
+  }, [lastJob, settleHelp]);
+
+  // Without the stream, poll the one job we are waiting on.
+  useEffect(() => {
+    if (!streamDown || !helpPending || !parsedId) return;
+    const timer = setInterval(() => {
+      const jobId = helpJobRef.current;
+      if (!jobId) return;
+      void fetchInboxAgentJob(parsedId, jobId)
+        .then(settleHelp)
+        .catch(() => undefined);
+    }, 1500);
+    return () => clearInterval(timer);
+  }, [streamDown, helpPending, parsedId, settleHelp]);
+
+  /** Re-read the list and the open item's priority — never its body, which
+   *  the editor owns. */
+  const onActivityChanged = useCallback(() => {
+    void refresh();
+    if (!selectedId) return;
+    void fetchInboxDraft(selectedId)
+      .then((d) => {
+        const fresh = d as Draft;
+        setDraft((prev) =>
+          prev && prev.id === fresh.id
+            ? { ...prev, priority: fresh.priority, prioritySource: fresh.prioritySource }
+            : prev,
+        );
+      })
+      .catch(() => undefined);
+  }, [refresh, selectedId]);
+
   const open = useCallback(async (id: string) => {
     debouncer.cancel();
     setConflict(null);
+    setMerge(null);
+    setHelpProposal(null);
+    setHelpPending(false);
+    setHelpError("");
+    helpJobRef.current = null;
     setSelectedId(id);
     try {
       const d = (await fetchInboxDraft(id)) as Draft;
@@ -144,21 +276,23 @@ export default function InboxView() {
     };
   }, [body]);
 
+  /** The hash-gated PUT, for autosave, draft help and merges alike. */
+  const saveDeps = useCallback(
+    (id: string) => ({
+      save: async (expectedHash: string, b: string) => {
+        const saved = (await saveInboxDraftBody(id, expectedHash, b)) as Draft;
+        return { bodyHash: saved.bodyHash };
+      },
+      reload: async () => (await fetchInboxDraft(id)) as Draft,
+    }),
+    [],
+  );
+
   const persist = useCallback(
     async (next: string) => {
       if (!selectedId) return;
       const outcome = await saveDraftBody(
-        {
-          save: async (expectedHash, b) => {
-            const saved = (await saveInboxDraftBody(
-              selectedId,
-              expectedHash,
-              b,
-            )) as Draft;
-            return { bodyHash: saved.bodyHash };
-          },
-          reload: async () => (await fetchInboxDraft(selectedId)) as Draft,
-        },
+        saveDeps(selectedId),
         loadedRef.current,
         next,
       );
@@ -179,8 +313,79 @@ export default function InboxView() {
           break;
       }
     },
-    [selectedId, refresh],
+    [selectedId, refresh, saveDeps],
   );
+
+  const requestHelp = async (instruction: string) => {
+    if (!draft) return;
+    setHelpPending(true);
+    setHelpError("");
+    setHelpProposal(null);
+    try {
+      const { jobId } = await requestInboxDraftHelp(draft.id, instruction || undefined);
+      helpJobRef.current = jobId;
+      const early = finishedJobs.current.get(jobId);
+      if (early) settleHelp(early);
+    } catch (err) {
+      setHelpPending(false);
+      setHelpError((err as Error).message);
+    }
+  };
+
+  /** Write `next` against `base`; a 409 (re)opens the merge. */
+  const applyBody = async (base: DraftLike, next: string, mine: string) => {
+    if (!selectedId) return;
+    const outcome = await saveDraftBody(saveDeps(selectedId), base, next);
+    switch (outcome.kind) {
+      case "saved":
+      case "unchanged": {
+        const bodyHash = outcome.kind === "saved" ? outcome.bodyHash : base.bodyHash;
+        setBody(next);
+        loadedRef.current = { body: next, bodyHash };
+        setMerge(null);
+        setConflict(null);
+        setHelpProposal(null);
+        setStatus("Saved");
+        void refresh();
+        break;
+      }
+      case "conflict":
+        setMerge({
+          theirs: outcome.theirs,
+          label: "On disk",
+          mine,
+          base: { body: outcome.theirs, bodyHash: outcome.theirHash },
+        });
+        setStatus("This draft changed on disk.");
+        break;
+      case "error":
+        setStatus(outcome.message);
+        break;
+    }
+  };
+
+  const acceptHelp = async () => {
+    if (!helpProposal) return;
+    debouncer.cancel();
+    const proposed = helpProposal.proposed_body;
+    const loaded = loadedRef.current;
+    // Unsaved typing would be lost by a straight write; merge it instead.
+    if (body !== loaded.body) {
+      setMerge({ theirs: body, label: "Current draft", mine: proposed, base: loaded });
+      return;
+    }
+    await applyBody(loaded, proposed, proposed);
+  };
+
+  const saveMerged = async (merged: string) => {
+    if (!merge) return;
+    setMergeSaving(true);
+    try {
+      await applyBody(merge.base, merged, merge.mine);
+    } finally {
+      setMergeSaving(false);
+    }
+  };
 
   const onBodyChange = (next: string) => {
     setBody(next);
@@ -318,6 +523,25 @@ export default function InboxView() {
     }
   };
 
+  const onPriority = async (priority: Priority | null) => {
+    if (!draft) return;
+    try {
+      const updated = (await setInboxPriority(draft.id, priority)) as Draft;
+      setDraft((prev) =>
+        prev && prev.id === updated.id
+          ? {
+              ...prev,
+              priority: updated.priority,
+              prioritySource: updated.prioritySource,
+            }
+          : prev,
+      );
+      await refresh();
+    } catch (err) {
+      setStatus((err as Error).message);
+    }
+  };
+
   return (
     <div className="flex h-dvh bg-surface text-primary">
       <NavRail active="inbox" projectBase={projectBase} />
@@ -332,6 +556,7 @@ export default function InboxView() {
       {showConvert && draft && (
         <ConvertDraftDialog
           draftTitle={draft.title}
+          draftId={draft.id}
           projects={projects}
           previousTargets={previousTargets()}
           loading={converting}
@@ -412,8 +637,24 @@ export default function InboxView() {
                     isActive ? "bg-active border-accent" : "border-transparent"
                   } ${d.status === "Dropped" ? "opacity-60" : ""}`}
                 >
-                  <span className="font-medium truncate">
-                    {d.isRaw ? "(unparseable)" : d.title || "(untitled)"}
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    {!d.isRaw && (
+                      <PriorityBadge
+                        priority={d.priority ?? "P2"}
+                        source={d.prioritySource ?? "agent"}
+                      />
+                    )}
+                    <span className="font-medium truncate">
+                      {d.isRaw ? "(unparseable)" : d.title || "(untitled)"}
+                    </span>
+                    {d.flagged && (
+                      <span
+                        className="ml-auto shrink-0 h-2 w-2 rounded-full bg-danger"
+                        role="img"
+                        aria-label="Needs attention: a request's triage or delivery failed"
+                        title="Needs attention: a request's triage or delivery failed"
+                      />
+                    )}
                   </span>
                   <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px] text-muted">
                     {d.status !== "Draft" && (
@@ -458,6 +699,18 @@ export default function InboxView() {
           {draft && !draft.raw && (
             <div className="flex items-center gap-2 shrink-0">
               {status && <span className="text-[11px] text-muted">{status}</span>}
+              <Btn
+                variant={showHelp ? "accent-outline" : "default"}
+                onClick={() => setShowHelp((v) => !v)}
+                aria-pressed={showHelp}
+              >
+                Draft help
+              </Btn>
+              <PriorityControl
+                priority={draft.priority ?? "P2"}
+                source={draft.prioritySource ?? "agent"}
+                onchange={(p) => void onPriority(p)}
+              />
               <Btn
                 variant="accent-outline"
                 onClick={() => {
@@ -547,27 +800,61 @@ export default function InboxView() {
                 </Btn>
               </div>
             )}
-            <div className="flex-1 min-h-0 flex" data-color-mode="dark">
-              <MDEditor
-                value={body}
-                onChange={(next) => onBodyChange(next ?? "")}
-                height="100%"
-                visibleDragbar={false}
-                textareaProps={{
-                  "aria-label": "Draft body",
-                  spellCheck: false,
-                }}
-                components={{
-                  // MDEditor's own preview renders markdown its own way, which
-                  // would bypass DOMPurify and mermaid's strict mode. Drafts are
-                  // pasted-in text, so the preview stays ours.
-                  preview: () => (
-                    <div
-                      className="inbox-preview md-body"
-                      dangerouslySetInnerHTML={{ __html: preview }}
-                    />
-                  ),
-                }}
+            <div className="flex-1 min-h-0 flex">
+              <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+                <PhiNotice className="px-4 py-1 border-b border-edge bg-sidebar" />
+                {showHelp && (
+                  <DraftHelpPanel
+                    current={body}
+                    pending={helpPending}
+                    error={helpError}
+                    proposal={helpProposal}
+                    onrequest={(i) => void requestHelp(i)}
+                    onaccept={() => void acceptHelp()}
+                    ondiscard={() => setHelpProposal(null)}
+                    onclose={() => setShowHelp(false)}
+                  />
+                )}
+                {merge && (
+                  <DraftMergeView
+                    key={`${merge.base.bodyHash}:${merge.label}`}
+                    theirs={merge.theirs}
+                    theirsLabel={merge.label}
+                    mine={merge.mine}
+                    saving={mergeSaving}
+                    onsave={(m) => void saveMerged(m)}
+                    oncancel={() => setMerge(null)}
+                  />
+                )}
+                <div className="flex-1 min-w-0 min-h-0 flex" data-color-mode="dark">
+                  <MDEditor
+                    value={body}
+                    onChange={(next) => onBodyChange(next ?? "")}
+                    height="100%"
+                    visibleDragbar={false}
+                    textareaProps={{
+                      "aria-label": "Draft body",
+                      spellCheck: false,
+                    }}
+                    components={{
+                      // MDEditor's own preview renders markdown its own way, which
+                      // would bypass DOMPurify and mermaid's strict mode. Drafts are
+                      // pasted-in text, so the preview stays ours.
+                      preview: () => (
+                        <div
+                          className="inbox-preview md-body"
+                          dangerouslySetInnerHTML={{ __html: preview }}
+                        />
+                      ),
+                    }}
+                  />
+                </div>
+              </div>
+              <InboxActivity
+                draftId={draft.id}
+                worktrees={worktreesOf(draft)}
+                lastJob={lastJob}
+                onchanged={onActivityChanged}
               />
             </div>
           </>

@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 mod adapters;
+#[cfg(test)]
+mod e2e_tests;
 mod inbox_routes;
 mod inbox_runner;
 mod server;
@@ -113,21 +115,73 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         );
     }
 
+    // An unusable systemAgent block (e.g. `agent: grok`) stops startup rather
+    // than silently running without, or with a less restricted, agent (FR-13).
+    let system_agent_config = common::config::load_system_agent_config()
+        .map_err(|e| anyhow::anyhow!("invalid ~/.ai/sebenza.yaml: {e}"))?;
+    tracing::info!(
+        enabled = system_agent_config.enabled,
+        agent = system_agent_config.agent.as_str(),
+        max_concurrent = system_agent_config.max_concurrent,
+        timeout_secs = system_agent_config.timeout_secs,
+        "inbox system agent configured"
+    );
+
     let terminal = Arc::new(TerminalManager::new(port));
     // Reap orphaned grouped sessions from previous runs before serving.
     terminal.cleanup_stale_sessions();
     let frontend_dist = resolve_frontend_dist(&project_dir);
 
+    let inbox_store = adapters::inbox_store::InboxStore::new();
+    match inbox_store.sweep_orphans() {
+        Ok(removed) if !removed.is_empty() => {
+            tracing::info!(count = removed.len(), "inbox: removed orphaned sidecars")
+        }
+        Ok(_) => {}
+        Err(e) => tracing::warn!("inbox: orphan sweep failed: {e}"),
+    }
+
+    let inbox = Arc::new(services::inbox_service::InboxService::new(
+        inbox_store,
+        adapters::projects_registry::ProjectsRegistry::new(),
+    ));
+    // Chat and the system agent share one stream manager: their conversation
+    // ids never collide (`system-agent:<ulid>`), and one turn per id holds.
+    let agent_stream = Arc::new(services::agent_stream::AgentStreamManager::new());
+    let system_agent = services::system_agent::SystemAgentService::new(
+        system_agent_config,
+        inbox.clone(),
+        agent_stream.clone(),
+        services::system_agent::SystemAgentOptions::default(),
+    );
+    // Finished triage jobs set priority and record proposals, advice or a
+    // failure flag; nothing a job returns is ever delivered (AA-D2).
+    system_agent.set_sink(Arc::new(services::system_agent::apply::TriageApplier::new(
+        inbox.clone(),
+    )));
+    inbox.set_request_observer(system_agent.observer());
+    // Requests that arrived while the daemon was down, or whose triage died
+    // with it, are triaged now — once each (TD-2).
+    let recovered = system_agent.recover_on_startup();
+    if recovered > 0 {
+        tracing::info!(count = recovered, "inbox: re-queued untriaged requests");
+    }
+
+    // Confirmed resolutions reach their origin worktree's agent pane only
+    // through this sink, and only from confirm and redeliver (T-02).
+    inbox.set_pane_sink(Arc::new(services::pane_delivery::TmuxPaneSink::new(
+        manager.clone(),
+        terminal.clone(),
+    )));
+
     let state = AppState {
         manager,
         terminal,
-        agent_stream: Arc::new(services::agent_stream::AgentStreamManager::new()),
+        agent_stream,
         project_inits: Arc::new(services::project_init_service::ProjectInitTracker::new()),
         inbox_jobs: Arc::new(services::inbox_jobs::ConversionJobManager::new()),
-        inbox: Arc::new(services::inbox_service::InboxService::new(
-            adapters::inbox_store::InboxStore::new(),
-            adapters::projects_registry::ProjectsRegistry::new(),
-        )),
+        inbox,
+        system_agent,
         frontend_dist,
     };
 

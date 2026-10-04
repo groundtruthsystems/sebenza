@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { renderDraftMarkdown, sanitize } from "./inboxMarkdown";
+import {
+  renderCommentMarkdown,
+  renderDraftMarkdown,
+  sanitize,
+} from "./inboxMarkdown";
 
 /**
  * These are security tests, not formatting tests. A draft is free text people
@@ -111,5 +115,26 @@ describe("inbox markdown sanitizing", () => {
     expect(clean).not.toEqual(dirty);
     expect(clean).not.toContain("onerror");
     expect(clean).not.toContain("<script");
+  });
+});
+
+// TS-43: comments, requests and proposals come from worktree agents and the
+// system agent as well as the operator, so they get the same treatment.
+describe("comment markdown", () => {
+  it("renders markdown but no script, handler or javascript: link", () => {
+    const html = renderCommentMarkdown(
+      "**bold** <script>window.x=1</script> <img src=x onerror=\"alert(1)\"> [go](javascript:alert(2)) [ok](https://example.com)",
+    );
+    expect(html).toContain("<strong>bold</strong>");
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("onerror");
+    expect(html).not.toContain("javascript:");
+    expect(html).toContain('href="https://example.com"');
+  });
+
+  it("leaves a mermaid fence as an inert code block", () => {
+    const html = renderCommentMarkdown("```mermaid\ngraph TD; A-->B\n```");
+    expect(html).toContain("<code");
+    expect(html).not.toContain("<svg");
   });
 });

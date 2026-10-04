@@ -4,14 +4,24 @@
 //! Frontmatter merges are key-scoped by author so a conversion job cannot
 //! clobber the title and an editor cannot drop `conversions[]`.
 
+use crate::domain::inbox_events::{
+    AgentSession, AuthorKind, INBOX_EVENT_SCHEMA_VERSION, InboxEvent, InboxEventKind,
+};
 use crate::domain::model::{
     DraftStatus, FileRevision, INBOX_DRAFT_SCHEMA_VERSION, InboxDraft, InboxDraftFrontmatter,
-    InboxDraftView, ProjectRef, parse_inbox_file, render_inbox_file,
+    InboxDraftView, Priority, PrioritySource, ProjectRef, parse_inbox_file, render_inbox_file,
 };
 use crate::util::id::{is_ulid, random_ulid};
+use std::collections::HashMap;
 use std::fs;
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock};
 use thiserror::Error;
+
+/// Files kept beside `<id>.md`.
+const SIDECAR_SUFFIXES: [&str; 2] = ["events.jsonl", "session.json"];
 
 /// Every way a store operation can fail. `Conflict` carries both hashes so a
 /// caller can show the editor what it was racing.
@@ -29,8 +39,47 @@ pub enum InboxStoreError {
         expected: String,
         actual: String,
     },
+    #[error("draft {id} has schema_version {version}, newer than this binary supports")]
+    UnsupportedVersion { id: String, version: i32 },
     #[error(transparent)]
     Io(#[from] std::io::Error),
+}
+
+/// A priority write. The operator sets or clears an override; the agent's
+/// write is ignored while an operator override stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PriorityWrite {
+    /// `Some` sets a sticky override; `None` clears it and hands control back.
+    Operator(Option<Priority>),
+    Agent(Priority),
+}
+
+/// Who wrote an event, plus the self-declared caller marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EventAuthor {
+    pub kind: AuthorKind,
+    pub caller: Option<String>,
+}
+
+impl EventAuthor {
+    pub fn operator() -> Self {
+        Self {
+            kind: AuthorKind::Operator,
+            caller: None,
+        }
+    }
+    pub fn system_agent() -> Self {
+        Self {
+            kind: AuthorKind::SystemAgent,
+            caller: None,
+        }
+    }
+    pub fn worktree_agent() -> Self {
+        Self {
+            kind: AuthorKind::WorktreeAgent,
+            caller: Some("worktree".into()),
+        }
+    }
 }
 
 /// Who is writing frontmatter. Each author owns a disjoint key set, except
@@ -72,6 +121,18 @@ fn default_inbox_dir() -> PathBuf {
         .join("inbox")
 }
 
+/// One lock per path, shared by every `InboxStore` in the process, so a
+/// priority write and an editor save on the same draft never interleave their
+/// read-modify-write. External editors are still unlocked.
+fn path_lock(path: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+    let mut map = LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    map.entry(path.to_path_buf()).or_default().clone()
+}
+
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
@@ -101,8 +162,41 @@ impl InboxStore {
         Ok(self.dir.join(format!("{id}.md")))
     }
 
-    fn atomic_write(&self, id: &str, contents: &str) -> Result<(), InboxStoreError> {
+    fn ensure_dir(&self) -> Result<(), InboxStoreError> {
         fs::create_dir_all(&self.dir)?;
+        let _ = fs::set_permissions(&self.dir, fs::Permissions::from_mode(0o700));
+        Ok(())
+    }
+
+    fn sidecar(&self, id: &str, suffix: &str) -> Result<PathBuf, InboxStoreError> {
+        self.path_for(id)?;
+        Ok(self.dir.join(format!("{id}.{suffix}")))
+    }
+
+    /// Hold the draft's lock for the duration of `f`.
+    fn locked<T>(
+        &self,
+        id: &str,
+        f: impl FnOnce() -> Result<T, InboxStoreError>,
+    ) -> Result<T, InboxStoreError> {
+        let lock = path_lock(&self.path_for(id)?);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        f()
+    }
+
+    fn write_owner_only(path: &Path, contents: &str) -> Result<(), InboxStoreError> {
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(contents.as_bytes())?;
+        Ok(())
+    }
+
+    fn atomic_write(&self, id: &str, contents: &str) -> Result<(), InboxStoreError> {
+        self.ensure_dir()?;
         let final_path = self.path_for(id)?;
         let tmp_path = self.dir.join(format!(
             "{id}.{}.{}.tmp",
@@ -112,7 +206,7 @@ impl InboxStore {
                 .map(|d| d.as_nanos())
                 .unwrap_or(0)
         ));
-        fs::write(&tmp_path, contents)?;
+        Self::write_owner_only(&tmp_path, contents)?;
         fs::rename(&tmp_path, &final_path)?;
         Ok(())
     }
@@ -127,6 +221,21 @@ impl InboxStore {
             Err(e) => return Err(e.into()),
         };
         Ok(parse_inbox_file(id, &text))
+    }
+
+    /// Load a draft for rewriting: refuse a newer schema, and stamp an older one
+    /// with the current version (v2 is additive, so this loses nothing).
+    fn require_writable(&self, id: &str) -> Result<InboxDraft, InboxStoreError> {
+        let mut draft = self.require_parsed(id)?;
+        let version = draft.frontmatter.schema_version;
+        if version > INBOX_DRAFT_SCHEMA_VERSION {
+            return Err(InboxStoreError::UnsupportedVersion {
+                id: id.to_string(),
+                version,
+            });
+        }
+        draft.frontmatter.schema_version = INBOX_DRAFT_SCHEMA_VERSION;
+        Ok(draft)
     }
 
     fn require_parsed(&self, id: &str) -> Result<InboxDraft, InboxStoreError> {
@@ -154,6 +263,9 @@ impl InboxStore {
                 created_at: now.clone(),
                 updated_at: now,
                 conversions: Vec::new(),
+                priority: Priority::default(),
+                priority_source: PrioritySource::default(),
+                extra: serde_yaml::Mapping::new(),
             },
             body: String::new(),
         };
@@ -203,35 +315,51 @@ impl InboxStore {
         expected_hash: &str,
         body: &str,
     ) -> Result<InboxDraft, InboxStoreError> {
-        let mut draft = self.require_parsed(id)?;
-        let actual = FileRevision::of_body(&draft.body);
-        if actual.body_hash != expected_hash {
-            return Err(InboxStoreError::Conflict {
-                id: id.to_string(),
-                expected: expected_hash.to_string(),
-                actual: actual.body_hash,
-            });
-        }
-        draft.body = body.to_string();
-        draft.frontmatter.updated_at = now_rfc3339();
-        self.atomic_write(id, &render_inbox_file(&draft))?;
-        Ok(draft)
+        self.locked(id, || {
+            let mut draft = self.require_writable(id)?;
+            let actual = FileRevision::of_body(&draft.body);
+            if actual.body_hash != expected_hash {
+                return Err(InboxStoreError::Conflict {
+                    id: id.to_string(),
+                    expected: expected_hash.to_string(),
+                    actual: actual.body_hash,
+                });
+            }
+            draft.body = body.to_string();
+            draft.frontmatter.updated_at = now_rfc3339();
+            self.atomic_write(id, &render_inbox_file(&draft))?;
+            Ok(draft)
+        })
     }
 
     /// Rewrite the body without a hash check. Frontmatter (including
     /// `conversions[]`) is re-read and written back unchanged except `updated_at`.
     pub fn force_write_body(&self, id: &str, body: &str) -> Result<InboxDraft, InboxStoreError> {
-        let mut draft = self.require_parsed(id)?;
-        draft.body = body.to_string();
-        draft.frontmatter.updated_at = now_rfc3339();
-        self.atomic_write(id, &render_inbox_file(&draft))?;
-        Ok(draft)
+        self.locked(id, || {
+            let mut draft = self.require_writable(id)?;
+            draft.body = body.to_string();
+            draft.frontmatter.updated_at = now_rfc3339();
+            self.atomic_write(id, &render_inbox_file(&draft))?;
+            Ok(draft)
+        })
     }
 
     /// Remove the draft file. Unparseable drafts delete like any other — a
     /// malformed file must not become undeletable.
     pub fn delete(&self, id: &str) -> Result<(), InboxStoreError> {
         let path = self.path_for(id)?;
+        if !path.exists() {
+            return Err(InboxStoreError::NotFound(id.to_string()));
+        }
+        // Sidecars first: a crash between the two leaves an orphan the startup
+        // sweep removes, never a draft whose history has vanished.
+        for suffix in SIDECAR_SUFFIXES {
+            match fs::remove_file(self.sidecar(id, suffix)?) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
         match fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -250,12 +378,193 @@ impl InboxStore {
         author: FrontmatterAuthor,
         patch: FrontmatterPatch,
     ) -> Result<InboxDraft, InboxStoreError> {
-        let mut draft = self.require_parsed(id)?;
-        apply_patch(&mut draft.frontmatter, author, patch);
-        draft.frontmatter.updated_at = now_rfc3339();
-        self.atomic_write(id, &render_inbox_file(&draft))?;
-        Ok(draft)
+        self.locked(id, || {
+            let mut draft = self.require_writable(id)?;
+            apply_patch(&mut draft.frontmatter, author, patch);
+            draft.frontmatter.updated_at = now_rfc3339();
+            self.atomic_write(id, &render_inbox_file(&draft))?;
+            Ok(draft)
+        })
     }
+}
+
+impl InboxStore {
+    /// Set or clear priority. Returns the `priority_changed` event appended,
+    /// or `None` when nothing changed (including an agent write blocked by an
+    /// operator override).
+    pub fn set_priority(
+        &self,
+        id: &str,
+        write: PriorityWrite,
+    ) -> Result<Option<InboxEvent>, InboxStoreError> {
+        self.set_priority_by(id, write, None)
+    }
+
+    /// As [`Self::set_priority`], stamping the event with the self-declared
+    /// `caller` marker. The marker is unauthenticated (T-01): it records what
+    /// the caller said it was, not what it is.
+    pub fn set_priority_by(
+        &self,
+        id: &str,
+        write: PriorityWrite,
+        caller: Option<String>,
+    ) -> Result<Option<InboxEvent>, InboxStoreError> {
+        self.locked(id, || {
+            let mut draft = self.require_writable(id)?;
+            let fm = &mut draft.frontmatter;
+            let from = fm.priority;
+            let (to, source, author) = match write {
+                PriorityWrite::Operator(Some(p)) => {
+                    (p, PrioritySource::Operator, EventAuthor::operator())
+                }
+                PriorityWrite::Operator(None) => {
+                    (from, PrioritySource::Agent, EventAuthor::operator())
+                }
+                PriorityWrite::Agent(p) => {
+                    if fm.priority_source == PrioritySource::Operator {
+                        return Ok(None);
+                    }
+                    (p, PrioritySource::Agent, EventAuthor::system_agent())
+                }
+            };
+            if to == from && source == fm.priority_source {
+                return Ok(None);
+            }
+            fm.priority = to;
+            fm.priority_source = source;
+            fm.updated_at = now_rfc3339();
+            self.atomic_write(id, &render_inbox_file(&draft))?;
+            if to == from {
+                return Ok(None);
+            }
+            let author = EventAuthor {
+                caller: caller.or(author.caller),
+                ..author
+            };
+            let event = self.append_event(
+                id,
+                author,
+                None,
+                InboxEventKind::PriorityChanged { from, to, source },
+            )?;
+            Ok(Some(event))
+        })
+    }
+
+    /// Append one event to `<id>.events.jsonl`. The draft must exist.
+    pub fn append_event(
+        &self,
+        id: &str,
+        author: EventAuthor,
+        parent_event_id: Option<String>,
+        kind: InboxEventKind,
+    ) -> Result<InboxEvent, InboxStoreError> {
+        if !self.path_for(id)?.is_file() {
+            return Err(InboxStoreError::NotFound(id.to_string()));
+        }
+        let event = InboxEvent {
+            schema_version: INBOX_EVENT_SCHEMA_VERSION,
+            event_id: random_ulid(),
+            ts: now_rfc3339(),
+            author: author.kind,
+            caller: author.caller,
+            parent_event_id,
+            kind,
+        };
+        let mut line = serde_json::to_string(&event)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        line.push('\n');
+        let path = self.sidecar(id, "events.jsonl")?;
+        // One lock per log keeps appends single-writer within the process;
+        // O_APPEND plus a single write keeps each line whole.
+        let lock = path_lock(&path);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.ensure_dir()?;
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .open(&path)?;
+        // A torn tail (crash mid-write) would swallow this line; start a fresh one.
+        if !ends_with_newline(&path)? {
+            line.insert(0, '\n');
+        }
+        f.write_all(line.as_bytes())?;
+        Ok(event)
+    }
+
+    /// Every parseable event, in append order. A torn or foreign line is skipped.
+    pub fn read_events(&self, id: &str) -> Result<Vec<InboxEvent>, InboxStoreError> {
+        let path = self.sidecar(id, "events.jsonl")?;
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        Ok(text
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str::<InboxEvent>(l).ok())
+            .collect())
+    }
+
+    pub fn read_session(&self, id: &str) -> Result<Option<AgentSession>, InboxStoreError> {
+        let path = self.sidecar(id, "session.json")?;
+        match fs::read_to_string(&path) {
+            Ok(t) => Ok(serde_json::from_str(&t).ok()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn write_session(&self, id: &str, session: &AgentSession) -> Result<(), InboxStoreError> {
+        let path = self.sidecar(id, "session.json")?;
+        self.ensure_dir()?;
+        let json = serde_json::to_string_pretty(session)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let tmp = self
+            .dir
+            .join(format!("{id}.session.{}.tmp", std::process::id()));
+        Self::write_owner_only(&tmp, &json)?;
+        fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+
+    /// Remove sidecars whose draft no longer exists. Returns what was removed.
+    pub fn sweep_orphans(&self) -> Result<Vec<PathBuf>, InboxStoreError> {
+        let mut removed = Vec::new();
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(removed),
+            Err(e) => return Err(e.into()),
+        };
+        for ent in entries.flatten() {
+            let name = ent.file_name();
+            let name = name.to_string_lossy();
+            let Some(id) = SIDECAR_SUFFIXES
+                .iter()
+                .find_map(|sfx| name.strip_suffix(&format!(".{sfx}")))
+            else {
+                continue;
+            };
+            if is_ulid(id) && !self.dir.join(format!("{id}.md")).exists() {
+                fs::remove_file(ent.path())?;
+                removed.push(ent.path());
+            }
+        }
+        Ok(removed)
+    }
+}
+
+fn ends_with_newline(path: &Path) -> Result<bool, InboxStoreError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = fs::File::open(path)?;
+    if f.seek(SeekFrom::End(-1)).is_err() {
+        return Ok(true);
+    }
+    let mut last = [0u8; 1];
+    f.read_exact(&mut last)?;
+    Ok(last[0] == b'\n')
 }
 
 fn view_id(v: &InboxDraftView) -> &str {
@@ -478,5 +787,292 @@ mod tests {
         let err = s.get("../secret").expect_err("must reject");
         assert!(matches!(err, InboxStoreError::InvalidId(_)));
         assert!(s.list().unwrap().is_empty());
+    }
+
+    use crate::domain::inbox_events::{Thread, fold_requests};
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    fn comment(body: &str) -> InboxEventKind {
+        InboxEventKind::Comment {
+            thread: Thread::Overall,
+            body: body.into(),
+            warnings: vec![],
+        }
+    }
+
+    fn mode(p: &Path) -> u32 {
+        fs::metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    // TS-05 / TS-24 (store level): an operator override is sticky.
+    #[test]
+    fn agent_priority_write_is_ignored_under_operator_override() {
+        let s = store();
+        let d = s.create("T").unwrap();
+        s.set_priority(&d.id, PriorityWrite::Operator(Some(Priority::P0)))
+            .unwrap()
+            .expect("operator change");
+        let none = s
+            .set_priority(&d.id, PriorityWrite::Agent(Priority::P3))
+            .unwrap();
+        assert!(none.is_none());
+        let cur = parsed(s.get(&d.id).unwrap());
+        assert_eq!(cur.frontmatter.priority, Priority::P0);
+        assert_eq!(cur.frontmatter.priority_source, PrioritySource::Operator);
+    }
+
+    // TS-64 / TS-06 (store level): every change is an event with from/to/source;
+    // clearing hands control back to the agent.
+    #[test]
+    fn priority_changes_append_events_and_clear_returns_control() {
+        let s = store();
+        let d = s.create("T").unwrap();
+        let e1 = s
+            .set_priority(&d.id, PriorityWrite::Agent(Priority::P1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            e1.kind,
+            InboxEventKind::PriorityChanged {
+                from: Priority::P2,
+                to: Priority::P1,
+                source: PrioritySource::Agent
+            }
+        );
+        assert_eq!(e1.author, AuthorKind::SystemAgent);
+        s.set_priority(&d.id, PriorityWrite::Operator(Some(Priority::P0)))
+            .unwrap()
+            .unwrap();
+        // Same value again is not a change.
+        assert!(
+            s.set_priority(&d.id, PriorityWrite::Operator(Some(Priority::P0)))
+                .unwrap()
+                .is_none()
+        );
+        let cleared = s
+            .set_priority(&d.id, PriorityWrite::Operator(None))
+            .unwrap();
+        assert!(
+            cleared.is_none(),
+            "clearing keeps the value, only the source changes"
+        );
+        let cur = parsed(s.get(&d.id).unwrap());
+        assert_eq!(cur.frontmatter.priority_source, PrioritySource::Agent);
+        s.set_priority(&d.id, PriorityWrite::Agent(Priority::P3))
+            .unwrap()
+            .unwrap();
+        let evs = s.read_events(&d.id).unwrap();
+        let changes: Vec<_> = evs
+            .iter()
+            .filter_map(|e| match &e.kind {
+                InboxEventKind::PriorityChanged { from, to, source } => Some((*from, *to, *source)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            changes,
+            vec![
+                (Priority::P2, Priority::P1, PrioritySource::Agent),
+                (Priority::P1, Priority::P0, PrioritySource::Operator),
+                (Priority::P0, Priority::P3, PrioritySource::Agent),
+            ]
+        );
+    }
+
+    // TS-08: a concurrent editor save and priority write never lose each other.
+    #[test]
+    fn concurrent_body_save_and_priority_write_both_survive() {
+        for _ in 0..20 {
+            let s = Arc::new(store());
+            let d = s.create("T").unwrap();
+            let hash = FileRevision::of_body(&d.body).body_hash;
+            let (a, b) = (s.clone(), s.clone());
+            let id1 = d.id.clone();
+            let id2 = d.id.clone();
+            let t1 = std::thread::spawn(move || a.save_body(&id1, &hash, "edited\n").unwrap());
+            let t2 = std::thread::spawn(move || {
+                b.set_priority(&id2, PriorityWrite::Operator(Some(Priority::P0)))
+                    .unwrap()
+            });
+            t1.join().unwrap();
+            t2.join().unwrap();
+            let cur = parsed(s.get(&d.id).unwrap());
+            assert_eq!(cur.body, "edited\n");
+            assert_eq!(cur.frontmatter.priority, Priority::P0);
+        }
+    }
+
+    // TS-10: 50 concurrent appends give 50 intact lines; a torn tail is tolerated.
+    #[test]
+    fn concurrent_appends_stay_line_intact_and_torn_tail_is_skipped() {
+        let s = Arc::new(store());
+        let d = s.create("T").unwrap();
+        let handles: Vec<_> = (0..50)
+            .map(|i| {
+                let s = s.clone();
+                let id = d.id.clone();
+                std::thread::spawn(move || {
+                    s.append_event(
+                        &id,
+                        EventAuthor::operator(),
+                        None,
+                        comment(&format!("c{i} {}", "x".repeat(2000))),
+                    )
+                    .unwrap()
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let path = s.dir().join(format!("{}.events.jsonl", d.id));
+        let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(text.lines().count(), 50);
+        assert_eq!(s.read_events(&d.id).unwrap().len(), 50);
+        let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        std::io::Write::write_all(&mut f, b"{\"schema_version\":1,\"event_id\":\"torn").unwrap();
+        assert_eq!(s.read_events(&d.id).unwrap().len(), 50);
+        // Appending after a torn tail still yields a readable line.
+        s.append_event(&d.id, EventAuthor::operator(), None, comment("after"))
+            .unwrap();
+        assert_eq!(s.read_events(&d.id).unwrap().len(), 51);
+    }
+
+    #[test]
+    fn append_requires_an_existing_draft_and_ids_are_server_issued() {
+        let s = store();
+        assert!(matches!(
+            s.append_event(
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                EventAuthor::operator(),
+                None,
+                comment("x")
+            ),
+            Err(InboxStoreError::NotFound(_))
+        ));
+        let d = s.create("T").unwrap();
+        let a = s
+            .append_event(&d.id, EventAuthor::worktree_agent(), None, comment("a"))
+            .unwrap();
+        let b = s
+            .append_event(
+                &d.id,
+                EventAuthor::operator(),
+                Some(a.event_id.clone()),
+                comment("b"),
+            )
+            .unwrap();
+        assert!(is_ulid(&a.event_id) && a.event_id != b.event_id);
+        assert_eq!(a.caller.as_deref(), Some("worktree"));
+        assert_eq!(b.parent_event_id.as_deref(), Some(a.event_id.as_str()));
+        assert!(fold_requests(&s.read_events(&d.id).unwrap()).is_empty());
+    }
+
+    // TS-39: draft, events and session files are 0600.
+    #[test]
+    fn store_files_are_owner_only() {
+        let s = store();
+        let d = s.create("T").unwrap();
+        s.append_event(&d.id, EventAuthor::operator(), None, comment("c"))
+            .unwrap();
+        s.write_session(
+            &d.id,
+            &AgentSession {
+                agent: "claude".into(),
+                model: None,
+                session_id: "s1".into(),
+                turns: 0,
+            },
+        )
+        .unwrap();
+        for suffix in ["md", "events.jsonl", "session.json"] {
+            let p = s.dir().join(format!("{}.{suffix}", d.id));
+            assert_eq!(mode(&p), 0o600, "{suffix}");
+        }
+        assert_eq!(
+            s.read_session(&d.id).unwrap().map(|x| x.session_id),
+            Some("s1".to_string())
+        );
+    }
+
+    // TS-53 (store level): v1 is upgraded on write; a newer version is refused.
+    #[test]
+    fn v1_is_upgraded_on_write_and_newer_versions_are_refused() {
+        let s = store();
+        let v1 = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let src = "---\nschema_version: 1\ntitle: Old\nstatus: Draft\ncreated_at: a\nupdated_at: a\nconversions: []\n---\nbody\n";
+        fs::write(s.dir().join(format!("{v1}.md")), src).unwrap();
+        s.set_priority(v1, PriorityWrite::Operator(Some(Priority::P1)))
+            .unwrap();
+        let cur = parsed(s.get(v1).unwrap());
+        assert_eq!(cur.frontmatter.schema_version, INBOX_DRAFT_SCHEMA_VERSION);
+        assert_eq!(cur.body, "body\n");
+
+        let v9 = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+        fs::write(
+            s.dir().join(format!("{v9}.md")),
+            src.replace("schema_version: 1", "schema_version: 9"),
+        )
+        .unwrap();
+        let hash = FileRevision::of_body("body\n").body_hash;
+        assert!(matches!(
+            s.save_body(v9, &hash, "x"),
+            Err(InboxStoreError::UnsupportedVersion { version: 9, .. })
+        ));
+        assert!(matches!(
+            s.set_priority(v9, PriorityWrite::Agent(Priority::P0)),
+            Err(InboxStoreError::UnsupportedVersion { .. })
+        ));
+        assert!(matches!(
+            s.merge_frontmatter(v9, FrontmatterAuthor::Editor, FrontmatterPatch::default()),
+            Err(InboxStoreError::UnsupportedVersion { .. })
+        ));
+        // Reading still works.
+        assert_eq!(parsed(s.get(v9).unwrap()).frontmatter.schema_version, 9);
+    }
+
+    // TS-54: Drop keeps sidecars, Delete removes them, the sweep clears orphans.
+    #[test]
+    fn drop_keeps_sidecars_delete_removes_them_and_sweep_clears_orphans() {
+        let s = store();
+        let d = s.create("T").unwrap();
+        s.append_event(&d.id, EventAuthor::operator(), None, comment("c"))
+            .unwrap();
+        s.write_session(
+            &d.id,
+            &AgentSession {
+                agent: "claude".into(),
+                model: None,
+                session_id: "s".into(),
+                turns: 1,
+            },
+        )
+        .unwrap();
+        s.merge_frontmatter(
+            &d.id,
+            FrontmatterAuthor::Editor,
+            FrontmatterPatch {
+                status: Some(DraftStatus::Dropped),
+                ..FrontmatterPatch::default()
+            },
+        )
+        .unwrap();
+        let ev = s.dir().join(format!("{}.events.jsonl", d.id));
+        let se = s.dir().join(format!("{}.session.json", d.id));
+        assert!(ev.is_file() && se.is_file());
+        s.delete(&d.id).unwrap();
+        assert!(!ev.exists() && !se.exists());
+
+        let orphan = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        fs::write(s.dir().join(format!("{orphan}.events.jsonl")), "").unwrap();
+        fs::write(s.dir().join(format!("{orphan}.session.json")), "{}").unwrap();
+        let keep = s.create("K").unwrap();
+        s.append_event(&keep.id, EventAuthor::operator(), None, comment("k"))
+            .unwrap();
+        let removed = s.sweep_orphans().unwrap();
+        assert_eq!(removed.len(), 2);
+        assert!(s.dir().join(format!("{}.events.jsonl", keep.id)).is_file());
+        assert_eq!(s.list().unwrap().len(), 1);
     }
 }

@@ -46,7 +46,7 @@ Usage:
   sebenza-cli tab          List, create, switch, or close agent tabs in a worktree
   sebenza-cli prune        Remove all closed (not open) worktrees in the current project
   sebenza-cli restore      Re-open all worktree sessions that were open before
-  sebenza-cli inbox        Draft notes before they become worktrees
+  sebenza-cli inbox        Draft notes, triage worktree requests, convert to worktrees
   sebenza-cli project      List, add, or remove projects served by the dashboard
   sebenza-cli completion   Generate shell completion script (bash, zsh)
 

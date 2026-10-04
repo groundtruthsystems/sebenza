@@ -1,8 +1,10 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+const instructions = vi.fn();
 vi.mock("./api", () => ({
   fetchBaseBranchesFor: () => Promise.resolve(["main", "develop"]),
+  requestConvertInstructions: (...a: unknown[]) => instructions(...a),
 }));
 
 import ConvertDraftDialog, { MAX_TARGETS, rowError } from "./ConvertDraftDialog";
@@ -171,5 +173,151 @@ describe("ConvertDraftDialog", () => {
       prompt: "go",
     };
     expect(rowError(base, [base])).toMatch(/source branch/i);
+  });
+});
+
+describe("ConvertDraftDialog system instructions", () => {
+  const response = (over: Record<string, unknown> = {}, target: Record<string, unknown> = {}) => ({
+    jobId: "J1",
+    status: "succeeded",
+    fallback: false,
+    error: null,
+    targets: [
+      {
+        project: "/code/acme",
+        branch: "fix-scorer",
+        key: "acme/fix-scorer",
+        systemInstruction: "Design the scorer change first.",
+        sebenzaWorkspace: true,
+        ...target,
+      },
+    ],
+    advisories: [],
+    ...over,
+  });
+
+  async function fill(user: ReturnType<typeof userEvent.setup>) {
+    await user.type(screen.getByLabelText("Branch for target 1"), "fix-scorer");
+    await user.type(screen.getByLabelText("Prompt for target 1"), "rewrite it");
+  }
+
+  it("asks the system agent for each target's instruction", async () => {
+    const user = userEvent.setup();
+    instructions.mockResolvedValue(response());
+    setup({ draftId: "D1" });
+    await fill(user);
+    await user.click(screen.getByRole("button", { name: "Draft instructions" }));
+    expect(instructions).toHaveBeenCalledWith("D1", [
+      { project: "/code/acme", branch: "fix-scorer", prompt: "rewrite it" },
+    ]);
+    expect(await screen.findByLabelText("System instruction for target 1")).toHaveValue(
+      "Design the scorer change first.",
+    );
+  });
+
+  // TS-46: the operator's edit is what is submitted.
+  it("submits the edited instruction with architect-first", async () => {
+    const user = userEvent.setup();
+    instructions.mockResolvedValue(response());
+    const { onconvert } = setup({ draftId: "D1" });
+    await fill(user);
+    await user.click(screen.getByRole("button", { name: "Draft instructions" }));
+    const field = await screen.findByLabelText("System instruction for target 1");
+    await user.clear(field);
+    await user.type(field, "Edited by the operator.");
+    expect(screen.getByLabelText("Architect-first for target 1")).toBeEnabled();
+    expect(screen.getByLabelText("Architect-first for target 1")).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await user.click(screen.getByRole("button", { name: /Create 1 worktree/ }));
+    expect(onconvert).toHaveBeenCalledWith([
+      {
+        projectPath: "/code/acme",
+        branch: "fix-scorer",
+        prompt: "rewrite it",
+        systemInstruction: "Edited by the operator.",
+        architectFirst: true,
+      },
+    ]);
+  });
+
+  it("can turn architect-first off for one target", async () => {
+    const user = userEvent.setup();
+    instructions.mockResolvedValue(response());
+    const { onconvert } = setup({ draftId: "D1" });
+    await fill(user);
+    await user.click(screen.getByRole("button", { name: "Draft instructions" }));
+    await user.click(await screen.findByLabelText("Architect-first for target 1"));
+    await user.click(screen.getByRole("button", { name: /Create 1 worktree/ }));
+    expect(onconvert.mock.calls[0][0][0].architectFirst).toBe(false);
+  });
+
+  it("disables architect-first, and says why, without a Sebenza workspace", async () => {
+    const user = userEvent.setup();
+    instructions.mockResolvedValue(response({}, { sebenzaWorkspace: false }));
+    const { onconvert } = setup({ draftId: "D1" });
+    await fill(user);
+    await user.click(screen.getByRole("button", { name: "Draft instructions" }));
+    expect(await screen.findByLabelText("Architect-first for target 1")).toBeDisabled();
+    expect(screen.getByText(/no Sebenza workspace/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Create 1 worktree/ }));
+    expect(onconvert.mock.calls[0][0][0].architectFirst).toBe(false);
+  });
+
+  it("falls back to the item note and operator prompt when the agent is unavailable", async () => {
+    const user = userEvent.setup();
+    instructions.mockResolvedValue(
+      response(
+        { jobId: null, status: "unavailable", fallback: true, error: "system agent is disabled" },
+        { systemInstruction: null },
+      ),
+    );
+    const { onconvert } = setup({ draftId: "D1" });
+    await fill(user);
+    await user.click(screen.getByRole("button", { name: "Draft instructions" }));
+    expect(await screen.findByText(/system agent is disabled/)).toBeInTheDocument();
+    expect(screen.getByText(/inbox note and your prompt/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText("System instruction for target 1")).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Create 1 worktree/ }));
+    expect(onconvert.mock.calls[0][0][0].systemInstruction).toBeUndefined();
+  });
+
+  it("shows a failed job's fallback too", async () => {
+    const user = userEvent.setup();
+    instructions.mockResolvedValue(
+      response(
+        { status: "failed", fallback: true, error: "output did not match the schema" },
+        { systemInstruction: null },
+      ),
+    );
+    setup({ draftId: "D1" });
+    await fill(user);
+    await user.click(screen.getByRole("button", { name: "Draft instructions" }));
+    expect(await screen.findByText(/did not match the schema/)).toBeInTheDocument();
+  });
+
+  it("drops an instruction whose row changed after drafting", async () => {
+    const user = userEvent.setup();
+    instructions.mockResolvedValue(response());
+    const { onconvert } = setup({ draftId: "D1" });
+    await fill(user);
+    await user.click(screen.getByRole("button", { name: "Draft instructions" }));
+    await screen.findByLabelText("System instruction for target 1");
+    await user.type(screen.getByLabelText("Branch for target 1"), "-v2");
+    expect(screen.queryByLabelText("System instruction for target 1")).toBeNull();
+    expect(screen.getByText(/changed since/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Create 1 worktree/ }));
+    await waitFor(() => expect(onconvert).toHaveBeenCalled());
+    expect(onconvert.mock.calls[0][0][0].systemInstruction).toBeUndefined();
+  });
+
+  it("reports a refused instructions request", async () => {
+    const user = userEvent.setup();
+    instructions.mockRejectedValue(new Error("HTTP 401"));
+    setup({ draftId: "D1" });
+    await fill(user);
+    await user.click(screen.getByRole("button", { name: "Draft instructions" }));
+    expect(await screen.findByText(/HTTP 401/)).toBeInTheDocument();
   });
 });

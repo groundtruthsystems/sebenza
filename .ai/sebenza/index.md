@@ -8,6 +8,7 @@
 ## Workflow
 - [Workflow](./workflow.md)
 - [Code Style Guides](./code_styleguides/)
+- [Security Threat Model](./SECURITY.md)
 
 ## Tracks
 - [Tracks Registry](./tracks.json)

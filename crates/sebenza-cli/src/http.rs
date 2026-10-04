@@ -578,6 +578,10 @@ impl Http {
 
 // --- Inbox (hub routes; drafts are global) --------------------------------
 
+/// The self-declared caller marker the server writes into audit records. It
+/// is unauthenticated: it says which surface acted, not who.
+const CALLER_HEADER: &str = "x-sebenza-caller";
+
 /// Read the control token the server requires on mutating inbox routes. Same
 /// file the server generates, so no handshake is needed.
 fn control_token() -> Result<String> {
@@ -680,6 +684,114 @@ impl Http {
             .await
             .map_err(|e| friendly_connect_error(&e, self.port))?;
         self.read_json(resp).await
+    }
+
+    /// `POST /api/inbox/{id}/convert/instructions` — waits for the agent.
+    pub async fn inbox_convert_instructions(&self, id: &str, targets: Value) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/convert/instructions", self.hub);
+        self.inbox_decision(url, serde_json::json!({ "targets": targets }))
+            .await
+    }
+
+    /// `PATCH /api/inbox/{id}/priority` — `{"priority": null}` clears.
+    pub async fn inbox_set_priority(&self, id: &str, body: Value) -> Result<Value> {
+        let resp = self
+            .http
+            .patch(format!("{}/api/inbox/{id}/priority", self.hub))
+            .bearer_auth(control_token()?)
+            .header(CALLER_HEADER, "cli")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `GET /api/inbox/{id}/comments`
+    pub async fn inbox_comments(&self, id: &str) -> Result<Value> {
+        self.get(&format!("{}/api/inbox/{id}/comments", self.hub))
+            .await
+    }
+
+    /// `POST /api/inbox/{id}/comments`
+    pub async fn inbox_post_comment(&self, id: &str, body: Value) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!("{}/api/inbox/{id}/comments", self.hub))
+            .bearer_auth(control_token()?)
+            .header(CALLER_HEADER, "cli")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `GET /api/inbox/{id}/requests`
+    pub async fn inbox_requests(&self, id: &str) -> Result<Value> {
+        self.get(&format!("{}/api/inbox/{id}/requests", self.hub))
+            .await
+    }
+
+    /// `POST` to a request decision route with the token and the CLI marker.
+    async fn inbox_decision(&self, url: String, body: Value) -> Result<Value> {
+        let resp = self
+            .http
+            .post(url)
+            .bearer_auth(control_token()?)
+            .header(CALLER_HEADER, "cli")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `POST /api/inbox/{id}/requests/{rid}/confirm`
+    pub async fn inbox_confirm(&self, id: &str, rid: &str, body: Value) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/requests/{rid}/confirm", self.hub);
+        self.inbox_decision(url, body).await
+    }
+
+    /// `POST /api/inbox/{id}/requests/{rid}/reject`
+    pub async fn inbox_reject(&self, id: &str, rid: &str, reason: &str) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/requests/{rid}/reject", self.hub);
+        self.inbox_decision(url, serde_json::json!({ "reason": reason }))
+            .await
+    }
+
+    /// `POST /api/inbox/{id}/requests/{rid}/redeliver`
+    pub async fn inbox_redeliver(&self, id: &str, rid: &str) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/requests/{rid}/redeliver", self.hub);
+        self.inbox_decision(url, serde_json::json!({})).await
+    }
+
+    /// `POST /api/inbox/{id}/requests/{rid}/retry-triage`
+    pub async fn inbox_retry_triage(&self, id: &str, rid: &str) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/requests/{rid}/retry-triage", self.hub);
+        self.inbox_decision(url, serde_json::json!({})).await
+    }
+
+    /// `POST /api/inbox/{id}/comments/{eventId}/redact`
+    pub async fn inbox_redact(&self, id: &str, event_id: &str) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/comments/{event_id}/redact", self.hub);
+        self.inbox_decision(url, serde_json::json!({})).await
+    }
+
+    /// `GET /api/inbox/{id}/agent/jobs/{jobId}`
+    pub async fn inbox_agent_job(&self, id: &str, job_id: &str) -> Result<Value> {
+        self.get(&format!("{}/api/inbox/{id}/agent/jobs/{job_id}", self.hub))
+            .await
+    }
+
+    /// `POST /api/inbox/{id}/agent/draft-help` — returns the job id.
+    pub async fn inbox_draft_help(&self, id: &str, instruction: Option<&str>) -> Result<Value> {
+        let url = format!("{}/api/inbox/{id}/agent/draft-help", self.hub);
+        let body = match instruction {
+            Some(i) => serde_json::json!({ "instruction": i }),
+            None => serde_json::json!({}),
+        };
+        self.inbox_decision(url, body).await
     }
 
     /// `GET /api/inbox/jobs/{id}` — the CLI polls rather than holding a socket.

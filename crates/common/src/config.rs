@@ -2,7 +2,7 @@ use crate::domain::config::{
     AutoNameConfig, AutoNameProvider, AutoPullConfig, CustomAgentConfig, GitHubIntegrationConfig,
     IntegrationConfig, LauncherConfig, LifecycleHooksConfig, LinkedRepoConfig, OneshotConfig,
     PaneKind, PaneSplit, PaneTemplate, ProfileConfig, ProjectConfig, RuntimeKind, ServiceSpec,
-    WorkspaceConfig,
+    SystemAgentConfig, SystemAgentKind, WorkspaceConfig,
 };
 use anyhow::{Result, anyhow};
 use indexmap::IndexMap;
@@ -466,6 +466,111 @@ fn global_launchers() -> HashMap<String, LauncherConfig> {
         .unwrap_or_default()
 }
 
+/// A `systemAgent` block the daemon refuses to start with.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("systemAgent: {0}")]
+pub struct SystemAgentConfigError(pub String);
+
+/// Validate a `systemAgent` block. `None` is the disabled default. Only
+/// `claude` is accepted as the agent: grok, codex and opencode cannot be held
+/// to read-only tools headlessly (SA-R2), so naming one is a startup error
+/// rather than a silent fallback.
+pub fn parse_system_agent_config(
+    raw: Option<&serde_yaml::Value>,
+) -> std::result::Result<SystemAgentConfig, SystemAgentConfigError> {
+    let err = |msg: String| Err(SystemAgentConfigError(msg));
+    let mut config = SystemAgentConfig::default();
+    let Some(raw) = raw else {
+        return Ok(config);
+    };
+    let Some(map) = raw.as_mapping() else {
+        return err("must be a mapping".to_string());
+    };
+    config.enabled = true;
+    for (key, value) in map {
+        let Some(key) = key.as_str() else {
+            return err("keys must be strings".to_string());
+        };
+        let text = || value.as_str().map(str::trim).filter(|s| !s.is_empty());
+        let bounded = |min: u64, max: u64| {
+            value
+                .as_u64()
+                .filter(|n| (min..=max).contains(n))
+                .ok_or_else(|| {
+                    SystemAgentConfigError(format!("{key} must be a whole number {min}-{max}"))
+                })
+        };
+        match key {
+            "enabled" => {
+                config.enabled = value.as_bool().ok_or_else(|| {
+                    SystemAgentConfigError("enabled must be true or false".to_string())
+                })?;
+            }
+            "agent" => match text() {
+                Some("claude") => config.agent = SystemAgentKind::Claude,
+                Some(other @ ("grok" | "codex" | "opencode")) => {
+                    return err(format!(
+                        "agent {other} is not supported; only claude can run as the system \
+                         agent, because it can be held to read-only tools headlessly"
+                    ));
+                }
+                Some(other) => {
+                    return err(format!("unknown agent {other:?}; only claude is supported"));
+                }
+                None => return err("agent must be a string".to_string()),
+            },
+            "model" => config.model = text().map(str::to_string),
+            "maxConcurrent" => config.max_concurrent = bounded(1, 16)? as usize,
+            "timeoutSecs" => config.timeout_secs = bounded(1, 3600)?,
+            "turnCap" => config.turn_cap = bounded(1, 1000)? as u32,
+            "binary" => {
+                config.binary = Some(
+                    text()
+                        .ok_or_else(|| {
+                            SystemAgentConfigError("binary must be a non-empty path".to_string())
+                        })?
+                        .to_string(),
+                );
+            }
+            other => return err(format!("unknown key {other:?}")),
+        }
+    }
+    Ok(config)
+}
+
+/// The machine-wide `systemAgent` block from `~/.ai/sebenza.yaml`. The inbox is
+/// global, so its agent is configured once per machine, beside the launchers.
+pub fn load_system_agent_config() -> std::result::Result<SystemAgentConfig, SystemAgentConfigError>
+{
+    let Ok(home) = std::env::var("HOME") else {
+        return Ok(SystemAgentConfig::default());
+    };
+    load_system_agent_config_from(&Path::new(&home).join(".ai").join("sebenza.yaml"))
+}
+
+/// [`load_system_agent_config`] over an explicit file. A missing file is the
+/// default; a file that is not YAML is an error, since it may hold the block.
+pub fn load_system_agent_config_from(
+    path: &Path,
+) -> std::result::Result<SystemAgentConfig, SystemAgentConfigError> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SystemAgentConfig::default());
+        }
+        Err(e) => {
+            return Err(SystemAgentConfigError(format!(
+                "cannot read {}: {e}",
+                path.display()
+            )));
+        }
+    };
+    let doc: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| {
+        SystemAgentConfigError(format!("{} is not valid YAML: {e}", path.display()))
+    })?;
+    parse_system_agent_config(doc.as_mapping().and_then(|m| m.get("systemAgent")))
+}
+
 fn read_local_config_document(root: &str) -> (PathBuf, serde_yaml::Value) {
     let local_path = Path::new(root).join(".ai").join("sebenza.local.yaml");
     let mut doc = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
@@ -565,4 +670,103 @@ pub fn remove_local_custom_agent(dir: &str, agent_id: &str) -> Result<()> {
 
     write_local_config_document(&local_path, &doc)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod system_agent_config_tests {
+    use super::*;
+
+    fn parse(yaml: &str) -> std::result::Result<SystemAgentConfig, SystemAgentConfigError> {
+        let val: serde_yaml::Value = serde_yaml::from_str(yaml).expect("yaml");
+        parse_system_agent_config(Some(&val))
+    }
+
+    #[test]
+    fn absent_block_is_the_disabled_default() {
+        let cfg = parse_system_agent_config(None).expect("default");
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.agent, SystemAgentKind::Claude);
+        assert_eq!(cfg.max_concurrent, 2);
+        assert_eq!(cfg.timeout_secs, 120);
+        assert_eq!(cfg.turn_cap, 40);
+        assert_eq!(cfg.model, None);
+        assert_eq!(cfg.binary, None);
+    }
+
+    #[test]
+    fn a_block_without_enabled_turns_the_agent_on_with_defaults() {
+        let cfg = parse("agent: claude\n").expect("ok");
+        assert!(cfg.enabled);
+        assert_eq!(cfg.max_concurrent, 2);
+        assert_eq!(cfg.timeout_secs, 120);
+        assert_eq!(cfg.turn_cap, 40);
+    }
+
+    #[test]
+    fn every_field_is_read() {
+        let cfg = parse(
+            "enabled: false\nagent: claude\nmodel: ' claude-sonnet-4-5 '\nmaxConcurrent: 3\n\
+             timeoutSecs: 30\nturnCap: 5\nbinary: /tmp/stub-agent.sh\n",
+        )
+        .expect("ok");
+        assert_eq!(
+            cfg,
+            SystemAgentConfig {
+                enabled: false,
+                agent: SystemAgentKind::Claude,
+                model: Some("claude-sonnet-4-5".into()),
+                max_concurrent: 3,
+                timeout_secs: 30,
+                turn_cap: 5,
+                binary: Some("/tmp/stub-agent.sh".into()),
+            }
+        );
+    }
+
+    // TS-16 / TS-35: only claude can be restricted to read-only, non-yolo
+    // headless runs, so the other built-ins are a startup error, not a fallback.
+    #[test]
+    fn grok_codex_and_opencode_are_rejected_as_the_system_agent() {
+        for agent in ["grok", "codex", "opencode"] {
+            let err = parse(&format!("agent: {agent}\n")).expect_err(agent);
+            assert!(err.0.contains(agent), "{err}");
+            assert!(err.0.contains("claude"), "{err}");
+        }
+        assert!(parse("agent: my-custom\n").is_err());
+    }
+
+    #[test]
+    fn out_of_range_limits_and_unknown_keys_are_rejected() {
+        for yaml in [
+            "maxConcurrent: 0\n",
+            "timeoutSecs: 0\n",
+            "turnCap: 0\n",
+            "maxConcurrent: lots\n",
+            "enabled: maybe\n",
+            "binary: ''\n",
+            "maxConcurent: 2\n",
+        ] {
+            assert!(parse(yaml).is_err(), "{yaml}");
+        }
+        let not_a_map: serde_yaml::Value = serde_yaml::from_str("- claude").unwrap();
+        assert!(parse_system_agent_config(Some(&not_a_map)).is_err());
+    }
+
+    #[test]
+    fn loads_from_a_file_and_treats_a_missing_file_as_default() {
+        let dir = std::env::temp_dir().join(format!("sebenza-sa-config-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sebenza.yaml");
+        assert!(!load_system_agent_config_from(&path).unwrap().enabled);
+
+        fs::write(&path, "launchers: {}\nsystemAgent:\n  turnCap: 7\n").unwrap();
+        let cfg = load_system_agent_config_from(&path).unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.turn_cap, 7);
+
+        fs::write(&path, "systemAgent:\n  agent: grok\n").unwrap();
+        assert!(load_system_agent_config_from(&path).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
 }
