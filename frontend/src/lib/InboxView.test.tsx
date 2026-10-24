@@ -49,7 +49,14 @@ vi.mock("./api", () => ({
 
 // Mermaid pulls a large async graph that has no place in a list-behaviour test.
 vi.mock("./inboxMarkdown", () => ({
-  renderDraftMarkdown: (s: string) => Promise.resolve(`<p>${s}</p>`),
+  // Mirrors the real renderer's edit button for a diagram, so the preview's
+  // click delegation can be exercised.
+  renderDraftMarkdown: (s: string, o?: { editableDiagrams?: boolean }) =>
+    Promise.resolve(
+      o?.editableDiagrams && s.includes("```mermaid")
+        ? `<p>prose</p><div class="diagram-block"><button type="button" data-diagram-edit="0">Edit diagram</button></div>`
+        : `<p>${s}</p>`,
+    ),
   sanitize: (s: string) => s,
   renderCommentMarkdown: (s: string) => `<p>${s}</p>`,
 }));
@@ -477,5 +484,59 @@ describe("InboxView", () => {
       stream!.onJob(job({ kind: "triage", requestId: "R1", status: "succeeded", output: null })),
     );
     await waitFor(() => expect(requests.mock.calls.length).toBeGreaterThan(before));
+  });
+
+  describe("diagrams", () => {
+    const FENCE_BODY = "## notes\n\n```mermaid\nclassDiagram\n  class Order\n```\n\nafter";
+
+    it("inserts a diagram drawn from the toolbar at the cursor", async () => {
+      const user = userEvent.setup();
+      draft.mockResolvedValue(full({ body: "## notes" }));
+      render(<InboxView />);
+      await user.click(await screen.findByText("Rework the scorer"));
+      const textarea = (await screen.findByLabelText("Draft body")) as HTMLTextAreaElement;
+      textarea.setSelectionRange(8, 8);
+
+      await user.click(screen.getByRole("button", { name: "Insert or edit a diagram" }));
+      await user.click(await screen.findByRole("button", { name: /Class diagram/ }));
+      await user.click(screen.getByRole("button", { name: "+ Class" }));
+      await user.click(screen.getByRole("button", { name: "Insert diagram" }));
+
+      expect(screen.queryByRole("dialog", { name: "Diagram editor" })).toBeNull();
+      expect(textarea.value).toMatch(/^## notes\n\n```mermaid\nclassDiagram\n  class Class\n  %% sebenza:layout .*\n```\n$/);
+    });
+
+    it("edits a diagram from the preview's edit button, leaving the prose alone", async () => {
+      const user = userEvent.setup();
+      draft.mockResolvedValue(full({ body: FENCE_BODY }));
+      render(<InboxView />);
+      await user.click(await screen.findByText("Rework the scorer"));
+      await user.click(await screen.findByRole("button", { name: "Edit diagram" }));
+
+      await user.click(await screen.findByRole("tab", { name: "source" }));
+      const src = screen.getByLabelText("Mermaid source");
+      await user.clear(src);
+      await user.type(src, "flowchart LR\n  a --> b");
+      await user.click(screen.getByRole("button", { name: "Update diagram" }));
+
+      expect(screen.getByLabelText("Draft body")).toHaveValue(
+        "## notes\n\n```mermaid\nflowchart LR\n  a --> b\n```\n\nafter",
+      );
+    });
+
+    it("opens the fence under the cursor rather than inserting a new one", async () => {
+      const user = userEvent.setup();
+      draft.mockResolvedValue(full({ body: FENCE_BODY }));
+      render(<InboxView />);
+      await user.click(await screen.findByText("Rework the scorer"));
+      const textarea = (await screen.findByLabelText("Draft body")) as HTMLTextAreaElement;
+      const inside = FENCE_BODY.indexOf("class Order");
+      textarea.setSelectionRange(inside, inside);
+
+      await user.click(screen.getByRole("button", { name: "Insert or edit a diagram" }));
+      expect(await screen.findByRole("button", { name: "Update diagram" })).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(textarea).toHaveValue(FENCE_BODY);
+    });
   });
 });

@@ -1119,6 +1119,12 @@ pub struct LaunchPromptInput<'a> {
     pub sebenza_workspace: bool,
 }
 
+/// Told to every worktree. The inbox's diagram editor saves diagrams into the
+/// note as Mermaid, with its node positions in `%% sebenza:` comments.
+pub const DIAGRAM_HINT: &str = "Any Mermaid diagrams in it are the operator's intended \
+     structure: carry them into the design rather than re-deriving them. Lines starting \
+     `%% sebenza:` are diagram-editor metadata; ignore them.";
+
 /// Builds the launch prompt for one converted worktree. Pure: no I/O.
 pub struct ArchitectFirstPromptBuilder;
 
@@ -1144,6 +1150,7 @@ impl ArchitectFirstPromptBuilder {
         } else {
             format!("The inbox item \"{title}\" is described in full at `{note}`.")
         };
+        let diagrams = DIAGRAM_HINT;
         let operator_block = if operator.is_empty() {
             String::new()
         } else {
@@ -1167,7 +1174,7 @@ impl ArchitectFirstPromptBuilder {
                  worktree's portion of the overall inbox item. Other worktrees may own other \
                  portions, so design only what this worktree is asked for.\n\n\
                  {item} Read it first and give it to the architect as the feature \
-                 description{inputs}.\n\n\
+                 description{inputs}. {diagrams}\n\n\
                  {operator_block}{system_block}\
                  Once the design is approved, continue with the Sebenza workflow."
             );
@@ -1179,7 +1186,7 @@ impl ArchitectFirstPromptBuilder {
         LaunchPrompt {
             mode: LaunchMode::Direct,
             text: format!(
-                "{item} Read it first: it is the context for this work.\n\n\
+                "{item} Read it first: it is the context for this work. {diagrams}\n\n\
                  {operator_block}{system_block}"
             )
             .trim_end()
@@ -1327,6 +1334,20 @@ mod launch_tests {
         }
         let p = ArchitectFirstPromptBuilder::build(&input(None, true, true));
         assert!(p.text.find("sebenza-architect").unwrap() < p.text.find(OPERATOR).unwrap());
+    }
+
+    // Diagrams drawn in the inbox reach the agent as Mermaid in the note; the
+    // prompt says what they are for in both modes.
+    #[test]
+    fn every_prompt_explains_diagrams_in_the_note() {
+        for (af, ws) in [(true, true), (false, true), (true, false)] {
+            let p = ArchitectFirstPromptBuilder::build(&input(Some(SYSTEM), af, ws));
+            assert!(p.text.contains(DIAGRAM_HINT), "{}", p.text);
+            assert!(
+                p.text.find(DIAGRAM_HINT).unwrap() < p.text.find(OPERATOR).unwrap(),
+                "the hint belongs with the note, before the instructions"
+            );
+        }
     }
 
     struct PromptSpy {

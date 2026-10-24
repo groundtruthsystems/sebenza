@@ -16,6 +16,10 @@ export default defineConfig({
           if (id.includes("node_modules/@xterm/")) {
             return "vendor-xterm";
           }
+          // Only the diagram editor uses these, and it is loaded on demand.
+          if (id.includes("node_modules/@xyflow/") || id.includes("node_modules/@dagrejs/")) {
+            return "vendor-diagram";
+          }
         },
       },
     },
