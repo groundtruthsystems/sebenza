@@ -1,5 +1,6 @@
 import { Marked } from "marked";
 import DOMPurify from "dompurify";
+import { mermaidFencePattern } from "./diagram/fences";
 
 /**
  * Markdown + mermaid rendering for inbox drafts.
@@ -104,8 +105,11 @@ function sanitizeSvg(svg: string): string {
  * A diagram that fails to parse becomes a visible error block rather than
  * breaking the page — a half-typed diagram is the normal state of a draft.
  */
-export async function renderDraftMarkdown(source: string): Promise<string> {
-  const diagrams = new Map<string, string>();
+export async function renderDraftMarkdown(
+  source: string,
+  opts: { editableDiagrams?: boolean } = {},
+): Promise<string> {
+  const diagrams = new Map<string, { code: string; index: number }>();
   const marked = new Marked({
     async: false,
     gfm: true,
@@ -113,11 +117,13 @@ export async function renderDraftMarkdown(source: string): Promise<string> {
   });
 
   // Collect mermaid blocks, leaving a placeholder that survives sanitizing.
+  // The fence pattern is shared with the diagram editor, so the nth slot here
+  // is the nth fence it would open.
   const withPlaceholders = source.replace(
-    /```mermaid\n([\s\S]*?)```/g,
+    mermaidFencePattern(),
     (_match, code: string) => {
       const key = `sebenza-mermaid-${mermaidSeq++}`;
-      diagrams.set(key, code);
+      diagrams.set(key, { code, index: diagrams.size });
       return `\n<div data-mermaid-slot="${key}"></div>\n`;
     },
   );
@@ -128,7 +134,7 @@ export async function renderDraftMarkdown(source: string): Promise<string> {
 
   if (diagrams.size > 0) {
     const mermaid = await loadMermaid();
-    for (const [key, code] of diagrams) {
+    for (const [key, { code, index }] of diagrams) {
       let replacement: string;
       try {
         const { svg } = await mermaid.render(`${key}-svg`, code);
@@ -146,6 +152,15 @@ export async function renderDraftMarkdown(source: string): Promise<string> {
         replacement = `<pre class="mermaid-error">diagram error: ${escapeHtml(
           message,
         )}</pre>`;
+      }
+      if (opts.editableDiagrams) {
+        // Added after sanitizing, so this is our markup, not the draft's: the
+        // only interpolated value is a number. The button is wired by event
+        // delegation on the preview, never by an inline handler.
+        replacement =
+          `<div class="diagram-block" data-diagram-index="${index}">` +
+          `<button type="button" class="diagram-edit" data-diagram-edit="${index}">Edit diagram</button>` +
+          `${replacement}</div>`;
       }
       html = html.replace(`<div data-mermaid-slot="${key}"></div>`, replacement);
     }

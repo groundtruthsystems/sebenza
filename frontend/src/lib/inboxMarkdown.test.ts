@@ -97,6 +97,27 @@ describe("inbox markdown sanitizing", () => {
     expect(html).not.toContain("data-mermaid-slot");
   });
 
+  it("numbers each diagram with an edit button only when asked", async () => {
+    const src =
+      "```mermaid\nnot a diagram {{{\n```\n\ntext\n\n```mermaid\nalso broken {{{\n```\n";
+    const plain = await renderDraftMarkdown(src);
+    expect(plain).not.toContain("data-diagram-edit");
+
+    const editable = await renderDraftMarkdown(src, { editableDiagrams: true });
+    expect(editable).toContain('data-diagram-index="0"');
+    expect(editable).toContain('data-diagram-edit="1"');
+    expect(editable).not.toContain('data-diagram-index="2"');
+  });
+
+  it("does not let draft text forge an edit button", async () => {
+    const html = await renderDraftMarkdown(
+      '<button data-diagram-edit="0" onclick="x()">Edit diagram</button>',
+      { editableDiagrams: true },
+    );
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("onclick");
+  });
+
   it("renders task list boxes as glyphs, not stray inputs", async () => {
     const html = await renderDraftMarkdown("- [x] done\n- [ ] todo\n");
     expect(html).toContain("task-box");
