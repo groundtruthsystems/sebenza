@@ -588,6 +588,17 @@ export const TrackFileQuerySchema = z.object({ path: z.string() });
 export const TrackFileResponseSchema = z.object({
   path: z.string(),
   content: z.string(),
+  /** Body hash a later save must echo back as `expectedHash`. */
+  hash: z.string().optional(),
+});
+export const SaveTrackFileRequestSchema = z.object({
+  path: z.string(),
+  expectedHash: z.string(),
+  content: z.string(),
+});
+export const SaveTrackFileResponseSchema = z.object({
+  path: z.string(),
+  hash: z.string(),
 });
 
 // ── Sebenza registry portfolio (`~/.ai/sebenza/registry.json`) ───────────────
@@ -933,6 +944,7 @@ export type PhaseSummary = z.infer<typeof PhaseSummarySchema>;
 export type Track = z.infer<typeof TrackSchema>;
 export type Tracks = z.infer<typeof TracksSchema>;
 export type TrackFileResponse = z.infer<typeof TrackFileResponseSchema>;
+export type SaveTrackFileResponse = z.infer<typeof SaveTrackFileResponseSchema>;
 export type RegistryProjectStatus = z.infer<typeof RegistryProjectStatusSchema>;
 export type RegistryProject = z.infer<typeof RegistryProjectSchema>;
 export type Portfolio = z.infer<typeof PortfolioSchema>;

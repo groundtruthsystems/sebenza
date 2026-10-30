@@ -429,7 +429,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/{prefix}/api/worktrees/{name}/tracks", get(fetch_tracks))
         .route(
             "/{prefix}/api/worktrees/{name}/track-file",
-            get(fetch_track_file),
+            get(fetch_track_file).put(save_track_file),
         )
         .route(
             "/{prefix}/api/worktrees/{name}/tabs",
@@ -1350,24 +1350,65 @@ async fn fetch_track_file(
     Ok(Json(response))
 }
 
-/// Shape a track-file read into `{ path, content }` or the matching HTTP error.
-/// Shared by the per-worktree and registry-scoped endpoints.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveTrackFileBody {
+    path: String,
+    expected_hash: String,
+    content: String,
+}
+
+/// Replace a worktree's spec.md / design.md / test-plan.md, gated on the hash the
+/// editor loaded. Returns `{ path, hash }`; 409 when the file moved on disk, 400
+/// on traversal or a non-markdown target, 404 when absent.
+async fn save_track_file(
+    State(state): State<AppState>,
+    Path((prefix, name)): Path<(String, String)>,
+    Json(body): Json<SaveTrackFileBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let app = state.project(&prefix)?;
+    let SaveTrackFileBody {
+        path: rel,
+        expected_hash,
+        content,
+    } = body;
+    let response = run_blocking(move || {
+        let path = worktree_path(&app, &name)?;
+        let hash = crate::adapters::fs::write_track_file(&path, &rel, &expected_hash, &content)
+            .map_err(|e| track_file_error(e, &rel))?;
+        Ok(serde_json::json!({ "path": rel, "hash": hash }))
+    })
+    .await?;
+    Ok(Json(response))
+}
+
+/// Shape a track-file read into `{ path, content, hash }` or the matching HTTP
+/// error. Shared by the per-worktree and registry-scoped endpoints.
 fn track_file_json(
     read: Result<String, crate::adapters::fs::TrackFileError>,
     rel: String,
 ) -> Result<serde_json::Value, LifecycleError> {
-    use crate::adapters::fs::TrackFileError;
     match read {
-        Ok(content) => Ok(serde_json::json!({ "path": rel, "content": content })),
-        Err(TrackFileError::Traversal) => Err(LifecycleError {
-            message: "Invalid track file path".to_string(),
-            status: 400,
-        }),
-        Err(TrackFileError::NotFound) => Err(LifecycleError {
-            message: format!("Track file not found: {rel}"),
-            status: 404,
-        }),
+        Ok(content) => {
+            let hash = crate::domain::model::FileRevision::of_body(&content).body_hash;
+            Ok(serde_json::json!({ "path": rel, "content": content, "hash": hash }))
+        }
+        Err(e) => Err(track_file_error(e, &rel)),
     }
+}
+
+fn track_file_error(err: crate::adapters::fs::TrackFileError, rel: &str) -> LifecycleError {
+    use crate::adapters::fs::TrackFileError;
+    let (status, message) = match err {
+        TrackFileError::Traversal => (400, "Invalid track file path".to_string()),
+        TrackFileError::NotEditable => (400, format!("Track file is not editable: {rel}")),
+        TrackFileError::NotFound => (404, format!("Track file not found: {rel}")),
+        TrackFileError::Conflict { .. } => {
+            (409, format!("Track file conflict: {rel} changed on disk"))
+        }
+        TrackFileError::Io(e) => (500, format!("Failed to write {rel}: {e}")),
+    };
+    LifecycleError { message, status }
 }
 
 #[derive(Deserialize)]

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   convertInboxDraft,
   fetchConversionJob,
@@ -18,7 +18,7 @@ import type { InboxAgentJob, InboxDraftHelpOutput } from "./api-contract";
 import { DraftHelpPanel, DraftMergeView } from "./DraftHelp";
 import PhiNotice from "./PhiNotice";
 import InboxActivity from "./InboxActivity";
-import MDEditor, { commands, type ICommand } from "@uiw/react-md-editor";
+import MarkdownEditor from "./MarkdownEditor";
 import NavRail from "./NavRail";
 import NewDraftDialog from "./NewDraftDialog";
 import ConfirmDialog from "./ConfirmDialog";
@@ -26,8 +26,6 @@ import Btn from "./Btn";
 import Toggle from "./Toggle";
 import ConvertDraftDialog, { type ConvertTarget } from "./ConvertDraftDialog";
 import { fetchProjects } from "./api";
-import { renderDraftMarkdown } from "./inboxMarkdown";
-import { fenceAt, insertFence, listFences, replaceFence } from "./diagram/fences";
 import { createDebouncer, saveDraftBody, type DraftLike } from "./inbox-editor";
 import type { ProjectSummary } from "./types";
 import PriorityControl, { PriorityBadge } from "./InboxPriority";
@@ -39,13 +37,6 @@ import {
 } from "./inbox-collab";
 
 const AUTOSAVE_MS = 800;
-
-// The canvas and its layout engine are large and only needed once someone
-// opens a diagram, so they load on demand.
-const DiagramEditor = lazy(() => import("./diagram/DiagramEditor"));
-
-/** Which diagram the editor is open on: an existing fence, or a new one at `insertAt`. */
-type DiagramTarget = { index: number; source: string } | { index: null; insertAt: number };
 
 type DraftStatus = "Draft" | "Promoted" | "Dropped";
 
@@ -105,7 +96,6 @@ export default function InboxView() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [body, setBody] = useState("");
-  const [preview, setPreview] = useState("");
   const [search, setSearch] = useState("");
   const [includeDropped, setIncludeDropped] = useState(false);
   const [status, setStatus] = useState("");
@@ -149,7 +139,6 @@ export default function InboxView() {
     base: DraftLike;
   } | null>(null);
   const [mergeSaving, setMergeSaving] = useState(false);
-  const [diagram, setDiagram] = useState<DiagramTarget | null>(null);
 
   const loadedRef = useRef<DraftLike>({ body: "", bodyHash: "" });
   const debouncer = useMemo(() => createDebouncer(AUTOSAVE_MS), []);
@@ -274,17 +263,6 @@ export default function InboxView() {
     }
   }, [debouncer]);
 
-  // Re-render the preview whenever the body settles.
-  useEffect(() => {
-    let cancelled = false;
-    void renderDraftMarkdown(body, { editableDiagrams: true }).then((html) => {
-      if (!cancelled) setPreview(html);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [body]);
-
   /** The hash-gated PUT, for autosave, draft help and merges alike. */
   const saveDeps = useCallback(
     (id: string) => ({
@@ -400,52 +378,6 @@ export default function InboxView() {
     setBody(next);
     setStatus("");
     debouncer.schedule(() => void persist(next));
-  };
-
-  /**
-   * Open the diagram editor from the toolbar: on the fence under the cursor
-   * when there is one, otherwise to insert a new diagram at the cursor.
-   */
-  const openDiagramAt = (offset: number) => {
-    const fence = fenceAt(body, offset);
-    setDiagram(fence ? { index: fence.index, source: fence.source } : { index: null, insertAt: offset });
-  };
-
-  const diagramCommand: ICommand = {
-    name: "diagram",
-    keyCommand: "diagram",
-    buttonProps: { "aria-label": "Insert or edit a diagram", title: "Diagram (UML, flowchart, sequence…)" },
-    icon: (
-      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
-        <rect x="1" y="1" width="6" height="4" />
-        <rect x="9" y="11" width="6" height="4" />
-        <path d="M4 5v4h8v2" />
-      </svg>
-    ),
-    execute: (state) => openDiagramAt(state.selection.start),
-  };
-
-  /** The preview's "Edit diagram" buttons, found by delegation. */
-  const onPreviewClick = (e: MouseEvent) => {
-    const button = (e.target as HTMLElement).closest<HTMLElement>("[data-diagram-edit]");
-    if (!button) return;
-    const index = Number(button.dataset.diagramEdit);
-    const fence = listFences(body)[index];
-    if (fence) setDiagram({ index, source: fence.source });
-  };
-
-  const saveDiagram = (source: string) => {
-    if (!diagram) return;
-    const replaced = diagram.index === null ? null : replaceFence(body, diagram.index, source);
-    // A fence that went away underneath (a merge or a reload) keeps the work
-    // by appending it rather than dropping it.
-    const next =
-      replaced ?? insertFence(body, diagram.index === null ? diagram.insertAt : body.length, source);
-    setDiagram(null);
-    onBodyChange(next);
-    if (diagram.index !== null && replaced === null) {
-      setStatus("The original diagram had changed, so this one was added at the end.");
-    }
   };
 
   const takeTheirs = () => {
@@ -881,31 +813,12 @@ export default function InboxView() {
                     oncancel={() => setMerge(null)}
                   />
                 )}
-                <div className="flex-1 min-w-0 min-h-0 flex" data-color-mode="dark">
-                  <MDEditor
-                    value={body}
-                    onChange={(next) => onBodyChange(next ?? "")}
-                    commands={[...commands.getCommands(), commands.divider, diagramCommand]}
-                    height="100%"
-                    visibleDragbar={false}
-                    textareaProps={{
-                      "aria-label": "Draft body",
-                      spellCheck: false,
-                    }}
-                    components={{
-                      // MDEditor's own preview renders markdown its own way, which
-                      // would bypass DOMPurify and mermaid's strict mode. Drafts are
-                      // pasted-in text, so the preview stays ours.
-                      preview: () => (
-                        <div
-                          className="inbox-preview md-body"
-                          onClick={onPreviewClick}
-                          dangerouslySetInnerHTML={{ __html: preview }}
-                        />
-                      ),
-                    }}
-                  />
-                </div>
+                <MarkdownEditor
+                  value={body}
+                  onChange={onBodyChange}
+                  ariaLabel="Draft body"
+                  onNotice={setStatus}
+                />
               </div>
               <InboxActivity
                 draftId={draft.id}
@@ -917,21 +830,6 @@ export default function InboxView() {
           </>
         )}
       </main>
-      {diagram && (
-        <Suspense
-          fallback={
-            <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center text-xs text-muted">
-              Loading diagram editor…
-            </div>
-          }
-        >
-          <DiagramEditor
-            initialSource={diagram.index === null ? null : diagram.source}
-            onSave={saveDiagram}
-            onCancel={() => setDiagram(null)}
-          />
-        </Suspense>
-      )}
     </div>
   );
 }

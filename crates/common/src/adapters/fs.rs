@@ -1,5 +1,5 @@
 use crate::domain::model::{
-    OPEN_SESSIONS_STATE_VERSION, OpenSessionsState, PrEntry, ROOT_TAB_ID,
+    FileRevision, OPEN_SESSIONS_STATE_VERSION, OpenSessionsState, PrEntry, ROOT_TAB_ID,
     WORKTREE_ARCHIVE_STATE_VERSION, WorktreeArchiveState, WorktreeMeta, WorktreeStoragePaths,
     WorktreeTab, WorktreeTabKind,
 };
@@ -184,6 +184,12 @@ pub enum TrackFileError {
     Traversal,
     /// No Sebenza workspace directory, or the file is absent.
     NotFound,
+    /// A write was refused: only existing markdown docs may be edited.
+    NotEditable,
+    /// A write's expected hash no longer matches the file on disk.
+    Conflict { actual: String },
+    /// The write itself failed.
+    Io(String),
 }
 
 /// Resolve the Sebenza workspace directory for a worktree: `<worktree>/.ai/sebenza`,
@@ -329,6 +335,45 @@ fn resolve_track_file(dir: &Path, rel: &str) -> Result<PathBuf, TrackFileError> 
         Ok(_) => Err(TrackFileError::Traversal),
         Err(_) => Err(TrackFileError::NotFound),
     }
+}
+
+/// Replace an existing markdown doc at `<worktree>/.ai/sebenza/<rel>` (spec.md /
+/// design.md / test-plan.md), gated on `expected_hash` — the body hash the editor
+/// loaded. A mismatch is a [`TrackFileError::Conflict`] and writes nothing. Only
+/// `.md` files that already exist are writable, so `plan.json` / `tracks.json`
+/// stay read-only and no new files appear. Returns the new body hash.
+pub fn write_track_file(
+    worktree_path: &str,
+    rel: &str,
+    expected_hash: &str,
+    content: &str,
+) -> Result<String, TrackFileError> {
+    let dir = resolve_tracks_dir(worktree_path).ok_or(TrackFileError::NotFound)?;
+    let target = resolve_track_file(&dir, rel)?;
+    let is_md = target
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+    if !is_md || !target.is_file() {
+        return Err(TrackFileError::NotEditable);
+    }
+    let current = fs::read_to_string(&target).map_err(|_| TrackFileError::NotFound)?;
+    let actual = FileRevision::of_body(&current).body_hash;
+    if actual != expected_hash {
+        return Err(TrackFileError::Conflict { actual });
+    }
+    // Write beside the target, then rename over it, so a reader never sees a
+    // half-written doc.
+    let file_name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let tmp = target.with_file_name(format!(".{file_name}.tmp"));
+    fs::write(&tmp, content).map_err(|e| TrackFileError::Io(e.to_string()))?;
+    fs::rename(&tmp, &target).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        TrackFileError::Io(e.to_string())
+    })?;
+    Ok(FileRevision::of_body(content).body_hash)
 }
 
 fn track_file_is_file(dir: &Path, rel: &str) -> bool {
@@ -652,6 +697,55 @@ mod tests {
         assert!(matches!(
             read_track_file(&wt_str, "tracks/t_1/missing.md"),
             Err(TrackFileError::NotFound)
+        ));
+
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    #[test]
+    fn write_track_file_is_hash_gated_and_markdown_only() {
+        let wt = temp_worktree();
+        let wt_str = wt.to_string_lossy().to_string();
+        let track = wt.join(".ai").join("sebenza").join("tracks").join("t_1");
+        fs::create_dir_all(&track).unwrap();
+        fs::write(track.join("spec.md"), "# Spec\n").unwrap();
+        fs::write(track.join("plan.json"), "{}").unwrap();
+        fs::write(wt.join("secret.md"), "nope").unwrap();
+        let loaded = FileRevision::of_body("# Spec\n").body_hash;
+
+        // Happy path: written, new hash returned, no temp file left behind.
+        let hash =
+            write_track_file(&wt_str, "./tracks/t_1/spec.md", &loaded, "# Spec v2\n").unwrap();
+        assert_eq!(hash, FileRevision::of_body("# Spec v2\n").body_hash);
+        assert_eq!(
+            fs::read_to_string(track.join("spec.md")).unwrap(),
+            "# Spec v2\n"
+        );
+        assert!(!track.join(".spec.md.tmp").exists());
+
+        // A stale hash is a conflict and writes nothing.
+        assert!(matches!(
+            write_track_file(&wt_str, "tracks/t_1/spec.md", &loaded, "clobber"),
+            Err(TrackFileError::Conflict { actual }) if actual == hash
+        ));
+        assert_eq!(
+            fs::read_to_string(track.join("spec.md")).unwrap(),
+            "# Spec v2\n"
+        );
+
+        // Non-markdown and absent files are not editable; traversal is rejected.
+        let json_hash = FileRevision::of_body("{}").body_hash;
+        assert!(matches!(
+            write_track_file(&wt_str, "tracks/t_1/plan.json", &json_hash, "[]"),
+            Err(TrackFileError::NotEditable)
+        ));
+        assert!(matches!(
+            write_track_file(&wt_str, "tracks/t_1/design.md", "", "x"),
+            Err(TrackFileError::NotFound)
+        ));
+        assert!(matches!(
+            write_track_file(&wt_str, "../../secret.md", "", "x"),
+            Err(TrackFileError::Traversal)
         ));
 
         fs::remove_dir_all(&wt).ok();

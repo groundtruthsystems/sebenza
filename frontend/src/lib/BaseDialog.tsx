@@ -1,13 +1,17 @@
-import { useEffect, useRef, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useRef, type MouseEvent, type ReactNode, type SyntheticEvent } from "react";
 
 export default function BaseDialog({
   onclose,
+  onrequestclose,
   wide = false,
   maxWidth = "",
   className = "",
   children,
 }: {
   onclose: () => void;
+  /** When set, Escape and backdrop clicks call this instead of closing, so
+   *  the caller can guard unsaved work and close (by unmounting) itself. */
+  onrequestclose?: () => void;
   wide?: boolean;
   maxWidth?: string;
   className?: string;
@@ -26,12 +30,18 @@ export default function BaseDialog({
     <dialog
       ref={dialogRef}
       onClose={onclose}
+      onCancel={(e: SyntheticEvent) => {
+        if (!onrequestclose) return;
+        e.preventDefault();
+        onrequestclose();
+      }}
       onMouseDown={(e: MouseEvent) => {
         pressStartedOnBackdrop.current = e.target === dialogRef.current;
       }}
       onClick={(e: MouseEvent) => {
         if (e.target === dialogRef.current && pressStartedOnBackdrop.current) {
-          dialogRef.current?.close();
+          if (onrequestclose) onrequestclose();
+          else dialogRef.current?.close();
         }
         pressStartedOnBackdrop.current = false;
       }}
