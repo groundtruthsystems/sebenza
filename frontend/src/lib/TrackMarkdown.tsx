@@ -27,9 +27,12 @@ let mermaidSeq = 0;
 export default function TrackMarkdown({
   fetchFile,
   path,
+  version = 0,
 }: {
   fetchFile: TrackFileFetcher;
   path: string;
+  /** Bump to re-read the file, e.g. after a save. */
+  version?: number;
 }) {
   const [html, setHtml] = useState("");
   const [loading, setLoading] = useState(true);
@@ -89,7 +92,7 @@ export default function TrackMarkdown({
     return () => {
       cancelled = true;
     };
-  }, [fetchFile, path]);
+  }, [fetchFile, path, version]);
 
   if (loading) return <div className="text-sm text-muted py-8 text-center">Loading…</div>;
   if (error) return <div className="text-sm text-danger py-8 text-center">{error}</div>;

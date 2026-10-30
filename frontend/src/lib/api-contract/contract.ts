@@ -41,6 +41,8 @@ import {
   TracksSchema,
   TrackFileQuerySchema,
   TrackFileResponseSchema,
+  SaveTrackFileRequestSchema,
+  SaveTrackFileResponseSchema,
   PortfolioSchema,
   RegistryFileQuerySchema,
   WorktreeListResponseSchema,
@@ -116,6 +118,7 @@ export const apiPaths = {
   fetchWorktreeDiff: "/api/worktrees/:name/diff",
   fetchTracks: "/api/worktrees/:name/tracks",
   fetchTrackFile: "/api/worktrees/:name/track-file",
+  saveTrackFile: "/api/worktrees/:name/track-file",
   fetchAutoNameConfig: "/api/project/auto-name",
   setAutoRemoveOnMerge: "/api/github/auto-remove-on-merge",
   pullMain: "/api/pull-main",
@@ -488,6 +491,16 @@ export const apiContract = c.router(
       query: TrackFileQuerySchema,
       responses: {
         200: TrackFileResponseSchema,
+        ...commonErrorResponses,
+      },
+    },
+    saveTrackFile: {
+      method: "PUT",
+      path: apiPaths.saveTrackFile,
+      pathParams: WorktreeNameParamsSchema,
+      body: SaveTrackFileRequestSchema,
+      responses: {
+        200: SaveTrackFileResponseSchema,
         ...commonErrorResponses,
       },
     },

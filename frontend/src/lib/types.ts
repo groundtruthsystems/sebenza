@@ -118,6 +118,15 @@ export interface TrackPlan {
  *  project (`fetchRegistryFile`). Callers must keep the reference stable. */
 export type TrackFileFetcher = (path: string) => Promise<TrackFileResponse>;
 
+/** Writes a workspace-relative markdown doc, gated on the hash it was loaded
+ *  at (rejects with a 409 conflict when it moved). Only the worktree Tracks
+ *  board supplies one; without it the docs views stay read-only. */
+export type TrackFileSaver = (
+  path: string,
+  expectedHash: string,
+  content: string,
+) => Promise<{ hash: string }>;
+
 export interface FileUploadResult {
   files: Array<{ path: string }>;
 }

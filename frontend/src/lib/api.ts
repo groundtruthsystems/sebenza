@@ -4,7 +4,7 @@ import {
   apiPaths,
   createApi,
 } from "./api-contract";
-import type { InboxAgentJob } from "./api-contract";
+import type { InboxAgentJob, SaveTrackFileResponse } from "./api-contract";
 import type {
   ActiveProjectWorktrees,
   AgentDetails,
@@ -206,6 +206,20 @@ export function fetchTrackFile(
   path: string,
 ): Promise<TrackFileResponse> {
   return api.fetchTrackFile({ params: { name: branch }, query: { path } });
+}
+
+/** Replace a worktree's spec.md / design.md / test-plan.md, gated on the hash
+ *  it was loaded at. A stale hash rejects with a 409 conflict. */
+export function saveTrackFile(
+  branch: string,
+  path: string,
+  expectedHash: string,
+  content: string,
+): Promise<SaveTrackFileResponse> {
+  return api.saveTrackFile({
+    params: { name: branch },
+    body: { path, expectedHash, content },
+  });
 }
 
 /** The user-scoped Sebenza registry (`~/.ai/sebenza/registry.json`) with each

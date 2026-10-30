@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Track, Tracks, WorktreeInfo } from "./types";
-import { fetchTrackFile, fetchTracks } from "./api";
+import { fetchTrackFile, fetchTracks, saveTrackFile } from "./api";
 import { errorMessage } from "./utils";
 import TrackDetail from "./TrackDetail";
 import PhaseDetail from "./PhaseDetail";
@@ -30,6 +30,11 @@ export default function TracksBoard({ worktree }: { worktree: WorktreeInfo }) {
 
   // Stable per-branch reader, so the detail views' effects don't re-fire.
   const fetchFile = useCallback((path: string) => fetchTrackFile(branch, path), [branch]);
+  const saveFile = useCallback(
+    (path: string, expectedHash: string, content: string) =>
+      saveTrackFile(branch, path, expectedHash, content),
+    [branch],
+  );
 
   const load = useCallback(
     (initial: boolean) => {
@@ -99,7 +104,12 @@ export default function TracksBoard({ worktree }: { worktree: WorktreeInfo }) {
         />
       )}
       {docsTrack && (
-        <TrackDetail fetchFile={fetchFile} track={docsTrack} onclose={() => setDocsTrack(null)} />
+        <TrackDetail
+          fetchFile={fetchFile}
+          saveFile={saveFile}
+          track={docsTrack}
+          onclose={() => setDocsTrack(null)}
+        />
       )}
     </div>
   );
