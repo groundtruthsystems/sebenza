@@ -136,6 +136,60 @@
       },
       "spec_path": "./tracks/inbox_graph_notes_20261105/spec.md",
       "plan_path": "./tracks/inbox_graph_notes_20261105/plan.json"
+    },
+    {
+      "track_id": "inbox_nervous_system_20261105",
+      "type": "bug",
+      "description": "Bug: agent requests/comments never reach the operator (non-canonical worktree path refused at ingest), agents not told the channel, no operator alert, operator comments not delivered to agents",
+      "status": "backlog",
+      "created_at": "2026-11-05T18:58:07Z",
+      "updated_at": "2026-11-05T18:58:07Z",
+      "phases_summary": [
+        {
+          "id": "phase-1",
+          "name": "Ingest path matching",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-2",
+          "name": "Agent operator channel",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-3",
+          "name": "Operator alerting",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-4",
+          "name": "Operator comment delivery",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-5",
+          "name": "Round-trip regression",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-6",
+          "name": "Final verification",
+          "status": "backlog",
+          "blocked_reason": null
+        }
+      ],
+      "progress": {
+        "total_tasks": 28,
+        "completed_tasks": 0,
+        "percentage": 0
+      },
+      "spec_path": "./tracks/inbox_nervous_system_20261105/spec.md",
+      "plan_path": "./tracks/inbox_nervous_system_20261105/plan.json",
+      "test_plan_path": "./tracks/inbox_nervous_system_20261105/test-plan.md"
     }
   ]
 }
