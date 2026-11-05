@@ -952,17 +952,20 @@ impl InboxService {
 
     fn ingest_unaudited(&self, ingress: &WorktreeIngress) -> Result<InboxEvent, InboxServiceError> {
         let draft = self.parsed(&ingress.draft_id)?;
-        let claimed = ingress.worktree_path.trim_end_matches('/');
+        let claimed = comparable_path(&ingress.worktree_path);
         // Both halves must match one created conversion: the path from the
         // worktree's environment and the branch from its control.env. The
         // draft id alone is just a file the worktree could have rewritten.
+        // Paths are compared as the directories they name, not as strings: a
+        // relative `worktreeRoot` hands the agent `<repo>/../worktrees/<b>`
+        // while the conversion recorded git's canonical path.
         let conversion = created_conversions(&draft)
             .into_iter()
             .find(|c| {
                 c.branch == ingress.branch
                     && c.worktree_path
                         .as_deref()
-                        .is_some_and(|p| p.trim_end_matches('/') == claimed)
+                        .is_some_and(|p| comparable_path(p) == claimed)
             })
             .ok_or_else(|| InboxServiceError::ForeignWorktree(draft.id.clone()))?;
         let key = WorktreeKey {
@@ -1505,6 +1508,32 @@ fn worktree_keys(draft: &InboxDraft) -> Vec<WorktreeKey> {
         };
         if !out.contains(&key) {
             out.push(key);
+        }
+    }
+    out
+}
+
+/// `path` as the directory it names, for comparing a claimed worktree path
+/// with a recorded one.
+///
+/// An existing path is canonicalised, so `..` segments and symlinks resolve
+/// to the real directory (a symlink to someone else's worktree is therefore
+/// *their* worktree, not a way in). A path that no longer exists falls back to
+/// lexical normalisation: `.` dropped, `..` popping its parent, trailing `/`
+/// ignored.
+fn comparable_path(path: &str) -> std::path::PathBuf {
+    use std::path::{Component, Path, PathBuf};
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return real;
+    }
+    let mut out = PathBuf::new();
+    for part in Path::new(path).components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
         }
     }
     out
@@ -2600,6 +2629,117 @@ mod collaboration_tests {
         f.svc
             .ingest(&request_from(&id, "/wt/acme-demo/feat-x/", "feat-x", "b"))
             .expect("ingest");
+    }
+
+    // --- Canonical path matching (nervous-system bug TS-01..TS-03) -----------
+
+    /// A fresh real directory, so canonicalisation has something to resolve.
+    fn real_dir(tag: &str) -> std::path::PathBuf {
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("sebenza-ingest-{tag}-{}-{}", std::process::id(), n));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir.canonicalize().expect("canonical temp dir")
+    }
+
+    // TS-01: a relative worktreeRoot gives the agent `<repo>/../worktrees/<b>`
+    // while the conversion recorded git's canonical path. Same directory, so
+    // the request must land.
+    #[test]
+    fn a_non_canonical_claimed_path_to_the_same_worktree_is_accepted() {
+        let f = fixture();
+        let root = real_dir("ts01");
+        let repo = root.join("repo");
+        let worktree = root.join("worktrees").join("feat-x");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        let id = f.svc.create("Idea").expect("create").id;
+        convert_into(
+            &f,
+            &id,
+            "/code/acme-demo",
+            "feat-x",
+            worktree.to_str().unwrap(),
+        );
+
+        let claimed = format!("{}/../worktrees/feat-x", repo.display());
+        f.svc
+            .ingest(&request_from(&id, &claimed, "feat-x", "Which db?"))
+            .expect("non-canonical path to the converted worktree");
+        assert_eq!(f.svc.list_requests(&id).unwrap().len(), 1);
+    }
+
+    // TS-01 (lexical fallback): a path that no longer exists on disk still
+    // matches once `.`/`..` segments are resolved.
+    #[test]
+    fn a_missing_path_matches_after_lexical_normalisation() {
+        let f = fixture();
+        let id = converted(&f);
+        f.svc
+            .ingest(&request_from(
+                &id,
+                "/wt/elsewhere/../acme-demo/./feat-x",
+                "feat-x",
+                "b",
+            ))
+            .expect("lexically equal path");
+    }
+
+    // TS-02: canonicalising must not widen trust: a different directory is
+    // still foreign, however it is spelled.
+    #[test]
+    fn a_non_canonical_path_to_a_foreign_directory_is_refused() {
+        let f = fixture();
+        let root = real_dir("ts02");
+        let mine = root.join("worktrees").join("feat-x");
+        let other = root.join("worktrees").join("feat-y");
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let id = f.svc.create("Idea").expect("create").id;
+        convert_into(&f, &id, "/code/acme-demo", "feat-x", mine.to_str().unwrap());
+
+        for claimed in [
+            format!("{}/../feat-y", mine.display()),
+            "/wt/acme-demo/feat-x/..".to_string(),
+        ] {
+            let err = f
+                .svc
+                .ingest(&request_from(&id, &claimed, "feat-x", "b"))
+                .expect_err("foreign directory");
+            assert!(
+                matches!(err, InboxServiceError::ForeignWorktree(_)),
+                "{claimed}: {err:?}"
+            );
+        }
+        assert!(f.svc.events(&id).expect("events").is_empty());
+    }
+
+    // TS-03: a symlink that resolves to another item's worktree is that other
+    // worktree, and the branch check still applies to the right path.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_another_items_worktree_is_refused() {
+        let f = fixture();
+        let root = real_dir("ts03");
+        let mine = root.join("feat-x");
+        let theirs = root.join("feat-y");
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::create_dir_all(&theirs).unwrap();
+        let link = root.join("looks-like-mine");
+        std::os::unix::fs::symlink(&theirs, &link).unwrap();
+        let id = f.svc.create("Idea").expect("create").id;
+        convert_into(&f, &id, "/code/acme-demo", "feat-x", mine.to_str().unwrap());
+
+        for (claimed, branch) in [
+            (link.to_str().unwrap().to_string(), "feat-x"),
+            (mine.to_str().unwrap().to_string(), "feat-y"),
+        ] {
+            assert!(matches!(
+                f.svc.ingest(&request_from(&id, &claimed, branch, "b")),
+                Err(InboxServiceError::ForeignWorktree(_))
+            ));
+        }
     }
 
     #[test]
