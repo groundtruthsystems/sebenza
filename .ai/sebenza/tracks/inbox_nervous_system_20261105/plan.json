@@ -26,19 +26,21 @@
           "id": "phase-1-task-3",
           "name": "Write tests for canonical SEBENZA_WORKTREE_PATH",
           "description": "Write a failing test that a worktree created under a relative worktreeRoot gets a canonical env and runtime.env path.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "8640717"
         },
         {
           "id": "phase-1-task-4",
           "name": "Write canonical SEBENZA_WORKTREE_PATH",
           "description": "Canonicalise the worktree path written in worktree_service.rs and server.rs environment construction.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "8640717"
         },
         {
           "id": "phase-1-task-5",
           "name": "Execute test scenarios TS-01, TS-02, TS-03, TS-04",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-01",
             "TS-02",
