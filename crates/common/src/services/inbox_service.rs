@@ -952,7 +952,7 @@ impl InboxService {
 
     fn ingest_unaudited(&self, ingress: &WorktreeIngress) -> Result<InboxEvent, InboxServiceError> {
         let draft = self.parsed(&ingress.draft_id)?;
-        let claimed = comparable_path(&ingress.worktree_path);
+        let claimed = crate::util::path::comparable_path(&ingress.worktree_path);
         // Both halves must match one created conversion: the path from the
         // worktree's environment and the branch from its control.env. The
         // draft id alone is just a file the worktree could have rewritten.
@@ -965,7 +965,7 @@ impl InboxService {
                 c.branch == ingress.branch
                     && c.worktree_path
                         .as_deref()
-                        .is_some_and(|p| comparable_path(p) == claimed)
+                        .is_some_and(|p| crate::util::path::comparable_path(p) == claimed)
             })
             .ok_or_else(|| InboxServiceError::ForeignWorktree(draft.id.clone()))?;
         let key = WorktreeKey {
@@ -1508,32 +1508,6 @@ fn worktree_keys(draft: &InboxDraft) -> Vec<WorktreeKey> {
         };
         if !out.contains(&key) {
             out.push(key);
-        }
-    }
-    out
-}
-
-/// `path` as the directory it names, for comparing a claimed worktree path
-/// with a recorded one.
-///
-/// An existing path is canonicalised, so `..` segments and symlinks resolve
-/// to the real directory (a symlink to someone else's worktree is therefore
-/// *their* worktree, not a way in). A path that no longer exists falls back to
-/// lexical normalisation: `.` dropped, `..` popping its parent, trailing `/`
-/// ignored.
-fn comparable_path(path: &str) -> std::path::PathBuf {
-    use std::path::{Component, Path, PathBuf};
-    if let Ok(real) = std::fs::canonicalize(path) {
-        return real;
-    }
-    let mut out = PathBuf::new();
-    for part in Path::new(path).components() {
-        match part {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
         }
     }
     out

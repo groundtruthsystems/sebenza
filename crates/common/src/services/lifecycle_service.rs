@@ -1989,11 +1989,11 @@ impl LifecycleService {
     }
 
     fn resolve_worktree_path(&self, branch: &str) -> String {
-        Path::new(&self.project_root)
-            .join(&self.config.workspace.worktree_root)
-            .join(branch)
-            .to_string_lossy()
-            .to_string()
+        managed_worktree_path(
+            &self.project_root,
+            &self.config.workspace.worktree_root,
+            branch,
+        )
     }
 }
 
@@ -2024,6 +2024,17 @@ fn normalize_worktree_label(label: Option<&str>) -> Result<Option<String>, Lifec
     Ok(Some(trimmed.to_string()))
 }
 
+/// Where a managed worktree for `branch` lives: `<project_root>/<worktree_root>/<branch>`,
+/// with `..` resolved. This is the path agents receive as `SEBENZA_WORKTREE_PATH`,
+/// so it must name the directory the way git reports it, not as `<repo>/../worktrees/..`.
+pub fn managed_worktree_path(project_root: &str, worktree_root: &str, branch: &str) -> String {
+    crate::util::path::normalize_lexically(
+        &Path::new(project_root).join(worktree_root).join(branch),
+    )
+    .to_string_lossy()
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -2047,6 +2058,24 @@ mod tests {
         );
     }
     use super::*;
+
+    // Nervous-system bug TS-04: a relative worktreeRoot must not leak `..`
+    // into the path agents get as SEBENZA_WORKTREE_PATH.
+    #[test]
+    fn a_relative_worktree_root_yields_a_normalised_worktree_path() {
+        assert_eq!(
+            managed_worktree_path("/code/sebenza", "../worktrees", "feat-x"),
+            "/code/worktrees/feat-x"
+        );
+        assert_eq!(
+            managed_worktree_path("/code/sebenza", "/abs/wt", "feat-x"),
+            "/abs/wt/feat-x"
+        );
+        assert_eq!(
+            managed_worktree_path("/code/sebenza", "./wt", "feat/x"),
+            "/code/sebenza/wt/feat/x"
+        );
+    }
 
     fn existing_main_meta() -> WorktreeMeta {
         WorktreeMeta {
