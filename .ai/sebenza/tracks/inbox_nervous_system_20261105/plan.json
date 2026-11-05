@@ -5,26 +5,28 @@
     {
       "id": "phase-1",
       "name": "Ingest path matching",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-1-task-1",
           "name": "Write tests for canonical ingest matching",
           "description": "Write failing tests for non-canonical, missing, foreign, wrong-branch and symlinked worktree paths at unit and route level.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "bfcb4c3"
         },
         {
           "id": "phase-1-task-2",
           "name": "Canonicalise paths in ingest",
           "description": "Compare canonicalised claimed and recorded worktree paths in InboxService::ingest_unaudited with a lexical fallback, keeping the branch check.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "bfcb4c3"
         },
         {
           "id": "phase-1-task-3",
           "name": "Write tests for canonical SEBENZA_WORKTREE_PATH",
           "description": "Write a failing test that a worktree created under a relative worktreeRoot gets a canonical env and runtime.env path.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-4",
