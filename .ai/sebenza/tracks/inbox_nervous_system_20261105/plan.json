@@ -159,64 +159,71 @@
     {
       "id": "phase-4",
       "name": "Operator comment delivery",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-4-task-1",
           "name": "Write tests for comment delivery",
           "description": "Write failing tests that worktree-thread comments are pasted by default, deliver=false and overall comments are not, and failures append a status event that retry can flip.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "818aed8"
         },
         {
           "id": "phase-4-task-2",
           "name": "Implement comment delivery",
           "description": "Deliver worktree-thread operator comments through the PaneSink with an Operator prefix, append delivery status events, and add a retry route.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "818aed8"
         },
         {
           "id": "phase-4-task-3",
           "name": "Write tests for the composer checkbox and failure UI",
           "description": "Write failing vitest tests for the Send to agent checkbox and the delivery-failure retry UI.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "835a6d4"
         },
         {
           "id": "phase-4-task-4",
           "name": "Implement the composer checkbox and failure UI",
           "description": "Add the Send to agent checkbox to worktree threads and show delivery failures with Retry in InboxComments.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "835a6d4"
         },
         {
           "id": "phase-4-task-5",
           "name": "Execute test scenarios TS-10, TS-11, TS-12, TS-13",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-10",
             "TS-11",
             "TS-12",
             "TS-13"
-          ]
+          ],
+          "commit_sha": "835a6d4"
         },
         {
           "id": "phase-4-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "835a6d4"
         }
-      ]
+      ],
+      "checkpoint_sha": "835a6d4"
     },
     {
       "id": "phase-5",
       "name": "Round-trip regression",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-5-task-1",
           "name": "Write the end-to-end round-trip test",
           "description": "Write an e2e_tests.rs test posting an agentctl payload with a non-canonical path through the real router and following it to the pane.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-5-task-2",

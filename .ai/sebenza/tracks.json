@@ -143,7 +143,7 @@
       "description": "Bug: agent requests/comments never reach the operator (non-canonical worktree path refused at ingest), agents not told the channel, no operator alert, operator comments not delivered to agents",
       "status": "doing",
       "created_at": "2026-11-05T18:58:07Z",
-      "updated_at": "2026-11-06T04:00:57Z",
+      "updated_at": "2026-11-06T04:07:17Z",
       "phases_summary": [
         {
           "id": "phase-1",
@@ -166,13 +166,13 @@
         {
           "id": "phase-4",
           "name": "Operator comment delivery",
-          "status": "doing",
+          "status": "done",
           "blocked_reason": null
         },
         {
           "id": "phase-5",
           "name": "Round-trip regression",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
@@ -184,8 +184,8 @@
       ],
       "progress": {
         "total_tasks": 28,
-        "completed_tasks": 16,
-        "percentage": 57
+        "completed_tasks": 22,
+        "percentage": 79
       },
       "spec_path": "./tracks/inbox_nervous_system_20261105/spec.md",
       "plan_path": "./tracks/inbox_nervous_system_20261105/plan.json",
