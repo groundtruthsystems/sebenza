@@ -1221,4 +1221,54 @@ mod tests {
             graph_etag(&input, &known)
         );
     }
+
+    /// Manual NFR-05 measurement (run with `--ignored --nocapture`): build
+    /// the graph at the caps — 25 worktrees x 4 tracks x 20 tasks = 2,000
+    /// task nodes, with dependencies — 50 times and report p50/p95.
+    #[test]
+    #[ignore]
+    fn p95_at_the_caps() {
+        let root = temp("p95");
+        let mut conversions = Vec::new();
+        let mut known = Vec::new();
+        for w in 0..MAX_WORKTREES {
+            let tracks: Vec<(String, serde_json::Value)> = (0..4)
+                .map(|t| {
+                    let tasks: Vec<serde_json::Value> = (0..20)
+                        .map(|k| {
+                            let deps: Vec<String> = if k > 0 { vec![format!("k{}", k - 1)] } else { vec![] };
+                            serde_json::json!({"id": format!("k{k}"), "name": "n", "status": "doing", "depends_on": deps})
+                        })
+                        .collect();
+                    (format!("t{t}_20261105"), serde_json::json!({"phases": [{"id": "p", "name": "P", "status": "doing", "tasks": tasks}]}))
+                })
+                .collect();
+            let refs: Vec<(&str, Option<serde_json::Value>)> = tracks
+                .iter()
+                .map(|(id, p)| (id.as_str(), Some(p.clone())))
+                .collect();
+            let wt = worktree(&root, &format!("w{w}"), &refs);
+            conversions.push(created("/code/a", &format!("b{w}"), &wt));
+            known.push(wt);
+        }
+        let known = Known(known);
+        let mut times: Vec<std::time::Duration> = (0..50)
+            .map(|_| {
+                let start = std::time::Instant::now();
+                let g = graph(&conversions, &known);
+                assert_eq!(g.progress.total, 2000);
+                start.elapsed()
+            })
+            .collect();
+        times.sort();
+        eprintln!(
+            "graph build at caps: p50 {:?} p95 {:?}",
+            times[25], times[47]
+        );
+        assert!(
+            times[47] < std::time::Duration::from_millis(300),
+            "p95 {:?}",
+            times[47]
+        );
+    }
 }
