@@ -216,49 +216,54 @@
     {
       "id": "phase-5",
       "name": "Round-trip regression",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-5-task-1",
           "name": "Write the end-to-end round-trip test",
           "description": "Write an e2e_tests.rs test posting an agentctl payload with a non-canonical path through the real router and following it to the pane.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "dda7f3e"
         },
         {
           "id": "phase-5-task-2",
           "name": "Fix any gaps the round trip exposes",
           "description": "Fix wiring the round-trip test exposes between ingress, listing, notification, confirmation and pane delivery.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "dda7f3e"
         },
         {
           "id": "phase-5-task-3",
           "name": "Execute test scenarios TS-14",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-14"
-          ]
+          ],
+          "commit_sha": "dda7f3e"
         },
         {
           "id": "phase-5-task-4",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "dda7f3e"
         }
-      ]
+      ],
+      "checkpoint_sha": "dda7f3e"
     },
     {
       "id": "phase-6",
       "name": "Final verification",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-6-task-1",
           "name": "Re-run the full test plan",
           "description": "Run cargo test --workspace and vitest with coverage and confirm TS-01..TS-14 pass with >80% coverage on new code.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-01",
             "TS-02",
