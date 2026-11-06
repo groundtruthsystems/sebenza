@@ -26,19 +26,21 @@
           "id": "phase-1-task-3",
           "name": "Write tests for InboxStore note operations",
           "description": "Write failing tests for add/edit/delete/reorder with hash and list_hash gating, last-note clearing, v2-to-v3 stamping on any write, and legacy save_body id guard.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "c6fb1a7"
         },
         {
           "id": "phase-1-task-4",
           "name": "Implement InboxStore note operations and v3 stamping",
           "description": "Add note operations under the existing lock and route every v3 stamp in require_writable through the codec.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "c6fb1a7"
         },
         {
           "id": "phase-1-task-5",
           "name": "Write tests for append-only conversions and note audit events",
           "description": "Write failing tests that apply_patch appends conversions and that note operations emit text-free audit events.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-6",
