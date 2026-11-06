@@ -390,6 +390,158 @@ async fn ts56_a_worktree_request_is_triaged_edited_confirmed_and_delivered() {
     );
 }
 
+/// Creates each worktree as a real directory next to the project, the way a
+/// relative `worktreeRoot: ../worktrees` lays them out, and reports git's
+/// canonical path for it.
+struct SiblingWorktreeRunner(PathBuf);
+impl ConversionRunner for SiblingWorktreeRunner {
+    fn create_worktree(&self, t: &ConversionTarget) -> Result<String, String> {
+        let dir = self.0.join("worktrees").join(&t.branch);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let real = dir.canonicalize().map_err(|e| e.to_string())?;
+        Ok(real.to_string_lossy().to_string())
+    }
+    fn write_note(&self, _p: &str, _b: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn exclude_note(&self, _p: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn record_origin(&self, _p: &str, _d: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn send_prompt(&self, _t: &ConversionTarget, _p: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn now(&self) -> String {
+        "2026-11-05T00:00:00Z".into()
+    }
+}
+
+// Nervous-system bug TS-14: the whole round trip through the real router. A
+// worktree agent with a non-canonical SEBENZA_WORKTREE_PATH (relative
+// worktreeRoot) raises a request; it is listed, counted, and notified; the
+// operator confirms and the reply reaches the pane; a follow-up operator
+// comment reaches the pane too.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ts14_an_agent_request_round_trips_to_the_operator_and_back() {
+    let d = Daemon::start("ok").await;
+    let project = d.project("acme-demo", true);
+    let created = d
+        .ok(
+            "POST",
+            "/api/inbox",
+            Some(serde_json::json!({"title": "Task graph"})),
+        )
+        .await;
+    let id = created["id"].as_str().expect("id").to_string();
+    let target = ConversionTarget {
+        project_path: project.clone(),
+        branch: "feat-x".into(),
+        prompt: "Build it".into(),
+        ..Default::default()
+    };
+    d.state
+        .inbox
+        .convert(&id, &[target], &SiblingWorktreeRunner(d.base.clone()))
+        .expect("convert");
+
+    // What the agent's environment holds under `worktreeRoot: ../worktrees`.
+    let claimed = format!("{project}/../worktrees/feat-x");
+    let (status, v) = d
+        .call(
+            "POST",
+            "/api/runtime/events",
+            Some(serde_json::json!({
+                "type": "inbox.request",
+                "worktreeId": "wt-id-1",
+                "branch": "feat-x",
+                "draftId": id,
+                "worktreePath": claimed,
+                "title": "Need a decision",
+                "body": "SYNTHETIC-PHI-MARKER-123 which loader?",
+                "caller": "worktree",
+            })),
+            true,
+        )
+        .await;
+    assert_eq!(status, 200, "non-canonical path refused: {v}");
+    let rid = v["requestId"].as_str().expect("requestId").to_string();
+
+    // The operator can see it: listed, counted, badged and notified.
+    let drafts = d.ok("GET", "/api/inbox", None).await;
+    assert_eq!(drafts["drafts"][0]["openRequestCount"], 1);
+    let summary = d.ok("GET", "/api/inbox/summary", None).await;
+    assert_eq!(summary["openRequests"], 1);
+    let app = d.state.manager.get_by_path(&project).expect("project");
+    let note = app
+        .notifications
+        .list()
+        .into_iter()
+        .find(|n| n.r#type == "inbox_request")
+        .expect("operator notified");
+    assert!(note.message.contains("Need a decision"));
+    assert!(!note.message.contains("SYNTHETIC-PHI-MARKER-123"));
+
+    // Triage proposes; the operator confirms; the reply reaches the agent.
+    let request = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let list = d
+                .ok("GET", &format!("/api/inbox/{id}/requests"), None)
+                .await;
+            let r = list["requests"][0].clone();
+            if r["status"] == "proposed" {
+                return r;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .expect("triage proposed in time");
+    let hash = request["proposalHash"].as_str().expect("hash").to_string();
+    let v = d
+        .ok(
+            "POST",
+            &format!("/api/inbox/{id}/requests/{rid}/confirm"),
+            Some(serde_json::json!({"contentHash": hash})),
+        )
+        .await;
+    assert_eq!(v["request"]["status"], "resolved", "{v}");
+    let key = WorktreeKey {
+        project: project.clone(),
+        branch: "feat-x".into(),
+    };
+    {
+        let pasted = d.pane.0.lock().unwrap().clone();
+        assert_eq!(pasted.len(), 1, "reply delivered once");
+        assert_eq!(pasted[0].0, key);
+        assert!(pasted[0].1.contains(&rid));
+    }
+    let summary = d.ok("GET", "/api/inbox/summary", None).await;
+    assert_eq!(
+        summary["openRequests"], 0,
+        "resolved requests stop counting"
+    );
+
+    // A follow-up operator comment on the worktree thread reaches it too.
+    let v = d
+        .ok(
+            "POST",
+            &format!("/api/inbox/{id}/comments"),
+            Some(serde_json::json!({
+                "body": "Also add a regression test.",
+                "worktree": {"project": project, "branch": "feat-x"},
+            })),
+        )
+        .await;
+    assert_eq!(v["comment"]["delivery"], "delivered", "{v}");
+    let pasted = d.pane.0.lock().unwrap().clone();
+    assert_eq!(pasted.len(), 2);
+    assert_eq!(pasted[1].0, key);
+    assert!(pasted[1].1.contains("Operator comment on inbox item"));
+    assert!(pasted[1].1.contains("Also add a regression test."));
+}
+
 // TS-57: an item with two targets gets a system instruction per target from
 // the stub over HTTP, is converted with them, and each worktree's launch
 // prompt is architect-first (both projects have `.ai/sebenza/index.md`).
