@@ -174,7 +174,8 @@
           "id": "phase-3-task-4b",
           "name": "Accept trackId/taskId on agent requests",
           "description": "Extend agentctl request with --track/--task and store optional trackId/taskId on RequestOpened, test first.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "eac4503"
         },
         {
           "id": "phase-3-task-5",
@@ -187,7 +188,7 @@
           "id": "phase-3-task-6",
           "name": "Publish contract to agent-extensions-skills",
           "description": "Send the inbox-notes.json v1 contract, depends_on grammar and fixture paths to the agent-extensions-skills worktree and record its acknowledgement.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-7",
