@@ -1350,3 +1350,15 @@ export const ReorderInboxNotesRequestSchema = z.object({
   order: z.array(z.string()),
   expectedListHash: z.string(),
 });
+
+/** `.ai/sebenza/inbox-notes.json` as the daemon writes it into a converted
+ *  worktree (`sebenza-inbox-notes-v1`). Additive: unknown fields pass. */
+export const InboxNotesManifestSchema = z.object({
+  schema: z.literal("sebenza-inbox-notes-v1"),
+  draft_id: z.string(),
+  title: z.string(),
+  notes: z.array(
+    z.object({ id: z.string(), type: z.string(), title: z.string(), body: z.string() }),
+  ),
+  siblings: z.array(z.object({ branch: z.string(), project_path: z.string() })).default([]),
+});

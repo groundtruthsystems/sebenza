@@ -4,3 +4,4 @@ pub mod inbox_events;
 pub mod model;
 pub mod note_codec;
 pub mod policies;
+pub mod task_graph;

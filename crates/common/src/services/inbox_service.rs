@@ -386,14 +386,7 @@ pub fn parse_worktree_ingress(raw: &serde_json::Value) -> Option<Result<Worktree
     })())
 }
 
-/// A track, phase or task id as plans use them: `[A-Za-z0-9_.-]{1,64}`.
-pub fn is_plan_id(s: &str) -> bool {
-    (1..=64).contains(&s.len())
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
-        && s != "."
-        && s != ".."
-}
+pub use crate::domain::task_graph::is_plan_id;
 
 /// Reads and writes drafts under the rules above.
 pub struct InboxService {

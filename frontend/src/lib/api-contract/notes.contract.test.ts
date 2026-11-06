@@ -49,3 +49,26 @@ describe("notes contract", () => {
     expect(draft.listHash).toBe("");
   });
 });
+
+// TS-38 (vitest reader): the SPA's reader parses the very fixture the daemon
+// writes and the agent-extensions-skills repo copies.
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { InboxNotesManifestSchema } from "./schemas";
+
+describe("inbox-notes.json contract", () => {
+  it("parses the golden fixture and ignores unknown fields", () => {
+    const raw = JSON.parse(
+      readFileSync(
+        resolve(process.cwd(), "../crates/common/testdata/contracts/inbox-notes.v1.json"),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+    const m = InboxNotesManifestSchema.parse({ ...raw, addedLater: true });
+    expect(m.schema).toBe("sebenza-inbox-notes-v1");
+    expect(m.notes.filter((n) => n.type === "acceptance_criteria").map((n) => n.body)).toEqual([
+      "- shows worktrees",
+    ]);
+    expect(m.siblings[0].branch).toBe("agent-extensions-skills");
+  });
+});

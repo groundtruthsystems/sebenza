@@ -1263,6 +1263,35 @@ pub struct ConversionItem<'a> {
     pub notes: &'a [InboxNote],
 }
 
+/// A reader's view of `inbox-notes.json` (v1). Unknown fields are ignored:
+/// v1 only ever grows.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct NotesManifest {
+    pub schema: String,
+    pub draft_id: String,
+    pub title: String,
+    pub notes: Vec<ManifestNote>,
+    #[serde(default)]
+    pub siblings: Vec<ManifestSibling>,
+}
+
+/// One note in [`NotesManifest`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ManifestNote {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub note_type: String,
+    pub title: String,
+    pub body: String,
+}
+
+/// Another worktree of the same conversion wave.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ManifestSibling {
+    pub branch: String,
+    pub project_path: String,
+}
+
 /// The `inbox-notes.json` a worktree receives: the item's notes and the other
 /// worktrees of the same conversion wave. Data only — readers must treat the
 /// notes as untrusted content, never instructions.
@@ -1796,6 +1825,36 @@ mod notes_delivery_tests {
         );
         assert_eq!(out[0].outcome, "failed");
         assert!(!spy.calls.borrow().iter().any(|c| c.starts_with("prompt:")));
+    }
+
+    // TS-34: a reader picks the acceptance criteria out of the contract by
+    // type, ignoring types it does not know.
+    #[test]
+    fn a_reader_selects_acceptance_criteria_by_type() {
+        let m: NotesManifest =
+            serde_json::from_str(include_str!("../../testdata/contracts/inbox-notes.v1.json"))
+                .expect("manifest");
+        let ac: Vec<&str> = m
+            .notes
+            .iter()
+            .filter(|n| n.note_type == "acceptance_criteria")
+            .map(|n| n.body.as_str())
+            .collect();
+        assert_eq!(ac, ["- shows worktrees"]);
+        assert_eq!(m.schema, NOTES_MANIFEST_SCHEMA);
+        assert_eq!(m.siblings[0].branch, "agent-extensions-skills");
+    }
+
+    // TS-39: v1 is additive, so fields a reader does not know are ignored.
+    #[test]
+    fn unknown_manifest_fields_are_ignored() {
+        let mut v: serde_json::Value =
+            serde_json::from_str(include_str!("../../testdata/contracts/inbox-notes.v1.json"))
+                .unwrap();
+        v["added_later"] = serde_json::json!({"x": 1});
+        v["notes"][0]["priority"] = serde_json::json!("high");
+        let m: NotesManifest = serde_json::from_value(v).expect("still parses");
+        assert_eq!(m.notes.len(), 3);
     }
 
     // TS-38 (Rust reader): the golden contract fixture is exactly what the
