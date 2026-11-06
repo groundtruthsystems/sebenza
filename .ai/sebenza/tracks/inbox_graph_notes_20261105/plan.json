@@ -356,26 +356,28 @@
     {
       "id": "phase-6",
       "name": "Notes panel UI",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-6-task-1",
           "name": "Write tests for NotesPanel",
           "description": "Write failing vitest tests for adding, editing, reordering and confirmed deletion, per-note 409 conflict UI, DraftHelp per note and the stale-notes badge.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "bc90fbf"
         },
         {
           "id": "phase-6-task-2",
           "name": "Implement NotesPanel",
           "description": "Replace the single MarkdownEditor in InboxView with NotesPanel, per-note merge view, per-note DraftHelp, the stale-notes badge and the convert PHI reminder.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "bc90fbf"
         },
         {
           "id": "phase-6-task-3",
           "name": "Execute test scenarios TS-19, TS-21, TS-27, TS-56, TS-67, TS-72",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-19",
             "TS-21",
@@ -383,27 +385,30 @@
             "TS-56",
             "TS-67",
             "TS-72"
-          ]
+          ],
+          "commit_sha": "bc90fbf"
         },
         {
           "id": "phase-6-task-4",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "bc90fbf"
         }
-      ]
+      ],
+      "checkpoint_sha": "bc90fbf"
     },
     {
       "id": "phase-7",
       "name": "Graph tab UI",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-7-task-1",
           "name": "Write tests for graphToMermaid and GraphTab",
           "description": "Write failing vitest tests for Mermaid output, escaping and label caps, collapse thresholds and explicit limits, refresh and polling policy, badges and contract parsing.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-7-task-2",
