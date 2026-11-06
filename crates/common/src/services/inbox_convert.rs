@@ -1125,6 +1125,20 @@ pub const DIAGRAM_HINT: &str = "Any Mermaid diagrams in it are the operator's in
      structure: carry them into the design rather than re-deriving them. Lines starting \
      `%% sebenza:` are diagram-editor metadata; ignore them.";
 
+/// Told to every worktree: how to reach the operator through the inbox item it
+/// was converted from. A question asked only in the terminal waits on a pane
+/// the operator may never look at; a request shows on the item, counts on the
+/// Inbox badge and raises a notification.
+pub const OPERATOR_CHANNEL: &str = "Operator channel: when you are blocked and need an \
+     operator decision or input, record it as blocked in the plan and raise a request on this \
+     worktree's inbox item, then stop and wait:\n\
+     \"$(git rev-parse --git-dir)/.ai/sebenza/sebenza-agentctl\" request --title \"<short question>\" \
+     --body \"<exactly what you need>\"\n\
+     For non-blocking progress or notes the operator should see, post a comment instead:\n\
+     \"$(git rev-parse --git-dir)/.ai/sebenza/sebenza-agentctl\" comment --body \"<update>\"\n\
+     Operator replies and comments are pasted into this session prefixed \"Operator\"; handle \
+     them before continuing with other work.";
+
 /// Builds the launch prompt for one converted worktree. Pure: no I/O.
 pub struct ArchitectFirstPromptBuilder;
 
@@ -1176,7 +1190,8 @@ impl ArchitectFirstPromptBuilder {
                  {item} Read it first and give it to the architect as the feature \
                  description{inputs}. {diagrams}\n\n\
                  {operator_block}{system_block}\
-                 Once the design is approved, continue with the Sebenza workflow."
+                 Once the design is approved, continue with the Sebenza workflow.\n\n\
+                 {OPERATOR_CHANNEL}"
             );
             return LaunchPrompt {
                 mode: LaunchMode::ArchitectFirst,
@@ -1187,7 +1202,7 @@ impl ArchitectFirstPromptBuilder {
             mode: LaunchMode::Direct,
             text: format!(
                 "{item} Read it first: it is the context for this work. {diagrams}\n\n\
-                 {operator_block}{system_block}"
+                 {operator_block}{system_block}{OPERATOR_CHANNEL}"
             )
             .trim_end()
             .to_string(),
@@ -1292,6 +1307,30 @@ mod launch_tests {
             p.text.find("sebenza-architect").unwrap() < p.text.find(OPERATOR).unwrap(),
             "the architect step comes first"
         );
+    }
+
+    // Nervous-system bug TS-05: every launch prompt tells the agent how to
+    // reach the operator, whichever mode it is built in.
+    #[test]
+    fn every_launch_prompt_documents_the_operator_channel() {
+        for (architect_first, workspace) in [(true, true), (false, true), (true, false)] {
+            let p = ArchitectFirstPromptBuilder::build(&input(None, architect_first, workspace));
+            for needle in [
+                "Operator channel",
+                "sebenza-agentctl\" request",
+                "sebenza-agentctl\" comment",
+                "--title",
+                "--body",
+                "before continuing",
+            ] {
+                assert!(
+                    p.text.contains(needle),
+                    "{:?} prompt missing {needle:?}:\n{}",
+                    p.mode,
+                    p.text
+                );
+            }
+        }
     }
 
     // TS-48: architect_first=false gives a direct instruction, no wrapper.
