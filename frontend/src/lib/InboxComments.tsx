@@ -30,12 +30,58 @@ export function WarningBadges({ warnings }: { warnings: string[] }) {
   );
 }
 
+function DeliveryState({
+  comment,
+  onredeliver,
+}: {
+  comment: InboxComment;
+  onredeliver: (eventId: string) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (comment.delivery === "delivered") {
+    return (
+      <span className="px-1 rounded border border-edge" title="Pasted into the worktree's agent pane">
+        sent to agent
+      </span>
+    );
+  }
+  if (comment.delivery !== "failed") return null;
+  const retry = async () => {
+    setBusy(true);
+    setError("");
+    try {
+      await onredeliver(comment.eventId);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <span className="flex items-center gap-1 text-danger">
+      <span>Not delivered: {comment.deliveryError ?? "unknown error"}</span>
+      <button
+        type="button"
+        className="underline cursor-pointer disabled:opacity-50"
+        disabled={busy}
+        onClick={() => void retry()}
+      >
+        Retry delivery
+      </button>
+      {error && <span>({error})</span>}
+    </span>
+  );
+}
+
 function CommentRow({
   comment,
   onredact,
+  onredeliver,
 }: {
   comment: InboxComment;
   onredact: (eventId: string) => Promise<void>;
+  onredeliver: (eventId: string) => Promise<void>;
 }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -78,6 +124,7 @@ function CommentRow({
           )
         )}
         <WarningBadges warnings={comment.warnings} />
+        <DeliveryState comment={comment} onredeliver={onredeliver} />
         <span className="ml-auto">{comment.ts.replace("T", " ").slice(0, 16)}</span>
         {!comment.redacted && !confirming && (
           <button
@@ -126,11 +173,13 @@ function Thread({
   title,
   comments,
   onredact,
+  onredeliver,
 }: {
   label: string;
   title?: string;
   comments: InboxComment[];
   onredact: (eventId: string) => Promise<void>;
+  onredeliver: (eventId: string) => Promise<void>;
 }) {
   return (
     <section aria-label={`${label} thread`} className="mb-3">
@@ -145,7 +194,12 @@ function Thread({
       ) : (
         <ul className="list-none m-0 p-0">
           {comments.map((c) => (
-            <CommentRow key={c.eventId} comment={c} onredact={onredact} />
+            <CommentRow
+              key={c.eventId}
+              comment={c}
+              onredact={onredact}
+              onredeliver={onredeliver}
+            />
           ))}
         </ul>
       )}
@@ -165,15 +219,24 @@ export default function InboxComments({
   worktrees,
   onpost,
   onredact,
+  onredeliver,
 }: {
   groups: InboxCommentGroups;
   /** Worktrees the composer may post to, beyond those with comments. */
   worktrees: WorktreeRef[];
-  onpost: (body: string, worktree?: WorktreeRef) => Promise<InboxComment>;
+  /** `deliver` is passed for worktree threads only: paste it to the agent. */
+  onpost: (
+    body: string,
+    worktree?: WorktreeRef,
+    deliver?: boolean,
+  ) => Promise<InboxComment>;
   onredact: (eventId: string) => Promise<void>;
+  /** Retry a worktree comment whose paste into the agent pane failed. */
+  onredeliver: (eventId: string) => Promise<void>;
 }) {
   const [text, setText] = useState("");
   const [target, setTarget] = useState("");
+  const [sendToAgent, setSendToAgent] = useState(true);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState("");
   const [flagged, setFlagged] = useState<string[]>([]);
@@ -190,7 +253,10 @@ export default function InboxComments({
     setError("");
     setFlagged([]);
     try {
-      const posted = await onpost(body, target ? targets.get(target) : undefined);
+      const worktree = target ? targets.get(target) : undefined;
+      const posted = worktree
+        ? await onpost(body, worktree, sendToAgent)
+        : await onpost(body, undefined);
       setText("");
       setFlagged(posted.warnings);
     } catch (err) {
@@ -203,7 +269,12 @@ export default function InboxComments({
   return (
     <div className="flex flex-col min-h-0 h-full">
       <div className="flex-1 min-h-0 overflow-y-auto p-3">
-        <Thread label="Overall" comments={groups.overall} onredact={onredact} />
+        <Thread
+          label="Overall"
+          comments={groups.overall}
+          onredact={onredact}
+          onredeliver={onredeliver}
+        />
         {groups.worktrees.map((w) => (
           <Thread
             key={keyOf(w)}
@@ -211,6 +282,7 @@ export default function InboxComments({
             title={`${w.project} · ${w.branch}`}
             comments={w.comments}
             onredact={onredact}
+            onredeliver={onredeliver}
           />
         ))}
       </div>
@@ -236,6 +308,17 @@ export default function InboxComments({
             </option>
           ))}
         </select>
+        {target && (
+          <label className="flex items-center gap-1.5 text-[11px] text-muted">
+            <input
+              type="checkbox"
+              checked={sendToAgent}
+              onChange={(e) => setSendToAgent(e.currentTarget.checked)}
+              disabled={posting}
+            />
+            Send to agent
+          </label>
+        )}
         <textarea
           aria-label="Comment"
           rows={3}

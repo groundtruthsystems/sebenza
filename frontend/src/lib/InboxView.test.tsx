@@ -466,10 +466,12 @@ describe("InboxView", () => {
     await user.selectOptions(await screen.findByLabelText("Comment thread"), "acme · fix-x");
     await user.type(screen.getByLabelText("Comment"), "hi");
     await user.click(screen.getByRole("button", { name: "Post comment" }));
-    expect(postComment).toHaveBeenCalledWith(ID, "hi", {
-      project: "/code/acme",
-      branch: "fix-x",
-    });
+    expect(postComment).toHaveBeenCalledWith(
+      ID,
+      "hi",
+      { project: "/code/acme", branch: "fix-x" },
+      true,
+    );
     await waitFor(() => expect(comments.mock.calls.length).toBeGreaterThan(1));
   });
 

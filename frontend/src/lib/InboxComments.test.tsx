@@ -72,6 +72,7 @@ function setup(over: Partial<Parameters<typeof InboxComments>[0]> = {}) {
       worktrees={[wt, { project: "/code/beta", branch: "spike" }]}
       onpost={onpost}
       onredact={onredact}
+      onredeliver={vi.fn().mockResolvedValue(undefined)}
       {...over}
     />,
   );
@@ -161,10 +162,11 @@ describe("InboxComments", () => {
     await user.selectOptions(screen.getByLabelText("Comment thread"), "beta · spike");
     await user.type(screen.getByLabelText("Comment"), "look here");
     await user.click(screen.getByRole("button", { name: "Post comment" }));
-    expect(onpost).toHaveBeenCalledWith("look here", {
-      project: "/code/beta",
-      branch: "spike",
-    });
+    expect(onpost).toHaveBeenCalledWith(
+      "look here",
+      { project: "/code/beta", branch: "spike" },
+      true,
+    );
   });
 
   it("says when a posted comment was flagged by the scan", async () => {
@@ -188,5 +190,69 @@ describe("InboxComments", () => {
     await user.click(screen.getByRole("button", { name: "Post comment" }));
     expect(await screen.findByText("rate limited")).toBeInTheDocument();
     expect(screen.getByLabelText("Comment")).toHaveValue("keep me");
+  });
+});
+
+describe("InboxComments delivery to the agent", () => {
+  const empty = (): InboxCommentGroups => ({ overall: [], worktrees: [] });
+
+  // Nervous-system bug TS-12: "Send to agent" appears for a worktree thread
+  // only, ticked by default, and its state rides along with the post.
+  it("offers Send to agent on worktree threads, ticked by default", async () => {
+    const user = userEvent.setup();
+    const onpost = vi.fn(async () => comment({}));
+    render(
+      <InboxComments
+        groups={empty()}
+        worktrees={[wt]}
+        onpost={onpost}
+        onredact={vi.fn()}
+        onredeliver={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText("Send to agent")).toBeNull();
+
+    await user.selectOptions(screen.getByLabelText("Comment thread"), "/code/acme\u0000fix-x");
+    const send = screen.getByLabelText("Send to agent");
+    expect(send).toBeChecked();
+    await user.type(screen.getByLabelText("Comment"), "Use Postgres");
+    await user.click(screen.getByRole("button", { name: "Post comment" }));
+    expect(onpost).toHaveBeenLastCalledWith("Use Postgres", wt, true);
+
+    await user.click(send);
+    await user.type(screen.getByLabelText("Comment"), "Note only");
+    await user.click(screen.getByRole("button", { name: "Post comment" }));
+    expect(onpost).toHaveBeenLastCalledWith("Note only", wt, false);
+  });
+
+  // Nervous-system bug TS-13: a failed paste says so and offers a retry;
+  // a delivered one says it was sent.
+  it("shows delivery failures with Retry and marks delivered comments", async () => {
+    const user = userEvent.setup();
+    const onredeliver = vi.fn(async () => undefined);
+    render(
+      <InboxComments
+        groups={{
+          overall: [],
+          worktrees: [
+            {
+              ...wt,
+              comments: [
+                comment({ eventId: "F1", delivery: "failed", deliveryError: "no live agent pane" }),
+                comment({ eventId: "D1", delivery: "delivered", deliveryError: null }),
+              ],
+            },
+          ],
+        }}
+        worktrees={[wt]}
+        onpost={vi.fn()}
+        onredact={vi.fn()}
+        onredeliver={onredeliver}
+      />,
+    );
+    expect(screen.getByText(/not delivered: no live agent pane/i)).toBeInTheDocument();
+    expect(screen.getByText(/sent to agent/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry delivery" }));
+    expect(onredeliver).toHaveBeenCalledWith("F1");
   });
 });

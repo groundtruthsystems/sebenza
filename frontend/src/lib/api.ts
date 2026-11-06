@@ -659,10 +659,22 @@ export async function postInboxComment(
   id: string,
   body: string,
   worktree?: { project: string; branch: string },
+  deliver?: boolean,
 ) {
   return hubApi.postInboxComment({
     params: { id },
-    body: worktree ? { body, worktree } : { body },
+    body: worktree
+      ? { body, worktree, ...(deliver === undefined ? {} : { deliver }) }
+      : { body },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Retry pasting an operator comment whose delivery to the agent failed. */
+export async function redeliverInboxComment(id: string, eventId: string) {
+  return hubApi.redeliverInboxComment({
+    params: { id, eventId },
+    body: {},
     extraHeaders: inboxAuthHeaders(),
   });
 }

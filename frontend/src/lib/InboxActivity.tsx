@@ -4,6 +4,7 @@ import {
   fetchInboxComments,
   fetchInboxRequests,
   postInboxComment,
+  redeliverInboxComment,
   redactInboxComment,
   redeliverInboxRequest,
   rejectInboxRequest,
@@ -180,10 +181,19 @@ export default function InboxActivity({
           <InboxComments
             groups={groups}
             worktrees={worktrees}
-            onpost={async (body, worktree) => {
-              const { comment } = await postInboxComment(draftId, body, worktree);
+            onpost={async (body, worktree, deliver) => {
+              const { comment } = await postInboxComment(
+                draftId,
+                body,
+                worktree,
+                deliver,
+              );
               await load();
               return comment;
+            }}
+            onredeliver={async (eventId) => {
+              await redeliverInboxComment(draftId, eventId);
+              await load();
             }}
             onredact={async (eventId) => {
               await redactInboxComment(draftId, eventId);

@@ -70,6 +70,7 @@ import {
   PostInboxCommentResponseSchema,
   InboxRequestListSchema,
   InboxSummarySchema,
+  RedeliverInboxCommentResponseSchema,
   ConfirmInboxRequestSchema,
   RejectInboxRequestSchema,
   InboxRequestResponseSchema,
@@ -154,6 +155,7 @@ export const apiPaths = {
   streamInboxAgent: "/api/inbox/:id/agent/stream",
   requestInboxDraftHelp: "/api/inbox/:id/agent/draft-help",
   redactInboxComment: "/api/inbox/:id/comments/:eventId/redact",
+  redeliverInboxComment: "/api/inbox/:id/comments/:eventId/redeliver",
   fetchRegistry: "/api/registry",
   fetchRegistryFile: "/api/registry/file",
 } as const;
@@ -785,6 +787,15 @@ export const apiContract = c.router(
         200: InboxDraftHelpResponseSchema,
         ...inboxDecisionErrors,
         503: ErrorResponseSchema,
+      },
+    },
+    redeliverInboxComment: {
+      method: "POST",
+      path: apiPaths.redeliverInboxComment,
+      body: z.object({}).optional(),
+      responses: {
+        200: RedeliverInboxCommentResponseSchema,
+        ...inboxDecisionErrors,
       },
     },
     redactInboxComment: {

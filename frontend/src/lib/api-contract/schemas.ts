@@ -1078,6 +1078,11 @@ export const InboxCommentSchema = z.object({
   parentEventId: z.string().nullable(),
   warnings: z.array(z.string()).default([]),
   redacted: z.boolean(),
+  /** An operator's worktree comment sent to the agent: the latest paste
+   *  outcome. Absent or null when it was kept as a note. */
+  delivery: z.enum(["delivered", "failed"]).nullish(),
+  /** Why the latest paste failed. */
+  deliveryError: z.string().nullish(),
 });
 
 export const InboxCommentGroupsSchema = z.object({
@@ -1091,6 +1096,12 @@ export const InboxCommentGroupsSchema = z.object({
 export const PostInboxCommentRequestSchema = z.object({
   body: z.string(),
   worktree: InboxWorktreeKeySchema.optional(),
+  /** Paste a worktree-thread comment into the agent pane. Default true. */
+  deliver: z.boolean().optional(),
+});
+
+export const RedeliverInboxCommentResponseSchema = z.object({
+  comment: InboxCommentSchema.nullable(),
 });
 
 export const PostInboxCommentResponseSchema = z.object({
