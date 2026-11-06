@@ -734,6 +734,10 @@ pub struct PostCommentBody {
     /// A worktree thread; absent or null posts to the overall thread.
     #[serde(default)]
     pub worktree: Option<WorktreeKey>,
+    /// Paste a worktree-thread comment into that worktree's agent pane.
+    /// Absent means yes; overall-thread comments are never pasted.
+    #[serde(default)]
+    pub deliver: Option<bool>,
 }
 
 /// `POST /api/inbox/{id}/comments` — an operator comment.
@@ -755,10 +759,62 @@ pub async fn post_comment(
         ..EventAuthor::operator()
     };
     let svc = inbox(&state);
-    let event = svc.add_comment(&id, author, thread, &body.body)?;
+    let deliver = body.deliver.unwrap_or(true);
+    let text = body.body;
+    let comment_id = id.clone();
+    let (event, _) = tokio::task::spawn_blocking({
+        let svc = svc.clone();
+        move || svc.post_operator_comment(&comment_id, author, thread, &text, deliver)
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
     Ok(Json(
-        serde_json::json!({ "comment": svc.comment_view(&event) }),
+        serde_json::json!({ "comment": comment_with_delivery(&svc, &id, &event) }),
     ))
+}
+
+/// `POST /api/inbox/{id}/comments/{eventId}/redeliver` — retry pasting an
+/// operator comment whose delivery failed.
+pub async fn redeliver_comment(
+    State(state): State<AppState>,
+    Path((id, event_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let (item, target) = (id.clone(), event_id.clone());
+    tokio::task::spawn_blocking({
+        let svc = svc.clone();
+        move || svc.redeliver_comment(&item, &target, caller)
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
+    let comment = svc
+        .events(&id)?
+        .into_iter()
+        .find(|e| e.event_id == event_id)
+        .map(|e| comment_with_delivery(&svc, &id, &e));
+    Ok(Json(serde_json::json!({ "comment": comment })))
+}
+
+/// The thread row for `event` as `list_comments` shows it, delivery state
+/// included; falls back to the bare view if the threads cannot be read.
+fn comment_with_delivery(
+    svc: &InboxService,
+    id: &str,
+    event: &InboxEvent,
+) -> Option<common::services::inbox_service::CommentView> {
+    svc.list_comments(id)
+        .ok()
+        .and_then(|groups| {
+            groups
+                .overall
+                .into_iter()
+                .chain(groups.worktrees.into_iter().flat_map(|g| g.comments))
+                .find(|c| c.event_id == event.event_id)
+        })
+        .or_else(|| svc.comment_view(event))
 }
 
 /// `GET /api/inbox/{id}/requests` — every request, folded from the log.
@@ -1960,6 +2016,80 @@ mod tests {
             events[0].kind,
             InboxEventKind::RequestOpened { .. }
         ));
+    }
+
+    // Nervous-system bug TS-10 / TS-11: an operator's worktree-thread comment
+    // is pasted into that worktree's pane unless they opt out; overall
+    // comments never are.
+    #[tokio::test]
+    async fn operator_worktree_comments_reach_the_pane_unless_opted_out() {
+        let f = fixture();
+        let id = converted(&f);
+        let wt = serde_json::json!({"project": "/code/acme-demo", "branch": "feat-x"});
+
+        let v = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "Use Postgres.", "worktree": wt}),
+        )
+        .await
+        .expect("delivered comment");
+        assert_eq!(v["comment"]["delivery"], "delivered");
+        let sent = f.pane.0.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].1.contains("Use Postgres."));
+
+        let kept = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "Note only", "worktree": wt, "deliver": false}),
+        )
+        .await
+        .expect("kept comment");
+        assert!(kept["comment"]["delivery"].is_null());
+        comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "Everyone"}),
+        )
+        .await
+        .expect("overall");
+        assert_eq!(f.pane.0.lock().unwrap().len(), 1, "only the first was sent");
+    }
+
+    // Nervous-system bug TS-13: retrying a delivered or unsent comment is a
+    // 400; the route needs the token.
+    #[tokio::test]
+    async fn redelivering_a_comment_is_guarded() {
+        let f = fixture();
+        let id = converted(&f);
+        let v = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "Hi", "worktree": {"project": "/code/acme-demo", "branch": "feat-x"}}),
+        )
+        .await
+        .expect("comment");
+        let event_id = v["comment"]["eventId"].as_str().unwrap().to_string();
+        let retry = |h: HeaderMap| {
+            redeliver_comment(
+                State(f.state.clone()),
+                Path((id.clone(), event_id.clone())),
+                h,
+            )
+        };
+        let mut no_token = HeaderMap::new();
+        no_token.insert("host", HeaderValue::from_static(HOST));
+        assert_eq!(status(retry(no_token).await), 401);
+        assert_eq!(
+            status(retry(good_headers()).await),
+            400,
+            "already delivered"
+        );
     }
 
     // Nervous-system bug TS-06 / TS-07: the list carries each item's open

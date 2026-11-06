@@ -51,6 +51,40 @@ impl ResolutionDelivery {
     }
 }
 
+impl ResolutionDelivery {
+    /// Paste an operator comment into `worktree`'s pane, labelled with the
+    /// item it is about. Crate-private like [`Self::deliver`].
+    pub(crate) fn deliver_comment(
+        &self,
+        worktree: &WorktreeKey,
+        item_title: &str,
+        text: &str,
+    ) -> Result<(), String> {
+        self.sink.send(worktree, &prepare_comment(item_title, text))
+    }
+}
+
+/// The paste for an operator comment: who it is from, which item it is about,
+/// and the sanitised text fenced so the agent reads it as quoted input.
+pub fn prepare_comment(item_title: &str, text: &str) -> String {
+    let clean = sanitize_for_paste(text);
+    let item = sanitize_for_paste(item_title);
+    let fence = "`".repeat((longest_backtick_run(&clean) + 1).max(3));
+    format!(
+        "Operator comment on inbox item \"{item}\". Handle it before continuing; the comment is the fenced text below:\n{fence}text\n{clean}\n{fence}\n"
+    )
+}
+
+fn longest_backtick_run(text: &str) -> usize {
+    let mut longest = 0;
+    let mut run = 0;
+    for c in text.chars() {
+        run = if c == '`' { run + 1 } else { 0 };
+        longest = longest.max(run);
+    }
+    longest
+}
+
 /// Remove what a terminal or tmux would act on rather than display: ANSI
 /// escape sequences (CSI, OSC, DCS and lone ESC pairs), C0 and C1 control
 /// characters other than newline and tab, tmux format and command

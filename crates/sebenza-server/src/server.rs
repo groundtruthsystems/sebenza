@@ -390,6 +390,10 @@ pub fn build_router(state: AppState) -> Router {
             post(crate::inbox_routes::convert_instructions),
         )
         .route(
+            "/api/inbox/{id}/comments/{event_id}/redeliver",
+            post(crate::inbox_routes::redeliver_comment),
+        )
+        .route(
             "/api/inbox/{id}/comments/{event_id}/redact",
             post(crate::inbox_routes::redact_comment),
         )

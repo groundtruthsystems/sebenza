@@ -96,6 +96,17 @@ pub enum InboxEventKind {
         attempt: u32,
         error: String,
     },
+    /// An operator comment on a worktree thread reached that worktree's agent
+    /// pane. Its parent is the comment.
+    CommentDelivered {
+        attempt: u32,
+    },
+    /// Pasting an operator comment failed; the comment itself is kept. Its
+    /// parent is the comment. Older binaries skip this line when reading.
+    CommentDeliveryFailed {
+        attempt: u32,
+        error: String,
+    },
     PriorityChanged {
         from: Priority,
         to: Priority,

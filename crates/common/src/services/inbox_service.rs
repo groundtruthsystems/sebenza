@@ -159,6 +159,19 @@ pub struct CommentView {
     pub warnings: Vec<String>,
     /// True when an operator tombstoned this row; `body` is then masked.
     pub redacted: bool,
+    /// For an operator comment on a worktree thread sent to the agent: the
+    /// latest delivery outcome. `None` when it was never sent.
+    pub delivery: Option<CommentDelivery>,
+    /// The latest failed delivery's reason.
+    pub delivery_error: Option<String>,
+}
+
+/// Where an operator comment's paste into the agent pane stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentDelivery {
+    Delivered,
+    Failed,
 }
 
 /// One worktree's thread.
@@ -802,15 +815,20 @@ impl InboxService {
         let events = self.events(id)?;
         let redacted = redacted_ids(&events);
         let requests = fold_requests(&events);
+        let deliveries = comment_deliveries(&events);
 
         let mut groups = CommentGroups::default();
         for key in worktree_keys(&draft) {
             group_for(&mut groups, &key);
         }
         for event in &events {
-            let Some(row) = comment_row(event, &redacted) else {
+            let Some(mut row) = comment_row(event, &redacted) else {
                 continue;
             };
+            if let Some((_, state, error)) = deliveries.get(&event.event_id) {
+                row.delivery = Some(*state);
+                row.delivery_error = error.clone();
+            }
             let thread = match (&event.kind, &row.request_id) {
                 (InboxEventKind::Comment { thread, .. }, _) => thread.clone(),
                 (_, Some(rid)) => requests
@@ -832,6 +850,124 @@ impl InboxService {
     /// (priority changes, tombstones, delivery bookkeeping).
     pub fn comment_view(&self, event: &InboxEvent) -> Option<CommentView> {
         comment_row(event, &std::collections::HashSet::new())
+    }
+
+    /// An operator comment, pasted into the worktree's agent pane when it is
+    /// on a worktree thread and `deliver` is set. The comment is kept whatever
+    /// happens to the paste; the second value is the delivery status event,
+    /// `None` when nothing was sent.
+    pub fn post_operator_comment(
+        &self,
+        id: &str,
+        author: EventAuthor,
+        thread: Thread,
+        body: &str,
+        deliver: bool,
+    ) -> Result<(InboxEvent, Option<InboxEvent>), InboxServiceError> {
+        let caller = author.caller.clone();
+        let event = self.add_comment(id, author, thread.clone(), body)?;
+        let Thread::Worktree(worktree) = thread else {
+            return Ok((event, None));
+        };
+        if !deliver {
+            return Ok((event, None));
+        }
+        let _guard = self.decisions.lock().unwrap_or_else(|e| e.into_inner());
+        let status = self.deliver_comment_attempt(id, &worktree, &event, body, 1, &caller)?;
+        Ok((event, Some(status)))
+    }
+
+    /// Retry pasting an operator comment whose delivery failed. A comment
+    /// already delivered, never sent, or not an operator's worktree comment
+    /// is refused.
+    pub fn redeliver_comment(
+        &self,
+        id: &str,
+        event_id: &str,
+        caller: Option<String>,
+    ) -> Result<InboxEvent, InboxServiceError> {
+        let _guard = self.decisions.lock().unwrap_or_else(|e| e.into_inner());
+        let events = self.events(id)?;
+        let comment = events
+            .iter()
+            .find(|e| e.event_id == event_id)
+            .ok_or_else(|| {
+                InboxServiceError::Invalid(format!("no comment {event_id} on this item"))
+            })?;
+        let (
+            InboxEventKind::Comment {
+                thread: Thread::Worktree(worktree),
+                body,
+                ..
+            },
+            AuthorKind::Operator,
+        ) = (&comment.kind, comment.author)
+        else {
+            return Err(InboxServiceError::Invalid(
+                "only an operator's worktree comment is delivered".to_string(),
+            ));
+        };
+        match comment_deliveries(&events).get(event_id) {
+            Some((attempt, CommentDelivery::Failed, _)) => {
+                let attempt = attempt + 1;
+                self.deliver_comment_attempt(id, worktree, comment, body, attempt, &caller)
+            }
+            Some((_, CommentDelivery::Delivered, _)) => Err(InboxServiceError::Invalid(
+                "this comment was already delivered".to_string(),
+            )),
+            None => Err(InboxServiceError::Invalid(
+                "this comment was kept as a note and never sent".to_string(),
+            )),
+        }
+    }
+
+    /// Paste one comment and append the outcome. Callers hold the decisions
+    /// lock, so two retries cannot both send.
+    fn deliver_comment_attempt(
+        &self,
+        id: &str,
+        worktree: &WorktreeKey,
+        comment: &InboxEvent,
+        body: &str,
+        attempt: u32,
+        caller: &Option<String>,
+    ) -> Result<InboxEvent, InboxServiceError> {
+        let title = self.parsed(id)?.frontmatter.title;
+        let delivery = self
+            .delivery
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let sent = match delivery {
+            Some(d) => d.deliver_comment(worktree, &title, body),
+            None => Err("no pane delivery is configured".to_string()),
+        };
+        let (action, kind) = match sent {
+            Ok(()) => (
+                "inbox.comment.delivered",
+                InboxEventKind::CommentDelivered { attempt },
+            ),
+            Err(error) => (
+                "inbox.comment.delivery_failed",
+                InboxEventKind::CommentDeliveryFailed {
+                    attempt,
+                    error: error.chars().take(MAX_ERROR_CHARS).collect(),
+                },
+            ),
+        };
+        let mut record = AuditRecord::new(action, id, AuthorKind::Operator)
+            .with_caller(caller)
+            .with_worktree(worktree);
+        record.attempt = Some(attempt);
+        let author = EventAuthor {
+            caller: caller.clone(),
+            ..EventAuthor::operator()
+        };
+        let event = self
+            .store
+            .append_event(id, author, Some(comment.event_id.clone()), kind)?;
+        self.audit.record(&record.with_event(&event));
+        Ok(event)
     }
 
     /// Append a comment. A worktree thread must name a worktree this item
@@ -1664,7 +1800,37 @@ fn comment_row(
         parent_event_id: event.parent_event_id.clone(),
         warnings,
         redacted: redacted.contains(&event.event_id),
+        delivery: None,
+        delivery_error: None,
     })
+}
+
+/// Each comment's latest delivery outcome, keyed by the comment's event id.
+fn comment_deliveries(
+    events: &[InboxEvent],
+) -> std::collections::HashMap<String, (u32, CommentDelivery, Option<String>)> {
+    let mut out = std::collections::HashMap::new();
+    for event in events {
+        let Some(parent) = &event.parent_event_id else {
+            continue;
+        };
+        let (attempt, state, error) = match &event.kind {
+            InboxEventKind::CommentDelivered { attempt } => {
+                (*attempt, CommentDelivery::Delivered, None)
+            }
+            InboxEventKind::CommentDeliveryFailed { attempt, error } => {
+                (*attempt, CommentDelivery::Failed, Some(error.clone()))
+            }
+            _ => continue,
+        };
+        let newer = out
+            .get(parent)
+            .is_none_or(|(seen, _, _): &(u32, CommentDelivery, Option<String>)| attempt > *seen);
+        if newer {
+            out.insert(parent.clone(), (attempt, state, error));
+        }
+    }
+    out
 }
 
 /// A request title from the first non-blank line of its body, cut to 80
@@ -3268,6 +3434,138 @@ mod resolution_tests {
         }
     }
 
+    // --- Operator comment delivery (nervous-system bug TS-10, TS-11, TS-13) --
+
+    fn converted_item(f: &Fixture) -> String {
+        let id = f.svc.create("Task graph").expect("create").id;
+        convert_into(f, &id, "/code/acme-demo", "feat-x");
+        id
+    }
+
+    fn row_for<'a>(groups: &'a CommentGroups, event_id: &str) -> &'a CommentView {
+        groups
+            .worktrees
+            .iter()
+            .flat_map(|g| g.comments.iter())
+            .chain(groups.overall.iter())
+            .find(|c| c.event_id == event_id)
+            .expect("comment row")
+    }
+
+    // TS-10: an operator comment on a worktree thread reaches that worktree's
+    // agent pane, labelled as the operator's, and the row says so.
+    #[test]
+    fn a_worktree_comment_is_delivered_to_the_agent_pane() {
+        let f = fixture();
+        let id = converted_item(&f);
+        let (event, _) = f
+            .svc
+            .post_operator_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Worktree(wt()),
+                "Use Postgres.",
+                true,
+            )
+            .expect("comment");
+
+        let sent = f.pane.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].0, wt());
+        assert!(sent[0].1.contains("Operator comment on"), "{}", sent[0].1);
+        assert!(sent[0].1.contains("Task graph"), "{}", sent[0].1);
+        assert!(sent[0].1.contains("Use Postgres."), "{}", sent[0].1);
+
+        let groups = f.svc.list_comments(&id).expect("groups");
+        let row = row_for(&groups, &event.event_id);
+        assert_eq!(row.delivery, Some(CommentDelivery::Delivered));
+        assert_eq!(
+            groups.worktrees[0].comments.len(),
+            1,
+            "status events are not rows"
+        );
+    }
+
+    // TS-11: an operator can keep a worktree comment as a note, and overall
+    // comments never reach a pane.
+    #[test]
+    fn opted_out_and_overall_comments_are_not_delivered() {
+        let f = fixture();
+        let id = converted_item(&f);
+        let (kept, _) = f
+            .svc
+            .post_operator_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Worktree(wt()),
+                "Note to self",
+                false,
+            )
+            .expect("note");
+        let (overall, _) = f
+            .svc
+            .post_operator_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Overall,
+                "For everyone",
+                true,
+            )
+            .expect("overall");
+
+        assert!(f.pane.sent().is_empty());
+        let groups = f.svc.list_comments(&id).expect("groups");
+        assert_eq!(row_for(&groups, &kept.event_id).delivery, None);
+        assert_eq!(row_for(&groups, &overall.event_id).delivery, None);
+    }
+
+    // TS-13: a paste that fails is recorded on the comment, and a retry that
+    // succeeds appends a delivered status rather than editing the old one.
+    #[test]
+    fn a_failed_comment_delivery_is_recorded_and_can_be_retried() {
+        let f = fixture();
+        let id = converted_item(&f);
+        f.pane.fail_with(Some("no live agent pane"));
+        let (event, status) = f
+            .svc
+            .post_operator_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Worktree(wt()),
+                "Ping",
+                true,
+            )
+            .expect("comment is kept even when delivery fails");
+        assert!(matches!(
+            status.map(|e| e.kind),
+            Some(InboxEventKind::CommentDeliveryFailed { attempt: 1, .. })
+        ));
+        let groups = f.svc.list_comments(&id).expect("groups");
+        let row = row_for(&groups, &event.event_id);
+        assert_eq!(row.delivery, Some(CommentDelivery::Failed));
+        assert_eq!(row.delivery_error.as_deref(), Some("no live agent pane"));
+
+        f.pane.fail_with(None);
+        let retried = f
+            .svc
+            .redeliver_comment(&id, &event.event_id, None)
+            .expect("retry");
+        assert!(matches!(
+            retried.kind,
+            InboxEventKind::CommentDelivered { attempt: 2 }
+        ));
+        let groups = f.svc.list_comments(&id).expect("groups");
+        assert_eq!(
+            row_for(&groups, &event.event_id).delivery,
+            Some(CommentDelivery::Delivered)
+        );
+        assert_eq!(f.pane.sent().len(), 1);
+        assert!(
+            f.svc.redeliver_comment(&id, &event.event_id, None).is_err(),
+            "a delivered comment is not re-sent"
+        );
+    }
+
     /// A converted item with one open request from `feat-x`.
     fn with_request(f: &Fixture, body: &str) -> (String, String) {
         let id = f.svc.create("Idea").expect("create").id;
@@ -3311,6 +3609,8 @@ mod resolution_tests {
                 InboxEventKind::ResolutionConfirmed { .. } => "resolution_confirmed",
                 InboxEventKind::Delivered { .. } => "delivered",
                 InboxEventKind::DeliveryFailed { .. } => "delivery_failed",
+                InboxEventKind::CommentDelivered { .. } => "comment_delivered",
+                InboxEventKind::CommentDeliveryFailed { .. } => "comment_delivery_failed",
                 InboxEventKind::PriorityChanged { .. } => "priority_changed",
                 InboxEventKind::Redacted { .. } => "redacted",
                 InboxEventKind::Unknown => "unknown",
