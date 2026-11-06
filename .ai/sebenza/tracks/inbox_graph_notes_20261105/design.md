@@ -527,4 +527,7 @@ T-01..T-09 are local ids, re-numbered at close-out (T-001..T-015 exist).
 ## Open Questions for Refinement
 - Resolved at planning (2026-11-05): caps kept, p95 measured manually; fixtures canonical in this repo
   (`crates/common/testdata/contracts/`), sibling copies; live agent state included; PHI = warn only.
-- Validate `depends_on` refs skill-side as well as in the daemon? (sibling worktree's call)
+- Agreed with agent-extensions-skills (2026-11-05): contracts A/B/C accepted. The sibling validates `depends_on` locally (self-refs, cycles, dangling same-plan ids).
+- Sibling ask, accepted: request ingress takes optional `trackId`/`taskId` (agentctl `--track`/`--task`), stored on `RequestOpened`, so the graph links requests to task nodes.
+- Sibling ask, accepted: the graph reads optional `current_phase_id` (tracks.json, preferred over derivation) and `request {request_id, status, raised_at}` on phases/tasks (badge). `origin` is display-only; confinement still trusts `conversions[]`.
+- Follow-up (not this track): authenticate GET `/requests` and `/comments`, or per-worktree tokens, so skills can trust the operator label.
