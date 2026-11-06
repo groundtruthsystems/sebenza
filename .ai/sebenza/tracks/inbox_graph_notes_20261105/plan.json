@@ -146,19 +146,21 @@
           "id": "phase-3-task-1",
           "name": "Write tests for multi-note conversion delivery",
           "description": "Write failing tests with the fake ConversionRunner for inbox-note.md ordering, inbox-notes.json v1 with siblings, notes_list_hash/note_types, exclusion and 0600 mode.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "19d8a10"
         },
         {
           "id": "phase-3-task-2",
           "name": "Implement multi-note conversion delivery",
           "description": "Change ConversionItem to carry notes, replace write_note with write_notes, compute siblings, record notes_list_hash and note_types, and extend WRITTEN_REL_PATHS.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "19d8a10"
         },
         {
           "id": "phase-3-task-3",
           "name": "Write tests for system-agent prompt notes",
           "description": "Write failing tests that the system-agent prompt contains every note framed as untrusted data.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-4",
@@ -176,7 +178,8 @@
           "id": "phase-3-task-5",
           "name": "Create contract fixtures",
           "description": "Add inbox-notes.v1.json and plan.depends_on.json under crates/common/testdata/contracts with Rust reader tests.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "19d8a10"
         },
         {
           "id": "phase-3-task-6",
