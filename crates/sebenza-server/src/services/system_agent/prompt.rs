@@ -6,6 +6,7 @@
 use crate::domain::inbox_events::{AuthorKind, InboxEvent, InboxEventKind, fold_requests};
 use crate::domain::model::{DraftStatus, InboxDraft, Priority};
 use crate::services::inbox_service::DraftSummary;
+use common::domain::note_codec::{DEFAULT_NOTE_ID, InboxNote, parse_notes};
 
 use super::JobInput;
 
@@ -139,12 +140,34 @@ pub fn build_job_prompt(ctx: &PromptContext<'_>, input: &JobInput) -> Result<Str
                  \"body\": \"required for advice or proposal\"}\n",
             );
         }
-        JobInput::DraftHelp { instruction } => {
-            out.push_str(
-                "TASK: Propose an improved body for this inbox item: clearer, complete, and \
-                 ready to hand to a coding agent. Keep its intent. Summarise what you changed.\n\n",
-            );
-            out.push_str(&fence("item", &item_text(ctx.draft)));
+        JobInput::DraftHelp {
+            instruction,
+            note_id,
+        } => {
+            let notes = item_notes(ctx.draft);
+            match note_id {
+                Some(nid) => {
+                    let note = notes
+                        .iter()
+                        .find(|n| &n.id == nid)
+                        .ok_or_else(|| format!("draft has no note {nid}"))?;
+                    out.push_str(&format!(
+                        "TASK: Propose an improved body for the note {:?} ({}) of this inbox \
+                         item: clearer, complete, and ready to hand to a coding agent. Keep its \
+                         intent. The other notes are context only. Summarise what you changed.\n\n",
+                        note.title, note.note_type
+                    ));
+                    out.push_str(&fence("item", &item_text(ctx.draft)));
+                    out.push_str(&fence("target-note", &note.body));
+                }
+                None => {
+                    out.push_str(
+                        "TASK: Propose an improved body for this inbox item: clearer, complete, and \
+                         ready to hand to a coding agent. Keep its intent. Summarise what you changed.\n\n",
+                    );
+                    out.push_str(&fence("item", &item_text(ctx.draft)));
+                }
+            }
             if let Some(instruction) = instruction.as_deref().filter(|i| !i.trim().is_empty()) {
                 out.push_str(&fence("operator-instruction", instruction));
             }
@@ -194,11 +217,25 @@ fn one_line(text: &str, max: usize) -> String {
         .collect()
 }
 
-/// The item as the agent sees it.
+fn item_notes(draft: &InboxDraft) -> Vec<InboxNote> {
+    parse_notes(&draft.body, draft.frontmatter.schema_version)
+}
+
+/// The item as the agent sees it: every note under its title and type, in the
+/// operator's order. Markers never appear; the notes are data (FR-12).
 fn item_text(draft: &InboxDraft) -> String {
+    let notes = item_notes(draft);
+    let body = match notes.as_slice() {
+        [only] if only.id == DEFAULT_NOTE_ID => only.body.clone(),
+        _ => notes
+            .iter()
+            .map(|n| format!("### Note: {} ({})\n{}", n.title, n.note_type, n.body))
+            .collect::<Vec<_>>()
+            .join("\n\n"),
+    };
     format!(
         "Title: {}\nPriority: {:?}\n\n{}",
-        draft.frontmatter.title, draft.frontmatter.priority, draft.body
+        draft.frontmatter.title, draft.frontmatter.priority, body
     )
 }
 
@@ -443,6 +480,103 @@ mod tests {
         assert!(build_job_prompt(&ctx, &input).is_err());
     }
 
+    fn three_notes() -> InboxDraft {
+        use common::domain::note_codec::{InboxNote, render_notes};
+        let n = |id: &str, t: &str, title: &str, body: &str| InboxNote {
+            id: id.into(),
+            note_type: t.into(),
+            title: title.into(),
+            body: body.into(),
+        };
+        let mut d = draft(&render_notes(&[
+            n("n1", "general", "Problem", "Graph view body"),
+            n(
+                "ac11",
+                "acceptance_criteria",
+                "Acceptance Criteria",
+                "AC body",
+            ),
+            n("cx22", "context", "Context", "Context body"),
+        ]));
+        d.frontmatter.schema_version = 3;
+        d
+    }
+
+    // Graph/notes TS-37: the system agent sees every note, inside the fenced
+    // (untrusted) item block, labelled by title and type.
+    #[test]
+    fn the_item_block_carries_every_note() {
+        let d = three_notes();
+        let ctx = PromptContext {
+            draft: &d,
+            events: &[],
+            digest: &[],
+            reseed: false,
+        };
+        let prompt = build_job_prompt(
+            &ctx,
+            &JobInput::DraftHelp {
+                instruction: None,
+                note_id: None,
+            },
+        )
+        .unwrap();
+        let start = prompt
+            .find("<untrusted-data name=\"item\">")
+            .expect("item fence");
+        let end = prompt[start..].find("</untrusted-data>").unwrap() + start;
+        let item = &prompt[start..end];
+        for needle in [
+            "Graph view body",
+            "AC body",
+            "Context body",
+            "Acceptance Criteria (acceptance_criteria)",
+        ] {
+            assert!(item.contains(needle), "{needle:?} missing from {item}");
+        }
+        assert!(
+            !item.contains("sebenza:note"),
+            "markers are not shown: {item}"
+        );
+    }
+
+    // Graph/notes TS-72 (backend): draft help can target one note; the prompt
+    // names it and fences its current body.
+    #[test]
+    fn draft_help_can_target_one_note() {
+        let d = three_notes();
+        let ctx = PromptContext {
+            draft: &d,
+            events: &[],
+            digest: &[],
+            reseed: false,
+        };
+        let prompt = build_job_prompt(
+            &ctx,
+            &JobInput::DraftHelp {
+                instruction: None,
+                note_id: Some("ac11".into()),
+            },
+        )
+        .unwrap();
+        assert!(prompt.contains("\"Acceptance Criteria\""), "{prompt}");
+        assert!(
+            prompt.contains("<untrusted-data name=\"target-note\">\nAC body"),
+            "{prompt}"
+        );
+        assert!(
+            build_job_prompt(
+                &ctx,
+                &JobInput::DraftHelp {
+                    instruction: None,
+                    note_id: Some("nope".into()),
+                },
+            )
+            .is_err(),
+            "an unknown note is refused"
+        );
+    }
+
     // TS-51: a re-seed replays the item and its last 20 comments, fenced.
     #[test]
     fn a_reseed_replays_the_item_and_the_last_twenty_comments() {
@@ -492,6 +626,7 @@ mod tests {
             &ctx,
             &JobInput::DraftHelp {
                 instruction: Some("tighten it".into()),
+                note_id: None,
             },
         )
         .unwrap();

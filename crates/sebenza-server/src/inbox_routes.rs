@@ -1264,6 +1264,9 @@ pub struct DraftHelpBody {
     /// Optional steer for the proposal ("make it shorter").
     #[serde(default)]
     pub instruction: Option<String>,
+    /// The note to improve; absent means the whole item.
+    #[serde(default)]
+    pub note_id: Option<String>,
 }
 
 /// `POST /api/inbox/{id}/agent/draft-help` — queue a draft-help job and return
@@ -1278,6 +1281,7 @@ pub async fn draft_help(
     use crate::services::system_agent::JobInput;
     use crate::services::system_agent::output::MAX_NOTE_BYTES;
     check(&headers, "POST")?;
+    let note_id = body.note_id.filter(|n| !n.trim().is_empty());
     let instruction = body
         .instruction
         .map(|i| i.trim().to_string())
@@ -1296,7 +1300,13 @@ pub async fn draft_help(
     let agent = state.system_agent.clone();
     let draft_id = id.clone();
     let job_id = tokio::task::spawn_blocking(move || {
-        agent.enqueue(&draft_id, JobInput::DraftHelp { instruction })
+        agent.enqueue(
+            &draft_id,
+            JobInput::DraftHelp {
+                instruction,
+                note_id,
+            },
+        )
     })
     .await
     .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
@@ -3222,6 +3232,7 @@ mod tests {
             headers,
             Json(DraftHelpBody {
                 instruction: instruction.map(str::to_string),
+                note_id: None,
             }),
         )
         .await

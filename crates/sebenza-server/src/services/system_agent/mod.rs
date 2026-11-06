@@ -63,7 +63,12 @@ pub enum JobInput {
     /// with `request_id` dedupes the job (TD-2).
     Triage { request_id: String, attempt: u32 },
     /// Propose a new body for the draft, optionally steered by the operator.
-    DraftHelp { instruction: Option<String> },
+    /// Propose a better body. `note_id` targets one note; `None` means the
+    /// whole item (its first note when it has several).
+    DraftHelp {
+        instruction: Option<String>,
+        note_id: Option<String>,
+    },
     /// Formulate a `system_instruction` for each target project.
     Convert {
         targets: Vec<String>,
@@ -1171,7 +1176,13 @@ mod tests {
         let draft = h.item("Importer");
         let help = h
             .svc
-            .enqueue(&draft, JobInput::DraftHelp { instruction: None })
+            .enqueue(
+                &draft,
+                JobInput::DraftHelp {
+                    instruction: None,
+                    note_id: None,
+                },
+            )
             .unwrap();
         let help = h.finish(&help).await;
         assert!(
@@ -1287,7 +1298,13 @@ mod tests {
         let queued = h.triage(&draft, "R2");
         let help = h
             .svc
-            .enqueue(&draft, JobInput::DraftHelp { instruction: None })
+            .enqueue(
+                &draft,
+                JobInput::DraftHelp {
+                    instruction: None,
+                    note_id: None,
+                },
+            )
             .unwrap();
         assert_eq!(h.svc.job(&queued).unwrap().status, JobStatus::Queued);
         for id in [&first, &queued, &help] {
@@ -1427,8 +1444,13 @@ mod tests {
         let draft = h.item("Importer");
         h.request(&draft, "R1");
         assert_eq!(
-            h.svc
-                .enqueue(&draft, JobInput::DraftHelp { instruction: None }),
+            h.svc.enqueue(
+                &draft,
+                JobInput::DraftHelp {
+                    instruction: None,
+                    note_id: None
+                }
+            ),
             Err(EnqueueError::Disabled)
         );
         h.svc.observer().request_opened(&draft, "R1");
@@ -1526,15 +1548,26 @@ mod tests {
     async fn a_job_for_an_unknown_draft_is_refused_and_jobs_report_metadata() {
         let h = harness("ok", |_| {});
         assert!(matches!(
-            h.svc
-                .enqueue("not-a-ulid", JobInput::DraftHelp { instruction: None }),
+            h.svc.enqueue(
+                "not-a-ulid",
+                JobInput::DraftHelp {
+                    instruction: None,
+                    note_id: None
+                }
+            ),
             Err(EnqueueError::Invalid(_))
         ));
         assert!(h.svc.job("nope").is_none());
         let draft = h.item("Importer");
         let id = h
             .svc
-            .enqueue(&draft, JobInput::DraftHelp { instruction: None })
+            .enqueue(
+                &draft,
+                JobInput::DraftHelp {
+                    instruction: None,
+                    note_id: None,
+                },
+            )
             .unwrap();
         let record = h.finish(&id).await;
         let json = serde_json::to_value(&record).unwrap();
