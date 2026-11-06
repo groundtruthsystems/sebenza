@@ -401,32 +401,35 @@
     {
       "id": "phase-7",
       "name": "Graph tab UI",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-7-task-1",
           "name": "Write tests for graphToMermaid and GraphTab",
           "description": "Write failing vitest tests for Mermaid output, escaping and label caps, collapse thresholds and explicit limits, refresh and polling policy, badges and contract parsing.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "ed3e1bd"
         },
         {
           "id": "phase-7-task-2",
           "name": "Implement graphToMermaid",
           "description": "Add graphToMermaid that re-keys node ids, escapes and caps labels, flags dangling edges and collapses large tracks.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "ed3e1bd"
         },
         {
           "id": "phase-7-task-3",
           "name": "Implement GraphTab",
           "description": "Add the Graph tab to the inbox item page with fetch on open/Refresh, visible-only 15 s polling, stale handling, state and waiting-on-you badges, and drill-down.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "ed3e1bd"
         },
         {
           "id": "phase-7-task-4",
           "name": "Execute test scenarios TS-02, TS-05, TS-07, TS-10, TS-12, TS-14, TS-15, TS-16, TS-48, TS-55, TS-59, TS-60, TS-70, TS-76",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-02",
             "TS-05",
@@ -442,27 +445,30 @@
             "TS-60",
             "TS-70",
             "TS-76"
-          ]
+          ],
+          "commit_sha": "ed3e1bd"
         },
         {
           "id": "phase-7-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "ed3e1bd"
         }
-      ]
+      ],
+      "checkpoint_sha": "ed3e1bd"
     },
     {
       "id": "phase-8",
       "name": "Final verification",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-8-task-1",
           "name": "Re-run the full test plan",
           "description": "Run cargo test and CI=true npm run test:coverage against the finished feature and confirm every scenario passes with >80% coverage on new code.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-01",
             "TS-02",
