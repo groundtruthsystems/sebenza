@@ -293,38 +293,42 @@
     {
       "id": "phase-5",
       "name": "Graph route and CLI parity",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-5-task-1",
           "name": "Write tests for the graph route",
           "description": "Write failing route tests for worktree states, error-code-only payloads, Host check, If-None-Match 304 and an end-to-end convert-then-graph fixture.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "41a6376"
         },
         {
           "id": "phase-5-task-2",
           "name": "Implement the graph route and AgentStateLookup",
           "description": "Add GET /api/inbox/{id}/graph using run_blocking, implement AgentStateLookup from the manager's in-memory WorktreeSnapshot, and extend the contract.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "41a6376"
         },
         {
           "id": "phase-5-task-3",
           "name": "Write tests for CLI notes and graph",
           "description": "Write failing tests that sebenza-cli inbox notes and inbox graph print JSON equal to the API.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "41a6376"
         },
         {
           "id": "phase-5-task-4",
           "name": "Implement CLI notes and graph",
           "description": "Add read-only inbox notes and inbox graph subcommands to sebenza-cli.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "41a6376"
         },
         {
           "id": "phase-5-task-5",
           "name": "Execute test scenarios TS-01, TS-03, TS-04, TS-41, TS-53, TS-61, TS-66, TS-68, TS-69, TS-71",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-01",
             "TS-03",
@@ -336,27 +340,30 @@
             "TS-68",
             "TS-69",
             "TS-71"
-          ]
+          ],
+          "commit_sha": "7c3f8da"
         },
         {
           "id": "phase-5-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "7c3f8da"
         }
-      ]
+      ],
+      "checkpoint_sha": "7c3f8da"
     },
     {
       "id": "phase-6",
       "name": "Notes panel UI",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-6-task-1",
           "name": "Write tests for NotesPanel",
           "description": "Write failing vitest tests for adding, editing, reordering and confirmed deletion, per-note 409 conflict UI, DraftHelp per note and the stale-notes badge.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-6-task-2",
