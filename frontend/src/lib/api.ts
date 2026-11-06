@@ -1,9 +1,11 @@
+import { z } from "zod";
 import {
   AgentsUiConversationEventSchema,
   InboxJobEventSchema,
   apiPaths,
   createApi,
   createApiClient,
+  TaskGraphSchema,
 } from "./api-contract";
 import type { InboxAgentJob, SaveTrackFileResponse } from "./api-contract";
 import type {
@@ -608,6 +610,26 @@ function noteOutcome(res: { status: number; body: unknown }): NoteWriteOutcome {
   if (res.status === 409) {
     return { kind: "conflict", current: body.current ?? null, listHash: body.listHash ?? "" };
   }
+  throw new Error(body?.error ?? `HTTP ${res.status}`);
+}
+
+export type TaskGraph = z.infer<typeof TaskGraphSchema>;
+
+/** The item's worktree/track/task graph. With `etag`, an unchanged graph is
+ *  `{ kind: "unchanged" }` (304) and nothing is re-rendered. */
+export async function fetchInboxGraph(
+  id: string,
+  etag?: string,
+  signal?: AbortSignal,
+): Promise<{ kind: "graph"; graph: TaskGraph } | { kind: "unchanged" }> {
+  const res = await rawHubApi.fetchInboxGraph({
+    params: { id },
+    extraHeaders: etag ? { "if-none-match": `"${etag}"` } : {},
+    fetchOptions: signal ? { signal } : undefined,
+  });
+  if (res.status === 304) return { kind: "unchanged" };
+  if (res.status === 200) return { kind: "graph", graph: res.body as TaskGraph };
+  const body = res.body as { error?: string } | undefined;
   throw new Error(body?.error ?? `HTTP ${res.status}`);
 }
 

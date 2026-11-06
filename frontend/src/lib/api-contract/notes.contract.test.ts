@@ -72,3 +72,34 @@ describe("inbox-notes.json contract", () => {
     expect(m.siblings[0].branch).toBe("agent-extensions-skills");
   });
 });
+
+// TS-70 (graph): the Zod contract parses the graph shape the Rust route emits
+// (mirrors the ts53 e2e expectation).
+import { TaskGraphSchema } from "./schemas";
+
+describe("graph contract", () => {
+  it("parses a server graph", () => {
+    const g = TaskGraphSchema.parse({
+      draftId: "01D", generatedAt: "t", etag: "e", truncated: false,
+      progress: { done: 1, total: 2 }, failed: 0, unavailable: 0,
+      worktrees: [{
+        id: "w:0", branch: "feat-x", projectPath: "/p", state: "ok", errorCode: null,
+        progress: { done: 1, total: 2 },
+        agent: { status: "running", feedbackState: "waiting", agent: "claude" },
+        tracks: [{
+          id: "t:0/t", trackId: "t", description: "", status: "doing", currentPhase: "phase-1",
+          designing: false, errorCode: null, progress: { done: 1, total: 2 },
+          phases: [{
+            id: "p:0/t/phase-1", phaseId: "phase-1", name: "P", status: "doing",
+            progress: { done: 1, total: 2 },
+            tasks: [{ id: "k:0/t/b", taskId: "b", name: "B", status: "doing", dependsOn: ["a"],
+              request: { requestId: "01R", status: "open", source: "inbox" } }],
+          }],
+        }],
+      }],
+      edges: [{ from: "k:0/t/b", to: "x:nope", kind: "depends_on", dangling: true, flag: "unknown" }],
+    });
+    expect(g.worktrees[0].agent?.feedbackState).toBe("waiting");
+    expect(g.edges[0].flag).toBe("unknown");
+  });
+});

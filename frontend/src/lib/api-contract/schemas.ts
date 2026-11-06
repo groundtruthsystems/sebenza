@@ -1362,3 +1362,77 @@ export const InboxNotesManifestSchema = z.object({
   ),
   siblings: z.array(z.object({ branch: z.string(), project_path: z.string() })).default([]),
 });
+
+// --- Inbox item graph (GET /api/inbox/:id/graph) ---------------------------
+
+export const GraphProgressSchema = z.object({ done: z.number(), total: z.number() });
+
+export const GraphTaskSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  name: z.string(),
+  status: z.string(),
+  dependsOn: z.array(z.string()).default([]),
+  request: z
+    .object({
+      requestId: z.string().nullable(),
+      status: z.string(),
+      source: z.enum(["inbox", "plan"]),
+    })
+    .nullable()
+    .default(null),
+});
+
+export const GraphPhaseSchema = z.object({
+  id: z.string(),
+  phaseId: z.string(),
+  name: z.string(),
+  status: z.string(),
+  progress: GraphProgressSchema,
+  tasks: z.array(GraphTaskSchema),
+});
+
+export const GraphTrackSchema = z.object({
+  id: z.string(),
+  trackId: z.string(),
+  description: z.string(),
+  status: z.string(),
+  currentPhase: z.string().nullable(),
+  designing: z.boolean(),
+  errorCode: z.string().nullable(),
+  progress: GraphProgressSchema,
+  phases: z.array(GraphPhaseSchema),
+});
+
+export const GraphWorktreeSchema = z.object({
+  id: z.string(),
+  branch: z.string(),
+  projectPath: z.string(),
+  state: z.enum(["ok", "unavailable", "failed", "no_workspace"]),
+  errorCode: z.string().nullable(),
+  progress: GraphProgressSchema,
+  agent: z
+    .object({ status: z.string(), feedbackState: z.string(), agent: z.string().nullable() })
+    .nullable(),
+  tracks: z.array(GraphTrackSchema),
+});
+
+export const GraphEdgeSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  kind: z.enum(["contains", "depends_on"]),
+  dangling: z.boolean(),
+  flag: z.string().nullable(),
+});
+
+export const TaskGraphSchema = z.object({
+  draftId: z.string(),
+  generatedAt: z.string(),
+  etag: z.string(),
+  truncated: z.boolean(),
+  progress: GraphProgressSchema,
+  failed: z.number(),
+  unavailable: z.number(),
+  worktrees: z.array(GraphWorktreeSchema),
+  edges: z.array(GraphEdgeSchema),
+});
