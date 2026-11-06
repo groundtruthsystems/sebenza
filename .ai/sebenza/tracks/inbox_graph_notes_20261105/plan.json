@@ -82,32 +82,35 @@
     {
       "id": "phase-2",
       "name": "Notes API and contract",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for note routes",
           "description": "Write failing route tests for the five note endpoints covering status codes, 409 payloads, guard rejection and the legacy body PUT note-drop 409.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "ac13a79"
         },
         {
           "id": "phase-2-task-2",
           "name": "Implement note routes",
           "description": "Add GET/POST notes, PUT/DELETE notes/{nid} and POST notes:reorder to inbox_routes.rs and server.rs behind the inbox guard.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "ac13a79"
         },
         {
           "id": "phase-2-task-3",
           "name": "Add note routes to the ts-rest contract and api.ts",
           "description": "Extend the shared Zod contract and api.ts wrappers with the note endpoints and their schemas.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "83d441d"
         },
         {
           "id": "phase-2-task-4",
           "name": "Execute test scenarios TS-17, TS-18, TS-22, TS-23, TS-24, TS-25, TS-26, TS-40, TS-47, TS-57, TS-58",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-17",
             "TS-18",
@@ -120,27 +123,30 @@
             "TS-47",
             "TS-57",
             "TS-58"
-          ]
+          ],
+          "commit_sha": "83d441d"
         },
         {
           "id": "phase-2-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "83d441d"
         }
-      ]
+      ],
+      "checkpoint_sha": "83d441d"
     },
     {
       "id": "phase-3",
       "name": "Conversion delivery and agent context",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Write tests for multi-note conversion delivery",
           "description": "Write failing tests with the fake ConversionRunner for inbox-note.md ordering, inbox-notes.json v1 with siblings, notes_list_hash/note_types, exclusion and 0600 mode.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-2",
