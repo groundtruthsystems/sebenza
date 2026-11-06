@@ -361,6 +361,7 @@ mod tests {
                 title: "Need the fixture path".into(),
                 body: body.into(),
                 warnings: vec![],
+                task: None,
             },
         )
     }

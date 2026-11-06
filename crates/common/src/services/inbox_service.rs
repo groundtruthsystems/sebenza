@@ -12,7 +12,8 @@ use crate::adapters::inbox_store::{
 use crate::adapters::projects_registry::ProjectsRegistry;
 use crate::domain::inbox_events::{
     AgentSession, AuthorKind, InboxEvent, InboxEventKind, REDACTED_BODY, RequestStatus,
-    RequestView, Thread, WorktreeKey, apply_redactions, content_hash as hash_of, fold_requests,
+    RequestView, TaskLink, Thread, WorktreeKey, apply_redactions, content_hash as hash_of,
+    fold_requests,
 };
 use crate::domain::model::{
     DraftStatus, InboxDraft, InboxDraftView, Priority, PrioritySource, ProjectRef, inbox_order,
@@ -325,6 +326,8 @@ pub enum IngressKind {
 pub struct WorktreeIngress {
     pub draft_id: String,
     pub worktree_path: String,
+    /// For a request: the plan task it blocks, if the agent named one.
+    pub task: Option<TaskLink>,
     pub branch: String,
     pub kind: IngressKind,
 }
@@ -353,6 +356,17 @@ pub fn parse_worktree_ingress(raw: &serde_json::Value) -> Option<Result<Worktree
         let worktree_path = required("worktreePath")?;
         let branch = required("branch")?;
         let body = required("body")?;
+        let task = match (field("trackId"), field("taskId")) {
+            (None, None) => None,
+            (Some(track_id), Some(task_id)) if is_plan_id(&track_id) && is_plan_id(&task_id) => {
+                Some(TaskLink { track_id, task_id })
+            }
+            _ => {
+                return Err(
+                    "trackId and taskId go together and must match [A-Za-z0-9_.-]{1,64}".into(),
+                );
+            }
+        };
         // The error never echoes `kind`: it is caller-chosen text.
         let kind = match kind {
             INGRESS_REQUEST_TYPE => IngressKind::Request {
@@ -365,10 +379,20 @@ pub fn parse_worktree_ingress(raw: &serde_json::Value) -> Option<Result<Worktree
         Ok(WorktreeIngress {
             draft_id,
             worktree_path,
+            task,
             branch,
             kind,
         })
     })())
+}
+
+/// A track, phase or task id as plans use them: `[A-Za-z0-9_.-]{1,64}`.
+pub fn is_plan_id(s: &str) -> bool {
+    (1..=64).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+        && s != "."
+        && s != ".."
 }
 
 /// Reads and writes drafts under the rules above.
@@ -1157,6 +1181,19 @@ impl InboxService {
         title: &str,
         body: &str,
     ) -> Result<InboxEvent, InboxServiceError> {
+        self.open_request_on(id, author, worktree, title, body, None)
+    }
+
+    /// [`Self::open_request`], linked to the plan task it blocks.
+    fn open_request_on(
+        &self,
+        id: &str,
+        author: EventAuthor,
+        worktree: WorktreeKey,
+        title: &str,
+        body: &str,
+        task: Option<TaskLink>,
+    ) -> Result<InboxEvent, InboxServiceError> {
         let title = title.trim();
         if title.is_empty() || body.trim().is_empty() {
             return Err(InboxServiceError::Invalid(
@@ -1198,6 +1235,7 @@ impl InboxService {
                 title: title.to_string(),
                 body: body.to_string(),
                 warnings: secret_warnings(&format!("{title}\n{body}")),
+                task,
             },
         )?;
         record.request_id = Some(request_id.clone());
@@ -1278,7 +1316,7 @@ impl InboxService {
                     .filter(|t| !t.is_empty())
                     .map(str::to_string)
                     .unwrap_or_else(|| title_from(body));
-                self.open_request(&draft.id, author, key, &title, body)
+                self.open_request_on(&draft.id, author, key, &title, body, ingress.task.clone())
             }
             IngressKind::Comment { body } => {
                 self.add_comment(&draft.id, author, Thread::Worktree(key), body)
@@ -2625,6 +2663,7 @@ mod collaboration_tests {
 
     fn request_from(id: &str, path: &str, branch: &str, body: &str) -> WorktreeIngress {
         WorktreeIngress {
+            task: None,
             draft_id: id.into(),
             worktree_path: path.into(),
             branch: branch.into(),
@@ -2777,6 +2816,7 @@ mod collaboration_tests {
             .expect("worktree");
         f.svc
             .ingest(&WorktreeIngress {
+                task: None,
                 draft_id: id.clone(),
                 worktree_path: "/wt/acme-demo/feat-x".into(),
                 branch: "feat-x".into(),
@@ -2930,6 +2970,35 @@ mod collaboration_tests {
         f.svc
             .ingest(&request_from(&id, "/wt/acme-demo/feat-x/", "feat-x", "b"))
             .expect("ingest");
+    }
+
+    // Graph/notes TS-77: a request may name the plan task it blocks; the
+    // link is stored and folded into the request view. A malformed id is a
+    // refusal, not silently dropped.
+    #[test]
+    fn a_request_can_link_the_task_it_blocks() {
+        let f = fixture();
+        let id = converted(&f);
+        let mut ingress = request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b");
+        ingress.task = Some(TaskLink {
+            track_id: "notes_api_20261105".into(),
+            task_id: "phase-1-task-2".into(),
+        });
+        f.svc.ingest(&ingress).expect("ingest");
+        let r = &f.svc.list_requests(&id).unwrap()[0];
+        assert_eq!(
+            r.task,
+            Some(TaskLink {
+                track_id: "notes_api_20261105".into(),
+                task_id: "phase-1-task-2".into(),
+            })
+        );
+
+        let raw = serde_json::json!({
+            "type": "inbox.request", "draftId": id, "worktreePath": "/wt/acme-demo/feat-x",
+            "branch": "feat-x", "body": "b", "trackId": "../etc", "taskId": "t1",
+        });
+        assert!(parse_worktree_ingress(&raw).expect("inbox").is_err());
     }
 
     // --- Note operations (graph/notes TS-52) ---------------------------------
@@ -3189,6 +3258,7 @@ mod collaboration_tests {
         let id = converted(&f);
         f.svc
             .ingest(&WorktreeIngress {
+                task: None,
                 draft_id: id.clone(),
                 worktree_path: "/wt/acme-demo/feat-x".into(),
                 branch: "feat-x".into(),
@@ -3317,6 +3387,7 @@ mod collaboration_tests {
             Err(InboxServiceError::TooLarge { .. })
         ));
         let long_title = WorktreeIngress {
+            task: None,
             kind: IngressKind::Request {
                 title: Some("t".repeat(f.svc.limits.max_title_chars + 1)),
                 body: "b".into(),
@@ -3354,6 +3425,7 @@ mod collaboration_tests {
         let f = fixture_with(tight(100, 2, 100));
         let id = converted(&f);
         let c = WorktreeIngress {
+            task: None,
             kind: IngressKind::Comment { body: "c".into() },
             ..request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b")
         };
@@ -3394,6 +3466,7 @@ mod collaboration_tests {
             .expect("request");
         f.svc
             .ingest(&WorktreeIngress {
+                task: None,
                 kind: IngressKind::Comment {
                     body: secret.into(),
                 },

@@ -995,6 +995,7 @@ mod tests {
                         title: format!("Request {request_id}"),
                         body: "Where is the fixture loader?".into(),
                         warnings: vec![],
+                        task: None,
                     },
                 )
                 .expect("append");
