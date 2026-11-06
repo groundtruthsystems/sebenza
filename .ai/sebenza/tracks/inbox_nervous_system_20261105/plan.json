@@ -102,57 +102,64 @@
     {
       "id": "phase-3",
       "name": "Operator alerting",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Write tests for open-request counts, summary and notification",
           "description": "Write failing tests for openRequestCount and sort order, GET /api/inbox/summary, and a body-free inbox_request notification.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "f8729c8"
         },
         {
           "id": "phase-3-task-2",
           "name": "Implement counts, summary route and notification",
           "description": "Add openRequestCount to the draft list, the summary route and contract, and record an inbox_request notification on the owning project when a request opens.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "f8729c8"
         },
         {
           "id": "phase-3-task-3",
           "name": "Write tests for the Inbox nav badge",
           "description": "Write failing vitest tests that the Inbox nav icon shows and hides the open-request badge.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "92cb0f5"
         },
         {
           "id": "phase-3-task-4",
           "name": "Implement the Inbox nav badge",
           "description": "Poll the summary route and render the count badge on the Inbox nav icon.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "92cb0f5"
         },
         {
           "id": "phase-3-task-5",
           "name": "Execute test scenarios TS-06, TS-07, TS-08, TS-09",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-06",
             "TS-07",
             "TS-08",
             "TS-09"
-          ]
+          ],
+          "commit_sha": "92cb0f5"
         },
         {
           "id": "phase-3-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "92cb0f5"
         }
-      ]
+      ],
+      "checkpoint_sha": "92cb0f5"
     },
     {
       "id": "phase-4",
       "name": "Operator comment delivery",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
