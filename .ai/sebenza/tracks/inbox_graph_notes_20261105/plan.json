@@ -139,7 +139,7 @@
     {
       "id": "phase-3",
       "name": "Conversion delivery and agent context",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -188,13 +188,14 @@
           "id": "phase-3-task-6",
           "name": "Publish contract to agent-extensions-skills",
           "description": "Send the inbox-notes.json v1 contract, depends_on grammar and fixture paths to the agent-extensions-skills worktree and record its acknowledgement.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "2a45d01"
         },
         {
           "id": "phase-3-task-7",
           "name": "Execute test scenarios TS-31, TS-32, TS-33, TS-34, TS-35, TS-37, TS-38, TS-39, TS-49, TS-50, TS-77",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-31",
             "TS-32",
@@ -207,27 +208,30 @@
             "TS-49",
             "TS-50",
             "TS-77"
-          ]
+          ],
+          "commit_sha": "2a45d01"
         },
         {
           "id": "phase-3-task-8",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "2a45d01"
         }
-      ]
+      ],
+      "checkpoint_sha": "2a45d01"
     },
     {
       "id": "phase-4",
       "name": "Task graph service",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-4-task-1",
           "name": "Write tests for the confined worktree reader",
           "description": "Write failing tests for conversions-and-registry confinement, id pattern rejection, O_NOFOLLOW symlink refusal and 1 MiB caps.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-4-task-2",

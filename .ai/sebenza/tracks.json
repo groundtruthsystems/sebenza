@@ -76,7 +76,7 @@
       "description": "Inbox item graph view (worktrees, tracks, progress, task dependency graph) and multiple typed notes per inbox item",
       "status": "doing",
       "created_at": "2026-11-05T00:00:00Z",
-      "updated_at": "2026-11-06T04:27:46Z",
+      "updated_at": "2026-11-06T04:30:14Z",
       "design_path": "./tracks/inbox_graph_notes_20261105/design.md",
       "test_plan_path": "./tracks/inbox_graph_notes_20261105/test-plan.md",
       "phases_summary": [
@@ -95,13 +95,13 @@
         {
           "id": "phase-3",
           "name": "Conversion delivery and agent context",
-          "status": "doing",
+          "status": "done",
           "blocked_reason": null
         },
         {
           "id": "phase-4",
           "name": "Task graph service",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
@@ -131,8 +131,8 @@
       ],
       "progress": {
         "total_tasks": 46,
-        "completed_tasks": 19,
-        "percentage": 41
+        "completed_tasks": 22,
+        "percentage": 48
       },
       "spec_path": "./tracks/inbox_graph_notes_20261105/spec.md",
       "plan_path": "./tracks/inbox_graph_notes_20261105/plan.json"
