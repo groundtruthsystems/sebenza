@@ -224,38 +224,42 @@
     {
       "id": "phase-4",
       "name": "Task graph service",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-4-task-1",
           "name": "Write tests for the confined worktree reader",
           "description": "Write failing tests for conversions-and-registry confinement, id pattern rejection, O_NOFOLLOW symlink refusal and 1 MiB caps.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "eab2f25"
         },
         {
           "id": "phase-4-task-2",
           "name": "Implement the confined worktree reader",
           "description": "Add a confined reader in TaskGraphService that canonicalises worktree paths against conversions and GitAdapter::list_worktrees of registry projects.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "eab2f25"
         },
         {
           "id": "phase-4-task-3",
           "name": "Write tests for graph building and depends_on resolution",
           "description": "Write failing tests for tracks/phases/tasks/progress, designing and torn tracks, ref grammar, dangling/ambiguous/cyclic edges, caps, node ids and agent state.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "eab2f25"
         },
         {
           "id": "phase-4-task-4",
           "name": "Implement TaskGraphService",
           "description": "Build the TaskGraph from conversions and plans, resolve depends_on refs, apply caps and collapse metadata, compute the etag and attach agent state via an AgentStateLookup port.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "eab2f25"
         },
         {
           "id": "phase-4-task-5",
           "name": "Execute test scenarios TS-06, TS-08, TS-09, TS-11, TS-13, TS-36, TS-42, TS-43, TS-44, TS-51, TS-54, TS-62, TS-63, TS-65, TS-75, TS-78",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-06",
             "TS-08",
@@ -273,27 +277,30 @@
             "TS-65",
             "TS-75",
             "TS-78"
-          ]
+          ],
+          "commit_sha": "eab2f25"
         },
         {
           "id": "phase-4-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "eab2f25"
         }
-      ]
+      ],
+      "checkpoint_sha": "eab2f25"
     },
     {
       "id": "phase-5",
       "name": "Graph route and CLI parity",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-5-task-1",
           "name": "Write tests for the graph route",
           "description": "Write failing route tests for worktree states, error-code-only payloads, Host check, If-None-Match 304 and an end-to-end convert-then-graph fixture.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-5-task-2",
