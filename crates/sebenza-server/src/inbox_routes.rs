@@ -415,7 +415,7 @@ fn note_outcome(
             StatusCode::CONFLICT,
             Json(serde_json::json!({
                 "error": "the note changed since you read it",
-                "current": current.as_ref().map(NoteWire::from),
+                "current": current.as_deref().map(NoteWire::from),
                 "listHash": list_hash,
             })),
         )),

@@ -5,6 +5,147 @@
 //! graph types. Reading worktree files is confined and lives in
 //! `services::task_graph`.
 
+use serde::Serialize;
+
+/// Done/total task counts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Progress {
+    pub done: usize,
+    pub total: usize,
+}
+
+impl Progress {
+    pub fn add(&mut self, other: Progress) {
+        self.done += other.done;
+        self.total += other.total;
+    }
+}
+
+/// Where a recorded worktree stands as far as the graph can tell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorktreeState {
+    /// Read, with its Sebenza workspace.
+    Ok,
+    /// Recorded but gone, unreadable, or not a worktree the daemon knows.
+    Unavailable,
+    /// The conversion of this target failed.
+    Failed,
+    /// Present, but with no readable `tracks.json`.
+    NoWorkspace,
+}
+
+/// The live agent of a worktree, from the daemon's in-memory snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentState {
+    /// The runtime status (`running`, `idle`, `stopped`, ...).
+    pub status: String,
+    /// Whether the agent is waiting on a human (`none`, `waiting`, ...).
+    pub feedback_state: String,
+    pub agent: Option<String>,
+}
+
+/// A request attached to a task: from the inbox (the agent named the task)
+/// or from the plan's own `request` field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskRequest {
+    pub request_id: Option<String>,
+    pub status: String,
+    /// `inbox` or `plan`.
+    pub source: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskNode {
+    pub id: String,
+    pub task_id: String,
+    pub name: String,
+    pub status: String,
+    pub depends_on: Vec<String>,
+    pub request: Option<TaskRequest>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhaseNode {
+    pub id: String,
+    pub phase_id: String,
+    pub name: String,
+    pub status: String,
+    pub progress: Progress,
+    pub tasks: Vec<TaskNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackNode {
+    pub id: String,
+    pub track_id: String,
+    pub description: String,
+    pub status: String,
+    /// The phase in progress (`current_phase_id` when the plan names one).
+    pub current_phase: Option<String>,
+    /// A design exists but no readable `plan.json` yet.
+    pub designing: bool,
+    pub error_code: Option<&'static str>,
+    pub progress: Progress,
+    pub phases: Vec<PhaseNode>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeNode {
+    /// `w:<conversion index>`.
+    pub id: String,
+    pub branch: String,
+    pub project_path: String,
+    pub state: WorktreeState,
+    /// A fixed code, never a path or recorded error text.
+    pub error_code: Option<&'static str>,
+    pub progress: Progress,
+    pub agent: Option<AgentState>,
+    pub tracks: Vec<TrackNode>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeKind {
+    Contains,
+    DependsOn,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdge {
+    pub from: String,
+    pub to: String,
+    pub kind: EdgeKind,
+    /// The target is not a node in this graph.
+    pub dangling: bool,
+    /// Why the edge is flagged: `unknown`, `ambiguous`, `malformed`, `cycle`.
+    pub flag: Option<&'static str>,
+}
+
+/// The whole graph of one inbox item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskGraph {
+    pub draft_id: String,
+    pub generated_at: String,
+    pub etag: String,
+    /// A cap was hit; some worktrees or tasks are summarised or omitted.
+    pub truncated: bool,
+    /// Done/total over `ok` worktrees.
+    pub progress: Progress,
+    pub failed: usize,
+    pub unavailable: usize,
+    pub worktrees: Vec<WorktreeNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
 /// One `depends_on` entry: `["@" branch ":"] [track_id "/"] task_id`.
 ///
 /// - no `@`: the same worktree; no `/`: the same track;

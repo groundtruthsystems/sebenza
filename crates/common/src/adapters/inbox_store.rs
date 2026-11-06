@@ -50,7 +50,7 @@ pub enum InboxStoreError {
     #[error("note conflict on {id}")]
     NoteConflict {
         id: String,
-        current: Option<InboxNote>,
+        current: Option<Box<InboxNote>>,
         list_hash: String,
     },
     #[error("draft {id} has no note {note_id}")]
@@ -349,7 +349,7 @@ impl InboxStore {
             if note.hash() != expected_hash {
                 return Err(InboxStoreError::NoteConflict {
                     id: id.to_string(),
-                    current: Some(note.clone()),
+                    current: Some(Box::new(note.clone())),
                     list_hash: lh,
                 });
             }
