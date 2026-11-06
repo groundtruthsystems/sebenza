@@ -12,19 +12,21 @@
           "id": "phase-1-task-1",
           "name": "Write tests for note_codec",
           "description": "Write failing unit tests for marker parse/render, exact backslash escaping, preamble ids, note id grammar, CRLF normalisation and per-note/list hashes.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "0585e4d"
         },
         {
           "id": "phase-1-task-2",
           "name": "Implement note_codec",
           "description": "Add the pure note_codec module in common that splits and joins marker-delimited notes and computes hash and list_hash.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "0585e4d"
         },
         {
           "id": "phase-1-task-3",
           "name": "Write tests for InboxStore note operations",
           "description": "Write failing tests for add/edit/delete/reorder with hash and list_hash gating, last-note clearing, v2-to-v3 stamping on any write, and legacy save_body id guard.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-4",
