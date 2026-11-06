@@ -76,7 +76,7 @@
       "description": "Inbox item graph view (worktrees, tracks, progress, task dependency graph) and multiple typed notes per inbox item",
       "status": "doing",
       "created_at": "2026-11-05T00:00:00Z",
-      "updated_at": "2026-11-06T04:23:25Z",
+      "updated_at": "2026-11-06T04:24:51Z",
       "design_path": "./tracks/inbox_graph_notes_20261105/design.md",
       "test_plan_path": "./tracks/inbox_graph_notes_20261105/test-plan.md",
       "phases_summary": [
@@ -131,8 +131,8 @@
       ],
       "progress": {
         "total_tasks": 46,
-        "completed_tasks": 16,
-        "percentage": 35
+        "completed_tasks": 18,
+        "percentage": 39
       },
       "spec_path": "./tracks/inbox_graph_notes_20261105/spec.md",
       "plan_path": "./tracks/inbox_graph_notes_20261105/plan.json"

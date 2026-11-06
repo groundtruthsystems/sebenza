@@ -160,19 +160,21 @@
           "id": "phase-3-task-3",
           "name": "Write tests for system-agent prompt notes",
           "description": "Write failing tests that the system-agent prompt contains every note framed as untrusted data.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "0246283"
         },
         {
           "id": "phase-3-task-4",
           "name": "Render all notes in the system-agent prompt",
           "description": "Make system_agent prompt.rs render notes through note_codec with untrusted-data framing.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "0246283"
         },
         {
           "id": "phase-3-task-4b",
           "name": "Accept trackId/taskId on agent requests",
           "description": "Extend agentctl request with --track/--task and store optional trackId/taskId on RequestOpened, test first.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-5",
