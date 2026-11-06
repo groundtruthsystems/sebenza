@@ -13,6 +13,7 @@ const postComment = vi.fn();
 const requests = vi.fn();
 const confirmRequest = vi.fn();
 const draftHelp = vi.fn();
+const updateNote = vi.fn();
 type StreamCallbacks = {
   onJob: (job: Record<string, unknown>) => void;
   onError: (message: string) => void;
@@ -38,6 +39,11 @@ vi.mock("./api", () => ({
   retryInboxTriage: vi.fn(),
   redactInboxComment: vi.fn(),
   requestInboxDraftHelp: (...a: unknown[]) => draftHelp(...a),
+  updateInboxNote: (...a: unknown[]) => updateNote(...a),
+  addInboxNote: vi.fn(),
+  deleteInboxNote: vi.fn(),
+  reorderInboxNotes: vi.fn(),
+  fetchInboxSummary: () => Promise.resolve({ openRequests: 0 }),
   fetchInboxAgentJob: vi.fn(),
   connectInboxAgentStream: (_id: string, cb: StreamCallbacks) => {
     stream = cb;
@@ -540,5 +546,66 @@ describe("InboxView", () => {
       await user.click(screen.getByRole("button", { name: "Cancel" }));
       expect(textarea).toHaveValue(FENCE_BODY);
     });
+  });
+});
+
+describe("InboxView notes", () => {
+  const A = { id: "n1", type: "general", title: "Problem", body: "Graph view", hash: "ha" };
+  const B = { id: "ac11", type: "acceptance_criteria", title: "Acceptance Criteria", body: "- AC", hash: "hb" };
+  const multi = (over: Partial<Record<string, unknown>> = {}) =>
+    full({ body: "<!-- markers -->", notes: [A, B], listHash: "lh", ...over });
+
+  it("edits a multi-note item note by note", async () => {
+    const user = userEvent.setup();
+    draft.mockResolvedValue(multi());
+    render(<InboxView />);
+    await user.click(await screen.findByText("Rework the scorer"));
+    expect(await screen.findByRole("region", { name: "Note: Acceptance Criteria" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Draft body")).toBeNull();
+  });
+
+  it("keeps the plain editor for a single default note, with Add note", async () => {
+    const user = userEvent.setup();
+    draft.mockResolvedValue(
+      full({ notes: [{ id: "n1", type: "general", title: "Note", body: "## notes", hash: "h" }], listHash: "lh" }),
+    );
+    render(<InboxView />);
+    await user.click(await screen.findByText("Rework the scorer"));
+    expect(await screen.findByLabelText("Draft body")).toHaveValue("## notes");
+    expect(screen.getByRole("button", { name: "Add note" })).toBeInTheDocument();
+  });
+
+  // TS-67: notes edited after the last conversion are flagged.
+  it("flags notes changed since conversion", async () => {
+    const user = userEvent.setup();
+    draft.mockResolvedValue(
+      multi({ conversions: [{ projectPath: "/p", branch: "b", prompt: "", outcome: "created", at: "t", notesListHash: "old" }] }),
+    );
+    render(<InboxView />);
+    await user.click(await screen.findByText("Rework the scorer"));
+    expect(await screen.findByText("Notes changed since conversion")).toBeInTheDocument();
+  });
+
+  // TS-72: draft help aimed at one note replaces that note only.
+  it("applies draft help to the note it was asked about", async () => {
+    const user = userEvent.setup();
+    draft.mockResolvedValue(multi());
+    draftHelp.mockResolvedValue({ jobId: "J1" });
+    updateNote.mockResolvedValue({ kind: "ok", notes: [A, { ...B, body: "proposed body", hash: "hb2" }], listHash: "lh2" });
+    render(<InboxView />);
+    await user.click(await screen.findByText("Rework the scorer"));
+    const b = await screen.findByRole("region", { name: "Note: Acceptance Criteria" });
+    await user.click(within(b).getByRole("button", { name: "Improve with agent" }));
+    await user.click(screen.getByRole("button", { name: "Ask agent" }));
+    expect(draftHelp).toHaveBeenCalledWith(ID, undefined, "ac11");
+    await waitFor(() => expect(stream).not.toBeNull());
+    act(() => stream!.onJob(job()));
+    const region = await screen.findByRole("region", { name: "Draft help proposal" });
+    await user.click(within(region).getByRole("button", { name: "Accept" }));
+    await waitFor(() =>
+      expect(updateNote).toHaveBeenCalledWith(ID, "ac11", { body: "proposed body" }, "hb"),
+    );
+    expect(updateNote).toHaveBeenCalledTimes(1);
+    expect(save).not.toHaveBeenCalled();
   });
 });

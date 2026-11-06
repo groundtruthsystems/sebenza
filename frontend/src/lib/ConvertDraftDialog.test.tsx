@@ -49,6 +49,14 @@ describe("rowError", () => {
     prompt: "go",
   };
 
+  // Graph/notes AC-21: every note is copied into each worktree, so the
+  // dialog repeats the PHI warning before anything is sent.
+  it("reminds the operator that every note is copied into the worktrees", () => {
+    setup();
+    expect(screen.getByText(/all of its notes/i)).toBeInTheDocument();
+    expect(screen.getByText(/Do not enter PHI/i)).toBeInTheDocument();
+  });
+
   it("accepts a complete row", () => {
     expect(rowError(base, [base])).toBeNull();
   });

@@ -1015,6 +1015,9 @@ export const ConversionOutcomeSchema = z.object({
   worktreePath: z.string().optional(),
   error: z.string().optional(),
   at: z.string(),
+  /** The notes this worktree was sent (list hash and types). */
+  notesListHash: z.string().optional(),
+  noteTypes: z.array(z.string()).optional(),
 });
 
 /** `bodyHash` is what a save must echo back; it is the only thing that gates a
@@ -1200,6 +1203,8 @@ export const InboxJobEventSchema = z.object({
  *  the proposal. */
 export const InboxDraftHelpRequestSchema = z.object({
   instruction: z.string().optional(),
+  /** Improve this note only; absent means the whole item. */
+  noteId: z.string().optional(),
 });
 
 /** The queued job. Its result arrives on the job (GET or the `inbox.job`

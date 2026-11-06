@@ -13,6 +13,8 @@ import {
   connectInboxAgentStream,
   fetchInboxAgentJob,
   requestInboxDraftHelp,
+  updateInboxNote,
+  type InboxNote,
 } from "./api";
 import type { InboxAgentJob, InboxDraftHelpOutput } from "./api-contract";
 import { DraftHelpPanel, DraftMergeView } from "./DraftHelp";
@@ -23,6 +25,7 @@ import NavRail from "./NavRail";
 import NewDraftDialog from "./NewDraftDialog";
 import ConfirmDialog from "./ConfirmDialog";
 import Btn from "./Btn";
+import NotesPanel, { NoteAdder, isDefaultOnly, notesChangedSinceConversion } from "./NotesPanel";
 import Toggle from "./Toggle";
 import ConvertDraftDialog, { type ConvertTarget } from "./ConvertDraftDialog";
 import { fetchProjects } from "./api";
@@ -70,6 +73,9 @@ interface Draft extends DraftLike {
   priority?: Priority;
   prioritySource?: PrioritySource;
   raw: { text: string; error: string } | null;
+  /** The item's notes (schema v3); absent from older servers. */
+  notes?: InboxNote[];
+  listHash?: string;
   conversions?: {
     projectPath: string;
     branch: string;
@@ -77,6 +83,8 @@ interface Draft extends DraftLike {
     prompt: string;
     outcome: string;
     error?: string;
+    /** The notes this worktree was sent, to flag later edits. */
+    notesListHash?: string;
   }[];
 }
 
@@ -127,6 +135,8 @@ export default function InboxView() {
   // Draft help: the job we are waiting on, its result, and — when the body
   // moved underneath it — the merge the operator must resolve.
   const [showHelp, setShowHelp] = useState(false);
+  /** The note draft help is aimed at; `null` means the plain body. */
+  const [helpNote, setHelpNote] = useState<InboxNote | null>(null);
   const [helpPending, setHelpPending] = useState(false);
   const [helpError, setHelpError] = useState("");
   const [helpProposal, setHelpProposal] = useState<InboxDraftHelpOutput | null>(null);
@@ -269,6 +279,28 @@ export default function InboxView() {
     }
   }, [debouncer]);
 
+  /** Re-read the open item after a note write changed its shape, so the
+   *  plain editor and its save token match the server again. */
+  const reloadDraft = useCallback(async () => {
+    if (!selectedId) return;
+    try {
+      const d = (await fetchInboxDraft(selectedId)) as Draft;
+      setDraft(d);
+      setBody(d.body);
+      loadedRef.current = { body: d.body, bodyHash: d.bodyHash };
+    } catch (err) {
+      setStatus((err as Error).message);
+    }
+  }, [selectedId]);
+
+  const onNotesChanged = (notes: InboxNote[], listHash: string) => {
+    setDraft((d) => (d ? { ...d, notes, listHash } : d));
+    // Crossing between one default note and several changes how the body is
+    // stored, so the plain editor's token must be refreshed.
+    void reloadDraft();
+    void refresh();
+  };
+
   useEffect(() => {
     if (deepLinked.current) return;
     deepLinked.current = true;
@@ -322,7 +354,9 @@ export default function InboxView() {
     setHelpError("");
     setHelpProposal(null);
     try {
-      const { jobId } = await requestInboxDraftHelp(draft.id, instruction || undefined);
+      const { jobId } = helpNote
+        ? await requestInboxDraftHelp(draft.id, instruction || undefined, helpNote.id)
+        : await requestInboxDraftHelp(draft.id, instruction || undefined);
       helpJobRef.current = jobId;
       const early = finishedJobs.current.get(jobId);
       if (early) settleHelp(early);
@@ -366,6 +400,24 @@ export default function InboxView() {
 
   const acceptHelp = async () => {
     if (!helpProposal) return;
+    if (helpNote && draft) {
+      // Aimed at one note: replace that note only, against its hash.
+      const out = await updateInboxNote(
+        draft.id,
+        helpNote.id,
+        { body: helpProposal.proposed_body },
+        helpNote.hash,
+      );
+      if (out.kind === "conflict") {
+        setStatus("That note changed since you asked; reload it and ask again.");
+        return;
+      }
+      setDraft((d) => (d ? { ...d, notes: out.notes, listHash: out.listHash } : d));
+      setHelpProposal(null);
+      setHelpNote(null);
+      setStatus("Saved");
+      return;
+    }
     debouncer.cancel();
     const proposed = helpProposal.proposed_body;
     const loaded = loadedRef.current;
@@ -704,6 +756,16 @@ export default function InboxView() {
                 {draft.status}
               </span>
             )}
+            {draft &&
+              !draft.raw &&
+              notesChangedSinceConversion(draft.conversions ?? [], draft.listHash ?? "") && (
+                <span
+                  className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-warning text-warning"
+                  title="Worktrees received the notes as they were at conversion; later edits do not reach them."
+                >
+                  Notes changed since conversion
+                </span>
+              )}
           </div>
           {draft && !draft.raw && (
             <div className="flex items-center gap-2 shrink-0">
@@ -814,14 +876,17 @@ export default function InboxView() {
                 <PhiNotice className="px-4 py-1 border-b border-edge bg-sidebar" />
                 {showHelp && (
                   <DraftHelpPanel
-                    current={body}
+                    current={helpNote ? helpNote.body : body}
                     pending={helpPending}
                     error={helpError}
                     proposal={helpProposal}
                     onrequest={(i) => void requestHelp(i)}
                     onaccept={() => void acceptHelp()}
                     ondiscard={() => setHelpProposal(null)}
-                    onclose={() => setShowHelp(false)}
+                    onclose={() => {
+                      setShowHelp(false);
+                      setHelpNote(null);
+                    }}
                   />
                 )}
                 {merge && (
@@ -835,12 +900,41 @@ export default function InboxView() {
                     oncancel={() => setMerge(null)}
                   />
                 )}
-                <MarkdownEditor
-                  value={body}
-                  onChange={onBodyChange}
-                  ariaLabel="Draft body"
-                  onNotice={setStatus}
-                />
+                {isDefaultOnly(draft.notes ?? []) ? (
+                  <>
+                    <NoteAdder
+                      draftId={draft.id}
+                      listHash={draft.listHash ?? ""}
+                      onchange={onNotesChanged}
+                      onstale={() => void reloadDraft()}
+                      beforeAdd={async () => {
+                        // Typing still waiting for autosave goes first, so the
+                        // new note is added to the body the operator sees.
+                        debouncer.cancel();
+                        if (body !== loadedRef.current.body) await persist(body);
+                      }}
+                    />
+                    <MarkdownEditor
+                      value={body}
+                      onChange={onBodyChange}
+                      ariaLabel="Draft body"
+                      onNotice={setStatus}
+                    />
+                  </>
+                ) : (
+                  <NotesPanel
+                    draftId={draft.id}
+                    notes={draft.notes ?? []}
+                    listHash={draft.listHash ?? ""}
+                    onchange={onNotesChanged}
+                    onstale={() => void reloadDraft()}
+                    onhelp={(note) => {
+                      setHelpNote(note);
+                      setHelpProposal(null);
+                      setShowHelp(true);
+                    }}
+                  />
+                )}
               </div>
               <InboxActivity
                 draftId={draft.id}

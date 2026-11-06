@@ -875,10 +875,17 @@ export async function fetchInboxAgentJob(id: string, jobId: string) {
  *  is never written to the draft. Apply it with `saveInboxDraftBody` and the
  *  hash the editor holds: a 409 means the body changed and needs a merge.
  *  A 503 means the system agent is disabled. */
-export async function requestInboxDraftHelp(id: string, instruction?: string) {
+export async function requestInboxDraftHelp(
+  id: string,
+  instruction?: string,
+  noteId?: string,
+) {
   return hubApi.requestInboxDraftHelp({
     params: { id },
-    body: instruction ? { instruction } : {},
+    body: {
+      ...(instruction ? { instruction } : {}),
+      ...(noteId ? { noteId } : {}),
+    },
     extraHeaders: inboxAuthHeaders(),
   });
 }

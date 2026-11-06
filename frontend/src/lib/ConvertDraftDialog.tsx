@@ -1,3 +1,4 @@
+import PhiNotice from "./PhiNotice";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { fetchBaseBranchesFor, requestConvertInstructions } from "./api";
 import type { ConvertInstructionsResponse } from "./api-contract";
@@ -225,9 +226,10 @@ export default function ConvertDraftDialog({
         }}
       >
         <h2 className="text-base mb-1">Convert to worktrees</h2>
-        <p className="text-[12px] text-muted mb-4">
-          Each worktree gets its own prompt and a copy of “{draftTitle}”.
+        <p className="text-[12px] text-muted mb-1">
+          Each worktree gets its own prompt and a copy of “{draftTitle}” with all of its notes.
         </p>
+        <PhiNotice className="mb-4" />
 
         {projects.length === 0 && (
           <p className="text-[12px] text-danger mb-4">
