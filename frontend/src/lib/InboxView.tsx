@@ -57,6 +57,8 @@ interface Summary {
   prioritySource?: PrioritySource;
   /** A request's triage or delivery failed and waits on the operator. */
   flagged?: boolean;
+  /** Requests a worktree agent is waiting on the operator for. */
+  openRequestCount?: number;
   isRaw: boolean;
 }
 
@@ -161,6 +163,10 @@ export default function InboxView() {
     void loadInboxControlToken().then(refresh);
   }, [refresh]);
 
+  // `/inbox?item=<id>` (the link an inbox_request notification carries) opens
+  // that item once on arrival.
+  const deepLinked = useRef(false);
+
   useEffect(() => {
     void fetchProjects()
       .then((list) => {
@@ -262,6 +268,13 @@ export default function InboxView() {
       setStatus((err as Error).message);
     }
   }, [debouncer]);
+
+  useEffect(() => {
+    if (deepLinked.current) return;
+    deepLinked.current = true;
+    const item = new URLSearchParams(window.location.search).get("item");
+    if (item) void open(item);
+  }, [open]);
 
   /** The hash-gated PUT, for autosave, draft help and merges alike. */
   const saveDeps = useCallback(
@@ -634,6 +647,15 @@ export default function InboxView() {
                     <span className="font-medium truncate">
                       {d.isRaw ? "(unparseable)" : d.title || "(untitled)"}
                     </span>
+                    {(d.openRequestCount ?? 0) > 0 && (
+                      <span
+                        className="ml-auto shrink-0 rounded-full bg-danger px-1.5 text-[10px] font-semibold text-white"
+                        aria-label={`${d.openRequestCount} open request${d.openRequestCount === 1 ? "" : "s"}`}
+                        title="A worktree agent is waiting on you"
+                      >
+                        {d.openRequestCount}
+                      </span>
+                    )}
                     {d.flagged && (
                       <span
                         className="ml-auto shrink-0 h-2 w-2 rounded-full bg-danger"

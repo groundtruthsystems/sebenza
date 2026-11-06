@@ -260,6 +260,7 @@ export const AppNotificationSchema = z.object({
     "pr_opened",
     "runtime_error",
     "worktree_auto_removed",
+    "inbox_request",
   ]),
   message: z.string(),
   url: z.string().optional(),
@@ -986,7 +987,14 @@ export const InboxDraftSummarySchema = z.object({
   prioritySource: InboxPrioritySourceSchema.default("agent"),
   /** A request needs the operator: triage or delivery failed. */
   flagged: z.boolean().default(false),
+  /** Requests a worktree agent is waiting on the operator for. */
+  openRequestCount: z.number().int().nonnegative().default(0),
   isRaw: z.boolean(),
+});
+
+/** Inbox-wide counts for the navigation badge. */
+export const InboxSummarySchema = z.object({
+  openRequests: z.number().int().nonnegative(),
 });
 
 export const InboxDraftListSchema = z.object({

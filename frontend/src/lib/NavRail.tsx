@@ -9,7 +9,38 @@
  * the top bar's toggle, not a top-level destination.
  */
 
+import { useEffect, useState } from "react";
+import { fetchInboxSummary } from "./api";
+
 export type NavDestination = "inbox" | "worktrees" | "registry";
+
+/** How often the Inbox badge re-reads the open-request count. */
+export const INBOX_SUMMARY_POLL_MS = 15_000;
+
+/** Requests worktree agents are waiting on the operator for, polled while the
+ *  rail is mounted. A failed read keeps the last count rather than flashing
+ *  the badge away. */
+function useOpenRequestCount(): number {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    const read = async () => {
+      try {
+        const res = await fetchInboxSummary();
+        if (alive) setCount(res.openRequests);
+      } catch {
+        // Keep the last known count; the next tick retries.
+      }
+    };
+    void read();
+    const timer = setInterval(() => void read(), INBOX_SUMMARY_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+  return count;
+}
 
 interface NavRailProps {
   active: NavDestination;
@@ -69,6 +100,7 @@ export default function NavRail({
   projectBase = "",
   onSelectView,
 }: NavRailProps) {
+  const openRequests = useOpenRequestCount();
   const cls = (dest: NavDestination) =>
     [
       "nav-rail-btn",
@@ -117,6 +149,16 @@ export default function NavRail({
         aria-current={active === "inbox" ? "page" : undefined}
       >
         <Icon name="inbox" />
+        {openRequests > 0 && (
+          <span
+            className="nav-rail-badge"
+            data-testid="inbox-badge"
+            role="status"
+            aria-label={`${openRequests} open request${openRequests === 1 ? "" : "s"}`}
+          >
+            {openRequests > 99 ? "99+" : openRequests}
+          </span>
+        )}
       </a>
       {worktreesItem()}
       <div className="nav-rail-spacer" />

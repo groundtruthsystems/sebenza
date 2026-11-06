@@ -17,6 +17,17 @@ const item = (id: string, priority: "P0" | "P1" | "P2" | "P3", createdAt: string
 });
 
 describe("sortInboxItems", () => {
+  // Nervous-system bug TS-06: an item a worktree is waiting on rises above
+  // quieter items of the same priority, exactly as the server orders it.
+  it("puts items with open requests first within a priority", () => {
+    const items = [
+      { id: "b", priority: "P2" as const, createdAt: "2026-11-05T02", isRaw: false },
+      { id: "a", priority: "P2" as const, createdAt: "2026-11-05T01", isRaw: false, openRequestCount: 2 },
+      { id: "u", priority: "P0" as const, createdAt: "2026-11-05T00", isRaw: false },
+    ];
+    expect(sortInboxItems(items).map((i) => i.id)).toEqual(["u", "a", "b"]);
+  });
+
   it("orders by priority, then newest created, with unparseable items last", () => {
     const items = [
       { id: "raw", isRaw: true },

@@ -667,6 +667,11 @@ export async function postInboxComment(
   });
 }
 
+/** Inbox-wide counts: requests waiting on the operator, for the nav badge. */
+export async function fetchInboxSummary() {
+  return hubApi.fetchInboxSummary();
+}
+
 /** Every request worktree agents raised against the item, with its state. */
 export async function fetchInboxRequests(id: string) {
   return hubApi.fetchInboxRequests({ params: { id } });
