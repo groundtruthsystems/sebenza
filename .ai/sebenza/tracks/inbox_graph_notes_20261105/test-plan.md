@@ -110,6 +110,8 @@ No new tooling. The bar is the Workflow's >80% coverage on new code.
 | TS-74 | UC-09 | Unit | P1 | Given v3 text before the first marker, When read twice, Then same preamble id and `list_hash` both times | id and hash equal |
 | TS-75 | UC-01 | Unit | P1 | Given a fake `AgentStateLookup` (running+waiting, absent), When built, Then nodes carry that state or `unknown` | node `agent` field |
 | TS-76 | UC-01 | Frontend | P2 | Given a worktree whose agent awaits feedback, When rendered, Then a "waiting on you" badge shows | badge text |
+| TS-77 | UC-12, Contract | Integration | P1 | Given agentctl request with --track/--task, When ingested and graph built, Then RequestOpened stores them and the task node carries the request | event fields; node request |
+| TS-78 | UC-02, Contract | Unit | P1 | Given tracks.json current_phase_id and plan task request {request_id,status}, When built, Then current phase and request badge come from them | node fields |
 
 ## Traceability
 
@@ -118,7 +120,7 @@ No new tooling. The bar is the Workflow's >80% coverage on new code.
 | UC-01 | TS-01, TS-02, TS-53, TS-73, TS-75, TS-76 |
 | UC-01a | TS-03, TS-05, TS-61 |
 | UC-01b | TS-04, TS-05 |
-| UC-02 | TS-06, TS-07, TS-53, TS-62 |
+| UC-02 | TS-06, TS-07, TS-53, TS-62, TS-78 |
 | UC-02a | TS-08 |
 | UC-03 | TS-09, TS-10, TS-53 |
 | UC-03a | TS-11, TS-12, TS-63 |
@@ -131,7 +133,7 @@ No new tooling. The bar is the Workflow's >80% coverage on new code.
 | UC-09 | TS-28, TS-29, TS-30, TS-64, TS-74 |
 | UC-10 | TS-31, TS-32, TS-33 |
 | UC-11 | TS-34, TS-38 |
-| UC-12 | TS-35, TS-36 |
+| UC-12 | TS-35, TS-36, TS-77 |
 | UC-13 | TS-37, TS-72 |
 | T-01 (High) | TS-40 |
 | T-02 (High) | TS-41, TS-42, TS-65, TS-66, TS-71 |
@@ -178,7 +180,7 @@ No new tooling. The bar is the Workflow's >80% coverage on new code.
 - Exit: no open must-fix findings, and `SECURITY.md` is updated with T-01..T-09 at close-out.
 
 ## Coverage Map
-Omitted. The Traceability table carries the fan-out, and 76 scenarios would not be legible as a diagram.
+Omitted. The Traceability table carries the fan-out, and 78 scenarios would not be legible as a diagram.
 
 ## Open Questions
 - Shared fixtures are canonical in `crates/common/testdata/contracts/`; each repo tests its copy.

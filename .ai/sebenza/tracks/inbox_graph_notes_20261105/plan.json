@@ -5,14 +5,14 @@
     {
       "id": "phase-1",
       "name": "Note codec and store",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-1-task-1",
           "name": "Write tests for note_codec",
           "description": "Write failing unit tests for marker parse/render, exact backslash escaping, preamble ids, note id grammar, CRLF normalisation and per-note/list hashes.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-2",
@@ -152,6 +152,12 @@
           "status": "backlog"
         },
         {
+          "id": "phase-3-task-4b",
+          "name": "Accept trackId/taskId on agent requests",
+          "description": "Extend agentctl request with --track/--task and store optional trackId/taskId on RequestOpened, test first.",
+          "status": "backlog"
+        },
+        {
           "id": "phase-3-task-5",
           "name": "Create contract fixtures",
           "description": "Add inbox-notes.v1.json and plan.depends_on.json under crates/common/testdata/contracts with Rust reader tests.",
@@ -165,7 +171,7 @@
         },
         {
           "id": "phase-3-task-7",
-          "name": "Execute test scenarios TS-31, TS-32, TS-33, TS-34, TS-35, TS-37, TS-38, TS-39, TS-49, TS-50",
+          "name": "Execute test scenarios TS-31, TS-32, TS-33, TS-34, TS-35, TS-37, TS-38, TS-39, TS-49, TS-50, TS-77",
           "description": "Run the phase's test-plan scenarios and record evidence.",
           "status": "backlog",
           "test_scenarios": [
@@ -178,7 +184,8 @@
             "TS-38",
             "TS-39",
             "TS-49",
-            "TS-50"
+            "TS-50",
+            "TS-77"
           ]
         },
         {
@@ -221,7 +228,7 @@
         },
         {
           "id": "phase-4-task-5",
-          "name": "Execute test scenarios TS-06, TS-08, TS-09, TS-11, TS-13, TS-36, TS-42, TS-43, TS-44, TS-51, TS-54, TS-62, TS-63, TS-65, TS-75",
+          "name": "Execute test scenarios TS-06, TS-08, TS-09, TS-11, TS-13, TS-36, TS-42, TS-43, TS-44, TS-51, TS-54, TS-62, TS-63, TS-65, TS-75, TS-78",
           "description": "Run the phase's test-plan scenarios and record evidence.",
           "status": "backlog",
           "test_scenarios": [
@@ -239,7 +246,8 @@
             "TS-62",
             "TS-63",
             "TS-65",
-            "TS-75"
+            "TS-75",
+            "TS-78"
           ]
         },
         {
@@ -487,7 +495,9 @@
             "TS-73",
             "TS-74",
             "TS-75",
-            "TS-76"
+            "TS-76",
+            "TS-77",
+            "TS-78"
           ]
         },
         {
