@@ -6,7 +6,7 @@
 //! substituting for the other.
 
 use crate::adapters::inbox_store::EventAuthor;
-use crate::domain::inbox_events::{Thread, WorktreeKey, request_id_of};
+use crate::domain::inbox_events::{InboxEvent, InboxEventKind, Thread, WorktreeKey, request_id_of};
 use crate::domain::model::{
     DraftStatus, FileRevision, InboxDraft, InboxDraftView, Priority, PrioritySource,
 };
@@ -75,6 +75,8 @@ pub struct DraftSummaryWire {
     pub priority_source: PrioritySource,
     /// A request needs the operator (triage or delivery failed).
     pub flagged: bool,
+    /// Requests a worktree agent is waiting on the operator for.
+    pub open_request_count: usize,
     pub is_raw: bool,
 }
 
@@ -90,6 +92,7 @@ impl From<DraftSummary> for DraftSummaryWire {
             priority: s.priority,
             priority_source: s.priority_source,
             flagged: s.flagged,
+            open_request_count: s.open_request_count,
             is_raw: s.is_raw,
         }
     }
@@ -282,6 +285,19 @@ pub async fn list_drafts(
         .map(Into::into)
         .collect();
     Ok(Json(serde_json::json!({ "drafts": drafts })))
+}
+
+/// `GET /api/inbox/summary` — inbox-wide counts for the navigation badge:
+/// `{ "openRequests": n }`, requests waiting on the operator across every
+/// item that is not dropped.
+pub async fn inbox_summary(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let svc = inbox(&state);
+    let summary = tokio::task::spawn_blocking(move || svc.summary())
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
+    Ok(Json(serde_json::to_value(summary).unwrap_or_default()))
 }
 
 /// `GET /api/inbox/{id}` — one draft, with its project link resolved.
@@ -1374,16 +1390,43 @@ pub async fn inbox_runtime_event(
         Err(msg) => return Some(Err(ApiError::new(400, msg))),
     };
     let svc = inbox(state);
+    let draft_id = ingress.draft_id.clone();
     let outcome = tokio::task::spawn_blocking(move || svc.ingest(&ingress)).await;
     Some(match outcome {
         Err(_) => Err(ApiError::new(500, "task panicked".to_string())),
         Ok(Err(e)) => Err(e.into()),
-        Ok(Ok(event)) => Ok(Json(serde_json::json!({
-            "ok": true,
-            "eventId": event.event_id,
-            "requestId": request_id_of(&event.kind),
-        }))),
+        Ok(Ok(event)) => {
+            notify_request_opened(state, &draft_id, &event);
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "eventId": event.event_id,
+                "requestId": request_id_of(&event.kind),
+            })))
+        }
     })
+}
+
+/// Tell the operator a worktree agent is waiting on them: a notification on
+/// the project that owns the worktree, linking to the item. The text names the
+/// item, branch and request title only; the body may hold PHI and stays in the
+/// item (NFR-02). A project the server does not serve gets no notification;
+/// the item's count and the Inbox badge still show the request.
+fn notify_request_opened(state: &AppState, draft_id: &str, event: &InboxEvent) {
+    let InboxEventKind::RequestOpened {
+        worktree, title, ..
+    } = &event.kind
+    else {
+        return;
+    };
+    let Some(app) = state.manager.get_by_path(&worktree.project) else {
+        return;
+    };
+    let item_title = match inbox(state).get(draft_id) {
+        Ok((InboxDraftView::Parsed(draft), _)) => draft.frontmatter.title,
+        _ => String::new(),
+    };
+    app.notifications
+        .record_inbox_request(&worktree.branch, &item_title, title, draft_id);
 }
 
 #[cfg(test)]
@@ -1917,6 +1960,67 @@ mod tests {
             events[0].kind,
             InboxEventKind::RequestOpened { .. }
         ));
+    }
+
+    // Nervous-system bug TS-06 / TS-07: the list carries each item's open
+    // request count, and the summary totals them for the nav badge.
+    #[tokio::test]
+    async fn the_list_and_summary_report_open_requests() {
+        let f = fixture();
+        let id = converted(&f);
+        let Json(empty) = inbox_summary(State(f.state.clone()))
+            .await
+            .expect("summary");
+        assert_eq!(empty["openRequests"], 0);
+
+        runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", "Which db?"),
+        )
+        .await
+        .expect("accepted");
+
+        let Json(list) = list_drafts(State(f.state.clone()), Query(ListParams::default()))
+            .await
+            .expect("list");
+        assert_eq!(list["drafts"][0]["id"], id.as_str());
+        assert_eq!(list["drafts"][0]["openRequestCount"], 1);
+        let Json(summary) = inbox_summary(State(f.state.clone()))
+            .await
+            .expect("summary");
+        assert_eq!(summary["openRequests"], 1);
+    }
+
+    // Nervous-system bug TS-09: opening a request records a notification on
+    // the owning project, naming the item, branch and title but never the
+    // body.
+    #[tokio::test]
+    async fn an_agent_request_notifies_the_operator_without_its_body() {
+        let f = fixture();
+        let project = project(&f, "acme", false);
+        let id = f.state.inbox.create("Task graph").expect("create").id;
+        convert_into(&f, &id, &project, "feat-x", "/wt/acme/feat-x");
+
+        runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/acme/feat-x", "feat-x", "SYNTHETIC-PHI-MARKER-123"),
+        )
+        .await
+        .expect("accepted");
+
+        let app = f.state.manager.get_by_path(&project).expect("project");
+        let notes = app.notifications.list();
+        let n = notes
+            .iter()
+            .find(|n| n.r#type == "inbox_request")
+            .expect("inbox_request notification");
+        assert_eq!(n.branch, "feat-x");
+        assert!(n.message.contains("Task graph"), "{}", n.message);
+        assert!(n.message.contains("Need a decision"), "{}", n.message);
+        assert!(!n.message.contains("SYNTHETIC-PHI-MARKER-123"));
+        assert_eq!(n.url.as_deref(), Some(format!("/inbox?item={id}").as_str()));
     }
 
     #[tokio::test]

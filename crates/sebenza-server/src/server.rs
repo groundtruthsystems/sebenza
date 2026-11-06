@@ -316,6 +316,10 @@ pub fn build_router(state: AppState) -> Router {
             get(crate::inbox_routes::list_drafts).post(crate::inbox_routes::create_draft),
         )
         .route(
+            "/api/inbox/summary",
+            get(crate::inbox_routes::inbox_summary),
+        )
+        .route(
             "/api/inbox/{id}",
             get(crate::inbox_routes::get_draft)
                 .patch(crate::inbox_routes::patch_draft)

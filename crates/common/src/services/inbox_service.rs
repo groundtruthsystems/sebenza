@@ -93,9 +93,30 @@ pub struct DraftSummary {
     pub priority_source: PrioritySource,
     /// A request on the item needs the operator: triage or delivery failed.
     pub flagged: bool,
+    /// Requests a worktree agent is waiting on the operator for
+    /// ([`awaits_operator`]).
+    pub open_request_count: usize,
     /// True when the file did not parse; it still lists, so one bad draft
     /// cannot hide the rest.
     pub is_raw: bool,
+}
+
+/// Inbox-wide counts ([`InboxService::summary`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxSummary {
+    /// Requests waiting on the operator, across items that are not dropped.
+    pub open_requests: usize,
+}
+
+/// True while a request needs the operator: still open, carrying a proposal
+/// to confirm, or failed to deliver. `Confirmed` is in flight and `Resolved`
+/// is done.
+pub fn awaits_operator(status: RequestStatus) -> bool {
+    matches!(
+        status,
+        RequestStatus::Open | RequestStatus::Proposed | RequestStatus::DeliveryFailed
+    )
 }
 
 /// Listing filters. The default hides `Dropped`.
@@ -421,6 +442,7 @@ impl InboxService {
                             continue;
                         }
                     }
+                    let requests = self.list_requests(&draft.id).unwrap_or_default();
                     DraftSummary {
                         id: draft.id.clone(),
                         title: draft.frontmatter.title.clone(),
@@ -432,9 +454,11 @@ impl InboxService {
                         priority_source: draft.frontmatter.priority_source,
                         // An unreadable sidecar must not hide the item; it
                         // lists unflagged and the error shows when opened.
-                        flagged: self
-                            .list_requests(&draft.id)
-                            .is_ok_and(|rs| rs.iter().any(|r| r.flagged)),
+                        flagged: requests.iter().any(|r| r.flagged),
+                        open_request_count: requests
+                            .iter()
+                            .filter(|r| awaits_operator(r.status))
+                            .count(),
                         is_raw: false,
                     }
                 }
@@ -457,13 +481,29 @@ impl InboxService {
                         priority: Priority::default(),
                         priority_source: PrioritySource::default(),
                         flagged: false,
+                        open_request_count: 0,
                         is_raw: true,
                     }
                 }
             };
             out.push(summary);
         }
+        // Stable, so `inbox_order` still decides within each band: an item a
+        // worktree is waiting on rises above quieter items of its priority,
+        // and unparseable drafts stay last.
+        out.sort_by_key(|s| (s.is_raw, s.priority, s.open_request_count == 0));
         Ok(out)
+    }
+
+    /// Inbox-wide counts for the navigation badge: requests waiting on the
+    /// operator across every item that is not dropped.
+    pub fn summary(&self) -> Result<InboxSummary, InboxServiceError> {
+        let open_requests = self
+            .list(&ListQuery::default())?
+            .iter()
+            .map(|s| s.open_request_count)
+            .sum();
+        Ok(InboxSummary { open_requests })
     }
 
     /// One draft, with its project link resolved.
@@ -2603,6 +2643,64 @@ mod collaboration_tests {
         f.svc
             .ingest(&request_from(&id, "/wt/acme-demo/feat-x/", "feat-x", "b"))
             .expect("ingest");
+    }
+
+    // --- Operator alerting (nervous-system bug TS-06, TS-07) -----------------
+
+    // TS-06: an item a worktree is waiting on shows how many requests are
+    // waiting and rises above quieter items of the same priority.
+    #[test]
+    fn items_with_open_requests_count_them_and_sort_first_within_priority() {
+        let f = fixture();
+        let asking = converted(&f);
+        let quiet = f.svc.create("Newer, nothing asked").expect("create").id;
+        let urgent = f.svc.create("Operator P0").expect("create").id;
+        f.svc
+            .set_priority(&urgent, Some(Priority::P0), None)
+            .expect("P0");
+        f.svc
+            .ingest(&request_from(
+                &asking,
+                "/wt/acme-demo/feat-x",
+                "feat-x",
+                "b",
+            ))
+            .expect("ingest");
+
+        let listed: Vec<(String, usize)> = f
+            .svc
+            .list(&ListQuery::default())
+            .expect("list")
+            .into_iter()
+            .map(|s| (s.id, s.open_request_count))
+            .collect();
+        assert_eq!(listed, vec![(urgent, 0), (asking, 1), (quiet, 0)]);
+    }
+
+    // TS-06: only requests still waiting on the operator count.
+    #[test]
+    fn only_requests_waiting_on_the_operator_count_as_open() {
+        use crate::domain::inbox_events::RequestStatus as S;
+        assert!(awaits_operator(S::Open));
+        assert!(awaits_operator(S::Proposed));
+        assert!(awaits_operator(S::DeliveryFailed));
+        assert!(!awaits_operator(S::Confirmed));
+        assert!(!awaits_operator(S::Resolved));
+    }
+
+    // TS-07: the summary totals open requests across items, ignoring dropped
+    // ones.
+    #[test]
+    fn the_summary_totals_open_requests_on_live_items() {
+        let f = fixture();
+        assert_eq!(f.svc.summary().expect("summary").open_requests, 0);
+        let id = converted(&f);
+        for _ in 0..2 {
+            f.svc
+                .ingest(&request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b"))
+                .expect("ingest");
+        }
+        assert_eq!(f.svc.summary().expect("summary").open_requests, 2);
     }
 
     // --- Canonical path matching (nervous-system bug TS-01..TS-03) -----------

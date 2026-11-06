@@ -531,10 +531,21 @@ fn print_list(body: &Value) {
         } else {
             ""
         };
+        let waiting = open_requests_suffix(&d);
         println!(
-            "{id}  {priority}{pinned} {:<9} {title}{project}{flagged}",
+            "{id}  {priority}{pinned} {:<9} {title}{project}{waiting}{flagged}",
             status_of(&d)
         );
+    }
+}
+
+/// `  (N open request[s])` when worktree agents are waiting on the operator,
+/// mirroring the count the UI shows on each item.
+fn open_requests_suffix(d: &Value) -> String {
+    match d.get("openRequestCount").and_then(Value::as_u64) {
+        Some(0) | None => String::new(),
+        Some(1) => "  (1 open request)".to_string(),
+        Some(n) => format!("  ({n} open requests)"),
     }
 }
 
@@ -1050,6 +1061,25 @@ pub async fn run(args: &[String], port: u16) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Nervous-system bug (CLI parity with the UI count): `inbox ls` says how
+    // many requests are waiting on the operator.
+    #[test]
+    fn ls_names_open_requests_waiting_on_the_operator() {
+        assert_eq!(
+            open_requests_suffix(&serde_json::json!({"openRequestCount": 0})),
+            ""
+        );
+        assert_eq!(open_requests_suffix(&serde_json::json!({})), "");
+        assert_eq!(
+            open_requests_suffix(&serde_json::json!({"openRequestCount": 1})),
+            "  (1 open request)"
+        );
+        assert_eq!(
+            open_requests_suffix(&serde_json::json!({"openRequestCount": 3})),
+            "  (3 open requests)"
+        );
+    }
 
     fn a(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

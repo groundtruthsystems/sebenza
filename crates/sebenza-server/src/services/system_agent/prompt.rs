@@ -263,6 +263,7 @@ mod tests {
             priority,
             priority_source: PrioritySource::Agent,
             flagged: false,
+            open_request_count: 0,
             is_raw: false,
         }
     }

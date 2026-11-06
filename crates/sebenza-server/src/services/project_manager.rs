@@ -54,6 +54,53 @@ impl NotificationStore {
         items.len() != before
     }
 
+    /// Record that a worktree agent opened an inbox request. The message names
+    /// the item, branch and request title only, never the body, and links to the
+    /// item in the inbox.
+    pub fn record_inbox_request(
+        &self,
+        branch: &str,
+        item_title: &str,
+        request_title: &str,
+        draft_id: &str,
+    ) -> crate::domain::model::NotificationView {
+        let item = if item_title.is_empty() {
+            "an inbox item".to_string()
+        } else {
+            format!("\"{item_title}\"")
+        };
+        self.push(
+            branch,
+            "inbox_request",
+            format!("{branch} needs you on {item}: {request_title}"),
+            Some(format!("/inbox?item={draft_id}")),
+        )
+    }
+
+    fn push(
+        &self,
+        branch: &str,
+        kind: &str,
+        message: String,
+        url: Option<String>,
+    ) -> crate::domain::model::NotificationView {
+        let id = (self.next_id.fetch_add(1, Ordering::Relaxed) + 1) as i64;
+        let notification = crate::domain::model::NotificationView {
+            id,
+            branch: branch.to_string(),
+            r#type: kind.to_string(),
+            message,
+            url,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+        };
+        let mut items = self.items.lock().unwrap();
+        items.push(notification.clone());
+        while items.len() > 50 {
+            items.remove(0);
+        }
+        notification
+    }
+
     /// Record a runtime event as a notification, if it maps to one.
     pub fn record_event(
         &self,
@@ -80,21 +127,7 @@ impl NotificationStore {
                 return None;
             }
         };
-        let id = (self.next_id.fetch_add(1, Ordering::Relaxed) + 1) as i64;
-        let notification = crate::domain::model::NotificationView {
-            id,
-            branch: event.branch().to_string(),
-            r#type: kind.to_string(),
-            message,
-            url,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-        };
-        let mut items = self.items.lock().unwrap();
-        items.push(notification.clone());
-        while items.len() > 50 {
-            items.remove(0);
-        }
-        Some(notification)
+        Some(self.push(event.branch(), kind, message, url))
     }
 }
 

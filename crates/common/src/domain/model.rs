@@ -467,7 +467,7 @@ pub struct ProjectInfo {
 pub struct NotificationView {
     pub id: i64,
     pub branch: String,
-    pub r#type: String, // "agent_stopped" | "pr_opened" | "runtime_error" | "worktree_auto_removed"
+    pub r#type: String, // "agent_stopped" | "pr_opened" | "runtime_error" | "worktree_auto_removed" | "inbox_request"
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
