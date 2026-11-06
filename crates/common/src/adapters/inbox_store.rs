@@ -788,8 +788,16 @@ fn apply_patch(fm: &mut InboxDraftFrontmatter, author: FrontmatterAuthor, patch:
             }
         }
         FrontmatterAuthor::Job => {
+            // Append-only: a record already present stays where it is, and
+            // only new ones are added, so a conversion's index never moves
+            // (the graph keys worktrees on it) and a re-conversion can never
+            // erase history.
             if let Some(conversions) = patch.conversions {
-                fm.conversions = conversions;
+                for entry in conversions {
+                    if !fm.conversions.contains(&entry) {
+                        fm.conversions.push(entry);
+                    }
+                }
             }
             if patch.status == Some(DraftStatus::Promoted) {
                 fm.status = DraftStatus::Promoted;
@@ -863,6 +871,28 @@ mod tests {
             InboxDraftView::Parsed(d) => d,
             other => panic!("expected parsed, got {other:?}"),
         }
+    }
+
+    // TS-73: a conversion patch appends; it never replaces earlier records, so
+    // the conversion index stays a stable graph key across re-conversion.
+    #[test]
+    fn conversion_patches_append_and_never_replace() {
+        let s = store();
+        let d = s.create("Idea").unwrap();
+        let v = |x: &str| serde_yaml::Value::String(x.to_string());
+        for patch in [vec![v("a")], vec![v("b")], vec![v("a"), v("b"), v("c")]] {
+            s.merge_frontmatter(
+                &d.id,
+                FrontmatterAuthor::Job,
+                FrontmatterPatch {
+                    conversions: Some(patch),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        let fm = parsed(s.get(&d.id).unwrap()).frontmatter;
+        assert_eq!(fm.conversions, vec![v("a"), v("b"), v("c")]);
     }
 
     // --- Multiple notes (graph/notes track phase 1) -------------------------

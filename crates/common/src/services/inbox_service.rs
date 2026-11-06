@@ -6,7 +6,8 @@
 //! promoted draft destroys the only record of the prompts it produced.
 
 use crate::adapters::inbox_store::{
-    EventAuthor, FrontmatterAuthor, FrontmatterPatch, InboxStore, InboxStoreError, PriorityWrite,
+    EventAuthor, FrontmatterAuthor, FrontmatterPatch, InboxStore, InboxStoreError, NotePatch,
+    PriorityWrite,
 };
 use crate::adapters::projects_registry::ProjectsRegistry;
 use crate::domain::inbox_events::{
@@ -16,6 +17,7 @@ use crate::domain::inbox_events::{
 use crate::domain::model::{
     DraftStatus, InboxDraft, InboxDraftView, Priority, PrioritySource, ProjectRef, inbox_order,
 };
+use crate::domain::note_codec::InboxNote;
 use crate::services::inbox_convert::{
     ConversionItem, ConversionOutcome, ConversionRunner, ConversionTarget, TargetError,
     run_conversion_item, status_after, validate_targets,
@@ -218,6 +220,11 @@ pub struct AuditRecord {
     pub attempt: Option<u32>,
     /// Whether a confirmed resolution differs from the proposal shown.
     pub edited: Option<bool>,
+    /// The note a note operation touched.
+    pub note_id: Option<String>,
+    /// That note's hash before and after the operation (never its text).
+    pub hash_before: Option<String>,
+    pub hash_after: Option<String>,
 }
 
 impl AuditRecord {
@@ -238,6 +245,9 @@ impl AuditRecord {
             refusal: None,
             attempt: None,
             edited: None,
+            note_id: None,
+            hash_before: None,
+            hash_after: None,
         }
     }
 
@@ -850,6 +860,115 @@ impl InboxService {
     /// (priority changes, tombstones, delivery bookkeeping).
     pub fn comment_view(&self, event: &InboxEvent) -> Option<CommentView> {
         comment_row(event, &std::collections::HashSet::new())
+    }
+
+    /// The item's notes and the list hash gating structural changes.
+    pub fn notes(&self, id: &str) -> Result<(Vec<InboxNote>, String), InboxServiceError> {
+        Ok(self.store.notes(id)?)
+    }
+
+    /// Add a note (see [`InboxStore::add_note`]), audited without its text.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_note(
+        &self,
+        id: &str,
+        caller: &Option<String>,
+        expected_list_hash: &str,
+        note_type: &str,
+        title: &str,
+        body: &str,
+        after_id: Option<&str>,
+    ) -> Result<(InboxNote, Vec<InboxNote>), InboxServiceError> {
+        self.cap("body", body.len(), self.limits.max_body_bytes)?;
+        let (note, notes) =
+            self.store
+                .add_note(id, expected_list_hash, note_type, title, body, after_id)?;
+        self.audit_note(
+            "inbox.note.added",
+            id,
+            caller,
+            &note.id,
+            None,
+            Some(note.hash()),
+        );
+        Ok((note, notes))
+    }
+
+    /// Edit one note (see [`InboxStore::update_note`]), audited without text.
+    pub fn update_note(
+        &self,
+        id: &str,
+        caller: &Option<String>,
+        note_id: &str,
+        expected_hash: &str,
+        patch: NotePatch,
+    ) -> Result<(InboxNote, Vec<InboxNote>), InboxServiceError> {
+        if let Some(body) = &patch.body {
+            self.cap("body", body.len(), self.limits.max_body_bytes)?;
+        }
+        let (note, notes) = self.store.update_note(id, note_id, expected_hash, patch)?;
+        self.audit_note(
+            "inbox.note.updated",
+            id,
+            caller,
+            note_id,
+            Some(expected_hash.to_string()),
+            Some(note.hash()),
+        );
+        Ok((note, notes))
+    }
+
+    /// Remove one note (see [`InboxStore::delete_note`]), audited.
+    pub fn delete_note(
+        &self,
+        id: &str,
+        caller: &Option<String>,
+        note_id: &str,
+        expected_list_hash: &str,
+    ) -> Result<Vec<InboxNote>, InboxServiceError> {
+        let before = self
+            .store
+            .notes(id)?
+            .0
+            .into_iter()
+            .find(|n| n.id == note_id)
+            .map(|n| n.hash());
+        let notes = self.store.delete_note(id, note_id, expected_list_hash)?;
+        self.audit_note("inbox.note.deleted", id, caller, note_id, before, None);
+        Ok(notes)
+    }
+
+    /// Reorder the notes (see [`InboxStore::reorder_notes`]), audited.
+    pub fn reorder_notes(
+        &self,
+        id: &str,
+        caller: &Option<String>,
+        order: &[String],
+        expected_list_hash: &str,
+    ) -> Result<Vec<InboxNote>, InboxServiceError> {
+        let notes = self.store.reorder_notes(id, order, expected_list_hash)?;
+        let mut record =
+            AuditRecord::new("inbox.note.reordered", id, AuthorKind::Operator).with_caller(caller);
+        record.hash_before = Some(expected_list_hash.to_string());
+        record.hash_after = Some(crate::domain::note_codec::list_hash(&notes));
+        self.audit.record(&record);
+        Ok(notes)
+    }
+
+    fn audit_note(
+        &self,
+        action: &'static str,
+        id: &str,
+        caller: &Option<String>,
+        note_id: &str,
+        before: Option<String>,
+        after: Option<String>,
+    ) {
+        let mut record = AuditRecord::new(action, id, AuthorKind::Operator).with_caller(caller);
+        record.note_id = Some(note_id.to_string());
+        record.hash_before = before;
+        record.hash_after = after;
+        self.audit.record(&record);
     }
 
     /// An operator comment, pasted into the worktree's agent pane when it is
@@ -2809,6 +2928,88 @@ mod collaboration_tests {
         f.svc
             .ingest(&request_from(&id, "/wt/acme-demo/feat-x/", "feat-x", "b"))
             .expect("ingest");
+    }
+
+    // --- Note operations (graph/notes TS-52) ---------------------------------
+
+    // TS-52: every note operation is audited with ids and hashes, never the
+    // title or body.
+    #[test]
+    fn note_operations_are_audited_without_text() {
+        use crate::adapters::inbox_store::NotePatch;
+        let f = fixture();
+        let id = f.svc.create("Idea").expect("create").id;
+        let caller = Some("ui".to_string());
+        let (_, lh) = f.svc.notes(&id).expect("notes");
+        let (added, notes) = f
+            .svc
+            .add_note(
+                &id,
+                &caller,
+                &lh,
+                "general",
+                "SECRET-TITLE",
+                "SECRET-BODY",
+                None,
+            )
+            .expect("add");
+        let (edited, _) = f
+            .svc
+            .update_note(
+                &id,
+                &caller,
+                &added.id,
+                &added.hash(),
+                NotePatch {
+                    body: Some("SECRET-EDIT".into()),
+                    ..Default::default()
+                },
+            )
+            .expect("edit");
+        let (notes2, lh2) = f.svc.notes(&id).expect("notes");
+        let order: Vec<String> = notes2.iter().rev().map(|n| n.id.clone()).collect();
+        let notes3 = f
+            .svc
+            .reorder_notes(&id, &caller, &order, &lh2)
+            .expect("reorder");
+        f.svc
+            .delete_note(
+                &id,
+                &caller,
+                &edited.id,
+                &crate::domain::note_codec::list_hash(&notes3),
+            )
+            .expect("delete");
+        let _ = notes;
+
+        let records: Vec<AuditRecord> = f
+            .audit
+            .all()
+            .into_iter()
+            .filter(|r| r.action.starts_with("inbox.note."))
+            .collect();
+        let actions: Vec<&str> = records.iter().map(|r| r.action).collect();
+        assert_eq!(
+            actions,
+            [
+                "inbox.note.added",
+                "inbox.note.updated",
+                "inbox.note.reordered",
+                "inbox.note.deleted"
+            ]
+        );
+        assert_eq!(records[1].note_id.as_deref(), Some(added.id.as_str()));
+        assert_eq!(
+            records[1].hash_before.as_deref(),
+            Some(added.hash().as_str())
+        );
+        assert_eq!(
+            records[1].hash_after.as_deref(),
+            Some(edited.hash().as_str())
+        );
+        assert!(records.iter().all(|r| r.caller.as_deref() == Some("ui")));
+        let dump = format!("{records:?}");
+        assert!(!dump.contains("SECRET"), "{dump}");
     }
 
     // --- Operator alerting (nervous-system bug TS-06, TS-07) -----------------
