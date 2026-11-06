@@ -69,22 +69,25 @@
           "id": "phase-2-task-1",
           "name": "Write tests for the launch prompt operator channel",
           "description": "Write failing tests that architect-first and direct launch prompts contain the operator-channel section.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "e5f9fea"
         },
         {
           "id": "phase-2-task-2",
           "name": "Add the operator channel to the launch prompt",
           "description": "Extend ArchitectFirstPromptBuilder with request/comment usage and the handle-pasted-operator-messages-first rule.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "e5f9fea"
         },
         {
           "id": "phase-2-task-3",
           "name": "Execute test scenarios TS-05",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-05"
-          ]
+          ],
+          "commit_sha": "e5f9fea"
         },
         {
           "id": "phase-2-task-4",
