@@ -5,7 +5,7 @@
     {
       "id": "phase-1",
       "name": "Ingest path matching",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -40,33 +40,36 @@
           "id": "phase-1-task-5",
           "name": "Execute test scenarios TS-01, TS-02, TS-03, TS-04",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "doing",
+          "status": "done",
           "test_scenarios": [
             "TS-01",
             "TS-02",
             "TS-03",
             "TS-04"
-          ]
+          ],
+          "commit_sha": "8640717"
         },
         {
           "id": "phase-1-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "8640717"
         }
-      ]
+      ],
+      "checkpoint_sha": "8640717"
     },
     {
       "id": "phase-2",
       "name": "Agent operator channel",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for the launch prompt operator channel",
           "description": "Write failing tests that architect-first and direct launch prompts contain the operator-channel section.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-2-task-2",
