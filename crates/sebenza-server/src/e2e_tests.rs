@@ -542,6 +542,109 @@ async fn ts14_an_agent_request_round_trips_to_the_operator_and_back() {
     assert!(pasted[1].1.contains("Also add a regression test."));
 }
 
+// Graph/notes TS-53: convert, let the agent write a plan, read the graph
+// through the real router. Volatile fields are masked; the rest is pinned.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn ts53_graph_after_conversion_through_the_router() {
+    let d = Daemon::start("ok").await;
+    let project = d.project("acme-demo", true);
+    let created = d
+        .ok(
+            "POST",
+            "/api/inbox",
+            Some(serde_json::json!({"title": "Task graph"})),
+        )
+        .await;
+    let id = created["id"].as_str().expect("id").to_string();
+    let target = ConversionTarget {
+        project_path: project.clone(),
+        branch: "feat-x".into(),
+        prompt: "Build it".into(),
+        ..Default::default()
+    };
+    d.state
+        .inbox
+        .convert(&id, &[target], &SiblingWorktreeRunner(d.base.clone()))
+        .expect("convert");
+    let wt = d.base.join("worktrees/feat-x").canonicalize().unwrap();
+    // The agent's plan, and the daemon's knowledge of the worktree.
+    let ws = wt.join(".ai/sebenza");
+    std::fs::create_dir_all(ws.join("tracks/t_20261105")).unwrap();
+    std::fs::write(
+        ws.join("tracks.json"),
+        r#"{"tracks":[{"track_id":"t_20261105","description":"Graph","status":"doing"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        ws.join("tracks/t_20261105/plan.json"),
+        r#"{"phases":[{"id":"phase-1","name":"P","status":"doing","tasks":[
+            {"id":"a","name":"A","status":"done"},
+            {"id":"b","name":"B","status":"doing","depends_on":["a"]}]}]}"#,
+    )
+    .unwrap();
+    let app = d.state.manager.get_by_path(&project).expect("project");
+    app.runtime
+        .lock()
+        .unwrap()
+        .upsert_worktree(common::services::project_runtime::UpsertInput {
+            worktree_id: "id-feat-x".into(),
+            kind: Default::default(),
+            branch: "feat-x".into(),
+            label: None,
+            base_branch: None,
+            path: wt.to_string_lossy().to_string(),
+            profile: None,
+            agent_name: Some("claude".into()),
+            agent_terminal_stale: false,
+            runtime: "host".into(),
+            source: common::domain::model::WorktreeSource::Ui,
+            oneshot: None,
+            tabs: vec![],
+            active_tab_id: None,
+        });
+
+    let mut g = d.ok("GET", &format!("/api/inbox/{id}/graph"), None).await;
+    for volatile in ["generatedAt", "etag"] {
+        assert!(g[volatile].is_string(), "{volatile}");
+        g[volatile] = serde_json::Value::Null;
+    }
+    g["worktrees"][0]["agent"] = serde_json::Value::Null;
+    let expected = r#"{
+        "draftId": "__ID__", "generatedAt": null, "etag": null, "truncated": false,
+        "progress": {"done": 1, "total": 2}, "failed": 0, "unavailable": 0,
+        "worktrees": [{
+            "id": "w:0", "branch": "feat-x", "projectPath": "__PROJECT__", "state": "ok",
+            "errorCode": null, "progress": {"done": 1, "total": 2}, "agent": null,
+            "tracks": [{
+                "id": "t:0/t_20261105", "trackId": "t_20261105", "description": "Graph",
+                "status": "doing", "currentPhase": "phase-1", "designing": false,
+                "errorCode": null, "progress": {"done": 1, "total": 2},
+                "phases": [{
+                    "id": "p:0/t_20261105/phase-1", "phaseId": "phase-1", "name": "P",
+                    "status": "doing", "progress": {"done": 1, "total": 2},
+                    "tasks": [
+                        {"id": "k:0/t_20261105/a", "taskId": "a", "name": "A", "status": "done",
+                         "dependsOn": [], "request": null},
+                        {"id": "k:0/t_20261105/b", "taskId": "b", "name": "B", "status": "doing",
+                         "dependsOn": ["a"], "request": null}
+                    ]
+                }]
+            }]
+        }],
+        "edges": [
+            {"from": "w:0", "to": "t:0/t_20261105", "kind": "contains", "dangling": false, "flag": null},
+            {"from": "t:0/t_20261105", "to": "p:0/t_20261105/phase-1", "kind": "contains", "dangling": false, "flag": null},
+            {"from": "p:0/t_20261105/phase-1", "to": "k:0/t_20261105/a", "kind": "contains", "dangling": false, "flag": null},
+            {"from": "p:0/t_20261105/phase-1", "to": "k:0/t_20261105/b", "kind": "contains", "dangling": false, "flag": null},
+            {"from": "k:0/t_20261105/b", "to": "k:0/t_20261105/a", "kind": "depends_on", "dangling": false, "flag": null}
+        ]
+    }"#
+    .replace("__ID__", &id)
+    .replace("__PROJECT__", &project);
+    let expected: serde_json::Value = serde_json::from_str(&expected).unwrap();
+    assert_eq!(g, expected);
+}
+
 // TS-57: an item with two targets gets a system instruction per target from
 // the stub over HTTP, is converted with them, and each worktree's launch
 // prompt is architect-first (both projects have `.ai/sebenza/index.md`).

@@ -21,6 +21,10 @@ enum InboxCommand {
         all: bool,
     },
     Show(String),
+    /// Print the item's notes (JSON, as the API returns them).
+    Notes(String),
+    /// Print the item's worktree/track/task graph (JSON).
+    Graph(String),
     New(String),
     Edit(String),
     Link {
@@ -107,6 +111,8 @@ fn usage() -> String {
         "Usage:",
         "  sebenza-cli inbox ls [--search TEXT] [--all]   List drafts (--all includes dropped)",
         "  sebenza-cli inbox show <id>                    Print a draft",
+        "  sebenza-cli inbox notes <id>                   Print a draft's notes (JSON)",
+        "  sebenza-cli inbox graph <id>                   Print a draft's worktree/task graph (JSON)",
         "  sebenza-cli inbox new <title>                  Create an empty draft",
         "  sebenza-cli inbox edit <id>                    Open the draft in $EDITOR and save",
         "  sebenza-cli inbox link <id> <path>             Link the draft to a project",
@@ -245,6 +251,8 @@ fn parse(args: &[String]) -> Result<Option<InboxCommand>> {
             all: flag(args, "--all"),
         })),
         "show" | "cat" => Ok(Some(InboxCommand::Show(need(0, "draft id")?))),
+        "notes" => Ok(Some(InboxCommand::Notes(need(0, "draft id")?))),
+        "graph" => Ok(Some(InboxCommand::Graph(need(0, "draft id")?))),
         "new" => Ok(Some(InboxCommand::New(need(0, "title")?))),
         "edit" => Ok(Some(InboxCommand::Edit(need(0, "draft id")?))),
         "link" => Ok(Some(InboxCommand::Link {
@@ -855,6 +863,14 @@ pub async fn run(args: &[String], port: u16) -> i32 {
             InboxCommand::Ls { search, all } => {
                 print_list(&http.inbox_list(search.as_deref(), all).await?);
             }
+            InboxCommand::Notes(id) => {
+                let v = http.inbox_notes(&id).await?;
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            }
+            InboxCommand::Graph(id) => {
+                let v = http.inbox_graph(&id).await?;
+                println!("{}", serde_json::to_string_pretty(&v)?);
+            }
             InboxCommand::Show(id) => {
                 let d = http.inbox_get(&id).await?;
                 if let Some(raw) = d.get("raw").filter(|r| !r.is_null()) {
@@ -1061,6 +1077,21 @@ pub async fn run(args: &[String], port: u16) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Graph/notes TS-69: CLI parity for the read-only notes and graph views.
+    #[test]
+    fn notes_and_graph_parse_to_their_commands() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(matches!(
+            parse(&a(&["notes", "01ARZ3NDEKTSV4RRFFQ69G5FAV"])),
+            Ok(Some(InboxCommand::Notes(id))) if id == "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        ));
+        assert!(matches!(
+            parse(&a(&["graph", "01ARZ3NDEKTSV4RRFFQ69G5FAV"])),
+            Ok(Some(InboxCommand::Graph(id))) if id == "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        ));
+        assert!(parse(&a(&["graph"])).is_err(), "an id is required");
+    }
 
     // Nervous-system bug (CLI parity with the UI count): `inbox ls` says how
     // many requests are waiting on the operator.

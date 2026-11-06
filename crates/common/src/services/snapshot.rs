@@ -31,7 +31,8 @@ pub fn format_elapsed_since(started_at: Option<&str>, now: DateTime<Utc>) -> Str
     format!("{diff_days}d")
 }
 
-fn lifecycle_status(lifecycle: AgentLifecycle) -> String {
+/// The wire status of an agent lifecycle (`running`, `idle`, ...).
+pub fn lifecycle_status(lifecycle: AgentLifecycle) -> String {
     match lifecycle {
         AgentLifecycle::Closed => "closed",
         AgentLifecycle::Starting => "starting",

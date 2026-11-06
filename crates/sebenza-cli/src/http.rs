@@ -615,6 +615,18 @@ impl Http {
         self.get(&format!("{}/api/inbox/{id}", self.hub)).await
     }
 
+    /// `GET /api/inbox/{id}/notes`
+    pub async fn inbox_notes(&self, id: &str) -> Result<Value> {
+        self.get(&format!("{}/api/inbox/{id}/notes", self.hub))
+            .await
+    }
+
+    /// `GET /api/inbox/{id}/graph`
+    pub async fn inbox_graph(&self, id: &str) -> Result<Value> {
+        self.get(&format!("{}/api/inbox/{id}/graph", self.hub))
+            .await
+    }
+
     /// `POST /api/inbox`
     pub async fn inbox_create(&self, title: &str) -> Result<Value> {
         let resp = self

@@ -521,6 +521,58 @@ pub async fn reorder_notes(
     note_outcome(result, StatusCode::OK)
 }
 
+/// `GET /api/inbox/{id}/graph` — the item's worktrees, tracks, tasks and
+/// dependencies ([`build_task_graph`]). Read-only and Host-checked like the
+/// other inbox reads. Answers 304 when `If-None-Match` matches the etag, which
+/// is computed from file stats before anything is parsed.
+pub async fn get_graph(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::response::IntoResponse;
+    use common::services::task_graph::{GraphInput, build_task_graph, graph_etag};
+    check(&headers, "GET")?;
+    let if_none_match = headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim_matches('"').to_string());
+    let svc = inbox(&state);
+    let manager = state.manager.clone();
+    let outcome = tokio::task::spawn_blocking(move || -> Result<_, InboxServiceError> {
+        let draft = match svc.get(&id)?.0 {
+            InboxDraftView::Parsed(d) => d,
+            InboxDraftView::Raw { error, .. } => {
+                return Err(InboxServiceError::Store(InboxStoreError::Unparsed {
+                    id,
+                    error,
+                }));
+            }
+        };
+        let requests = svc.list_requests(&id)?;
+        let ports = crate::services::inbox_graph::ServerGraphPorts::new(manager);
+        let input = GraphInput {
+            draft_id: &id,
+            conversions: &draft.frontmatter.conversions,
+            requests: &requests,
+            now: chrono::Utc::now().to_rfc3339(),
+        };
+        let etag = graph_etag(&input, &ports);
+        if if_none_match.as_deref() == Some(etag.as_str()) {
+            return Ok((etag, None));
+        }
+        Ok((etag, Some(build_task_graph(&input, &ports, &ports))))
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
+    let (etag, graph) = outcome;
+    let etag_header = [(axum::http::header::ETAG, format!("\"{etag}\""))];
+    Ok(match graph {
+        None => (StatusCode::NOT_MODIFIED, etag_header).into_response(),
+        Some(g) => (StatusCode::OK, etag_header, Json(g)).into_response(),
+    })
+}
+
 /// `GET /api/inbox/{id}` — one draft, with its project link resolved.
 pub async fn get_draft(
     State(state): State<AppState>,
@@ -2247,6 +2299,205 @@ mod tests {
             events[0].kind,
             InboxEventKind::RequestOpened { .. }
         ));
+    }
+
+    // --- Graph route (graph/notes phase 5) ------------------------------------
+
+    /// A converted worktree the project's runtime knows, with a Sebenza
+    /// workspace holding one planned track.
+    fn graph_worktree(f: &Fixture, project: &str, branch: &str) -> std::path::PathBuf {
+        let wt = f.base.join(format!("wt-{branch}"));
+        let ws = wt.join(".ai/sebenza");
+        std::fs::create_dir_all(ws.join("tracks/t_20261105")).unwrap();
+        std::fs::write(
+            ws.join("tracks.json"),
+            serde_json::json!({"tracks": [{"track_id": "t_20261105", "description": "T"}]})
+                .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            ws.join("tracks/t_20261105/plan.json"),
+            serde_json::json!({"phases": [{"id": "phase-1", "name": "P", "status": "doing",
+                "tasks": [{"id": "a", "name": "A", "status": "done"},
+                          {"id": "b", "name": "B", "status": "doing", "depends_on": ["a"]}]}]})
+            .to_string(),
+        )
+        .unwrap();
+        let app = f.state.manager.get_by_path(project).expect("project");
+        app.runtime.lock().unwrap().upsert_worktree(
+            common::services::project_runtime::UpsertInput {
+                worktree_id: format!("id-{branch}"),
+                kind: Default::default(),
+                branch: branch.into(),
+                label: None,
+                base_branch: None,
+                path: wt.to_string_lossy().to_string(),
+                profile: None,
+                agent_name: Some("claude".into()),
+                agent_terminal_stale: false,
+                runtime: "host".into(),
+                source: common::domain::model::WorktreeSource::Ui,
+                oneshot: None,
+                tabs: vec![],
+                active_tab_id: None,
+            },
+        );
+        wt.canonicalize().unwrap()
+    }
+
+    async fn get_graph_json(
+        f: &Fixture,
+        id: &str,
+        headers: HeaderMap,
+    ) -> Result<(StatusCode, serde_json::Value, Option<String>), ApiError> {
+        let resp = get_graph(State(f.state.clone()), Path(id.to_string()), headers).await?;
+        let status = resp.status();
+        let etag = resp
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        };
+        Ok((status, body, etag))
+    }
+
+    fn host_only() -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("host", HeaderValue::from_static(HOST));
+        h
+    }
+
+    // TS-01 / TS-03 / TS-04 / TS-61 / TS-66 / TS-75: every converted worktree
+    // is listed with its state, progress and agent; failures carry a code,
+    // never the recorded error text or a worktree path.
+    #[tokio::test]
+    async fn the_graph_lists_every_worktree_with_state_and_progress() {
+        let f = fixture();
+        let project = project(&f, "acme", false);
+        let id = f.state.inbox.create("Task graph").expect("create").id;
+        let ok = graph_worktree(&f, &project, "feat-x");
+        convert_into(&f, &id, &project, "feat-x", &ok.to_string_lossy());
+        convert_into(
+            &f,
+            &id,
+            &project,
+            "gone",
+            &f.base.join("nope").to_string_lossy(),
+        );
+        let target = crate::services::inbox_convert::ConversionTarget {
+            project_path: project.clone(),
+            branch: "boom".into(),
+            ..Default::default()
+        };
+        let failed = ConversionOutcome::failed(
+            &target,
+            "boom at /secret/SYNTHETIC-PHI-MARKER".into(),
+            "t".into(),
+        );
+        f.store
+            .merge_frontmatter(
+                &id,
+                FrontmatterAuthor::Job,
+                FrontmatterPatch {
+                    conversions: Some(vec![serde_yaml::to_value(failed).unwrap()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let (code, g, etag) = get_graph_json(&f, &id, host_only()).await.expect("graph");
+        assert_eq!(code, StatusCode::OK);
+        assert!(etag.is_some());
+        let states: Vec<&str> = g["worktrees"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["state"].as_str().unwrap())
+            .collect();
+        assert_eq!(states, ["ok", "unavailable", "failed"]);
+        assert_eq!(
+            g["worktrees"][0]["progress"],
+            serde_json::json!({"done": 1, "total": 2})
+        );
+        assert_eq!(g["worktrees"][0]["agent"]["agent"], "claude");
+        assert_eq!(g["worktrees"][1]["errorCode"], "missing");
+        assert_eq!(g["worktrees"][2]["errorCode"], "conversion_failed");
+        let text = g.to_string();
+        assert!(!text.contains("SYNTHETIC-PHI-MARKER"));
+        assert!(
+            !text.contains(&ok.to_string_lossy().to_string()),
+            "no worktree paths"
+        );
+        assert!(
+            !text.contains("nope"),
+            "no recorded paths of missing worktrees"
+        );
+        assert!(
+            g["edges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["kind"] == "depends_on")
+        );
+    }
+
+    // TS-41: a recorded path the project does not manage is not read.
+    #[tokio::test]
+    async fn an_unregistered_worktree_path_is_not_read() {
+        let f = fixture();
+        let project = project(&f, "acme", false);
+        let id = f.state.inbox.create("T").expect("create").id;
+        let stray = f.base.join("stray/.ai/sebenza");
+        std::fs::create_dir_all(&stray).unwrap();
+        std::fs::write(
+            stray.join("tracks.json"),
+            r#"{"tracks":[{"track_id":"leak_20261105"}]}"#,
+        )
+        .unwrap();
+        convert_into(
+            &f,
+            &id,
+            &project,
+            "stray",
+            &f.base.join("stray").to_string_lossy(),
+        );
+        let (_, g, _) = get_graph_json(&f, &id, host_only()).await.unwrap();
+        assert_eq!(g["worktrees"][0]["errorCode"], "not_registered");
+        assert!(!g.to_string().contains("leak"));
+    }
+
+    // TS-68 / TS-71: an unchanged graph is a 304 for its etag; a foreign Host
+    // is refused.
+    #[tokio::test]
+    async fn the_graph_honours_etags_and_the_host_check() {
+        let f = fixture();
+        let project = project(&f, "acme", false);
+        let id = f.state.inbox.create("T").expect("create").id;
+        let wt = graph_worktree(&f, &project, "feat-x");
+        convert_into(&f, &id, &project, "feat-x", &wt.to_string_lossy());
+        let (_, _, etag) = get_graph_json(&f, &id, host_only()).await.unwrap();
+        let mut h = host_only();
+        h.insert(
+            "if-none-match",
+            HeaderValue::from_str(&etag.unwrap()).unwrap(),
+        );
+        let (code, body, _) = get_graph_json(&f, &id, h).await.unwrap();
+        assert_eq!(code, StatusCode::NOT_MODIFIED);
+        assert!(body.is_null());
+
+        let mut evil = HeaderMap::new();
+        evil.insert("host", HeaderValue::from_static("evil.example"));
+        assert_eq!(
+            status(get_graph(State(f.state.clone()), Path(id.clone()), evil).await),
+            403
+        );
     }
 
     // --- Notes API (graph/notes phase 2) -------------------------------------

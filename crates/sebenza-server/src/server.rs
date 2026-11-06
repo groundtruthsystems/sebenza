@@ -325,6 +325,7 @@ pub fn build_router(state: AppState) -> Router {
                 .patch(crate::inbox_routes::patch_draft)
                 .delete(crate::inbox_routes::delete_draft),
         )
+        .route("/api/inbox/{id}/graph", get(crate::inbox_routes::get_graph))
         .route(
             "/api/inbox/{id}/notes",
             get(crate::inbox_routes::list_notes).post(crate::inbox_routes::add_note),
