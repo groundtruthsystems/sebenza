@@ -62,7 +62,7 @@
     {
       "id": "phase-2",
       "name": "Agent operator channel",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -93,21 +93,23 @@
           "id": "phase-2-task-4",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "e5f9fea"
         }
-      ]
+      ],
+      "checkpoint_sha": "e5f9fea"
     },
     {
       "id": "phase-3",
       "name": "Operator alerting",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Write tests for open-request counts, summary and notification",
           "description": "Write failing tests for openRequestCount and sort order, GET /api/inbox/summary, and a body-free inbox_request notification.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-2",
