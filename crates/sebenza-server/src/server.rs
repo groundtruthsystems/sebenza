@@ -326,6 +326,19 @@ pub fn build_router(state: AppState) -> Router {
                 .delete(crate::inbox_routes::delete_draft),
         )
         .route(
+            "/api/inbox/{id}/notes",
+            get(crate::inbox_routes::list_notes).post(crate::inbox_routes::add_note),
+        )
+        .route(
+            "/api/inbox/{id}/notes/reorder",
+            post(crate::inbox_routes::reorder_notes),
+        )
+        .route(
+            "/api/inbox/{id}/notes/{nid}",
+            axum::routing::put(crate::inbox_routes::update_note)
+                .delete(crate::inbox_routes::delete_note),
+        )
+        .route(
             "/api/inbox/{id}/body",
             axum::routing::put(crate::inbox_routes::save_draft_body),
         )

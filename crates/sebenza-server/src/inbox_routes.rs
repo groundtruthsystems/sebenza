@@ -30,6 +30,8 @@ use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::Json;
 use axum::response::{IntoResponse, Response};
+use common::adapters::inbox_store::{InboxStoreError, NotePatch};
+use common::domain::note_codec::{InboxNote, list_hash, parse_notes};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -118,8 +120,42 @@ pub struct DraftWire {
     /// Every wave this draft has produced, so a second conversion can start
     /// from the last one rather than a blank form.
     pub conversions: Vec<serde_yaml::Value>,
+    /// The item's notes in operator order, each with its edit token.
+    pub notes: Vec<NoteWire>,
+    /// The token for adding, deleting or reordering notes.
+    pub list_hash: String,
     /// Present instead of the fields above when the file did not parse.
     pub raw: Option<RawWire>,
+}
+
+/// One note as the API shows it: the codec's fields plus its edit token.
+#[derive(Debug, Serialize)]
+pub struct NoteWire {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub note_type: String,
+    pub title: String,
+    pub body: String,
+    pub hash: String,
+}
+
+impl From<&InboxNote> for NoteWire {
+    fn from(n: &InboxNote) -> Self {
+        Self {
+            id: n.id.clone(),
+            note_type: n.note_type.clone(),
+            title: n.title.clone(),
+            body: n.body.clone(),
+            hash: n.hash(),
+        }
+    }
+}
+
+fn notes_json(notes: &[InboxNote]) -> serde_json::Value {
+    serde_json::json!({
+        "notes": notes.iter().map(NoteWire::from).collect::<Vec<_>>(),
+        "listHash": list_hash(notes),
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -131,20 +167,25 @@ pub struct RawWire {
 
 fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
     match view {
-        InboxDraftView::Parsed(d) => DraftWire {
-            body_hash: FileRevision::of_body(&d.body).body_hash,
-            id: d.id,
-            title: d.frontmatter.title,
-            status: d.frontmatter.status,
-            created_at: d.frontmatter.created_at,
-            updated_at: d.frontmatter.updated_at,
-            body: d.body,
-            project: link.map(Into::into),
-            priority: d.frontmatter.priority,
-            priority_source: d.frontmatter.priority_source,
-            conversions: d.frontmatter.conversions,
-            raw: None,
-        },
+        InboxDraftView::Parsed(d) => {
+            let notes = parse_notes(&d.body, d.frontmatter.schema_version);
+            DraftWire {
+                list_hash: list_hash(&notes),
+                notes: notes.iter().map(NoteWire::from).collect(),
+                body_hash: FileRevision::of_body(&d.body).body_hash,
+                id: d.id,
+                title: d.frontmatter.title,
+                status: d.frontmatter.status,
+                created_at: d.frontmatter.created_at,
+                updated_at: d.frontmatter.updated_at,
+                body: d.body,
+                project: link.map(Into::into),
+                priority: d.frontmatter.priority,
+                priority_source: d.frontmatter.priority_source,
+                conversions: d.frontmatter.conversions,
+                raw: None,
+            }
+        }
         InboxDraftView::Raw {
             id,
             raw_text,
@@ -157,6 +198,8 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
             updated_at: String::new(),
             body: String::new(),
             body_hash: String::new(),
+            notes: Vec::new(),
+            list_hash: String::new(),
             project: None,
             priority: Priority::default(),
             priority_source: PrioritySource::default(),
@@ -190,6 +233,15 @@ impl From<InboxServiceError> for ApiError {
             InboxServiceError::Store(InboxStoreError::Unparsed { .. }) => {
                 ApiError::new(422, err.to_string())
             }
+            InboxServiceError::Store(InboxStoreError::NoteNotFound { .. }) => {
+                ApiError::new(404, err.to_string())
+            }
+            InboxServiceError::Store(InboxStoreError::InvalidNote(_)) => {
+                ApiError::new(400, err.to_string())
+            }
+            InboxServiceError::Store(
+                InboxStoreError::NoteConflict { .. } | InboxStoreError::NoteIdsDropped { .. },
+            ) => ApiError::new(409, err.to_string()),
             InboxServiceError::Invalid(_) => ApiError::new(400, err.to_string()),
             InboxServiceError::TooLarge { .. } => ApiError::new(413, err.to_string()),
             InboxServiceError::RateLimited | InboxServiceError::TooManyOpenRequests(_) => {
@@ -298,6 +350,175 @@ pub async fn inbox_summary(
         .await
         .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
     Ok(Json(serde_json::to_value(summary).unwrap_or_default()))
+}
+
+/// `GET /api/inbox/{id}/notes` — the item's notes and list hash.
+pub async fn list_notes(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (notes, _) = inbox(&state).notes(&id)?;
+    Ok(Json(notes_json(&notes)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddNoteBody {
+    #[serde(rename = "type")]
+    pub note_type: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub after_id: Option<String>,
+    pub expected_list_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateNoteBody {
+    #[serde(rename = "type", default)]
+    pub note_type: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    pub expected_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderNotesBody {
+    pub order: Vec<String>,
+    pub expected_list_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteNoteParams {
+    pub expected_list_hash: String,
+}
+
+type NoteResponse = Result<(StatusCode, Json<serde_json::Value>), ApiError>;
+
+/// A note write's outcome: `ok` with the response body, a 409 carrying what
+/// the note (or list) now is so the editor can show it, or the mapped error.
+fn note_outcome(
+    result: Result<serde_json::Value, InboxServiceError>,
+    ok: StatusCode,
+) -> NoteResponse {
+    match result {
+        Ok(v) => Ok((ok, Json(v))),
+        Err(InboxServiceError::Store(InboxStoreError::NoteConflict {
+            current, list_hash, ..
+        })) => Ok((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "the note changed since you read it",
+                "current": current.as_ref().map(NoteWire::from),
+                "listHash": list_hash,
+            })),
+        )),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// `POST /api/inbox/{id}/notes` — add a note (201), gated on the list hash.
+pub async fn add_note(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<AddNoteBody>,
+) -> NoteResponse {
+    check(&headers, "POST")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let result = tokio::task::spawn_blocking(move || {
+        svc.add_note(
+            &id,
+            &caller,
+            &body.expected_list_hash,
+            &body.note_type,
+            &body.title,
+            &body.body,
+            body.after_id.as_deref(),
+        )
+        .map(|(note, notes)| {
+            let mut v = notes_json(&notes);
+            v["note"] = serde_json::to_value(NoteWire::from(&note)).unwrap_or_default();
+            v
+        })
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
+    note_outcome(result, StatusCode::CREATED)
+}
+
+/// `PUT /api/inbox/{id}/notes/{nid}` — edit one note, gated on its hash.
+pub async fn update_note(
+    State(state): State<AppState>,
+    Path((id, nid)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateNoteBody>,
+) -> NoteResponse {
+    check(&headers, "PUT")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let result = tokio::task::spawn_blocking(move || {
+        let patch = NotePatch {
+            note_type: body.note_type,
+            title: body.title,
+            body: body.body,
+        };
+        svc.update_note(&id, &caller, &nid, &body.expected_hash, patch)
+            .map(|(note, notes)| {
+                let mut v = notes_json(&notes);
+                v["note"] = serde_json::to_value(NoteWire::from(&note)).unwrap_or_default();
+                v
+            })
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
+    note_outcome(result, StatusCode::OK)
+}
+
+/// `DELETE /api/inbox/{id}/notes/{nid}?expectedListHash=` — remove a note;
+/// the last one is cleared instead.
+pub async fn delete_note(
+    State(state): State<AppState>,
+    Path((id, nid)): Path<(String, String)>,
+    Query(params): Query<DeleteNoteParams>,
+    headers: HeaderMap,
+) -> NoteResponse {
+    check(&headers, "DELETE")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let result = tokio::task::spawn_blocking(move || {
+        svc.delete_note(&id, &caller, &nid, &params.expected_list_hash)
+            .map(|notes| notes_json(&notes))
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
+    note_outcome(result, StatusCode::OK)
+}
+
+/// `POST /api/inbox/{id}/notes/reorder` — put the notes in a new order.
+pub async fn reorder_notes(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ReorderNotesBody>,
+) -> NoteResponse {
+    check(&headers, "POST")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let result = tokio::task::spawn_blocking(move || {
+        svc.reorder_notes(&id, &caller, &body.order, &body.expected_list_hash)
+            .map(|notes| notes_json(&notes))
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
+    note_outcome(result, StatusCode::OK)
 }
 
 /// `GET /api/inbox/{id}` — one draft, with its project link resolved.
@@ -2016,6 +2237,340 @@ mod tests {
             events[0].kind,
             InboxEventKind::RequestOpened { .. }
         ));
+    }
+
+    // --- Notes API (graph/notes phase 2) -------------------------------------
+
+    async fn notes_of(f: &Fixture, id: &str) -> serde_json::Value {
+        let Json(v) = list_notes(State(f.state.clone()), Path(id.to_string()))
+            .await
+            .expect("notes");
+        v
+    }
+
+    async fn add(
+        f: &Fixture,
+        id: &str,
+        h: HeaderMap,
+        body: serde_json::Value,
+    ) -> Result<(StatusCode, serde_json::Value), ApiError> {
+        let body: AddNoteBody = serde_json::from_value(body).expect("add body");
+        add_note(State(f.state.clone()), Path(id.to_string()), h, Json(body))
+            .await
+            .map(|(code, Json(v))| (code, v))
+    }
+
+    async fn edit(
+        f: &Fixture,
+        id: &str,
+        nid: &str,
+        body: serde_json::Value,
+    ) -> Result<(StatusCode, serde_json::Value), ApiError> {
+        let body: UpdateNoteBody = serde_json::from_value(body).expect("edit body");
+        update_note(
+            State(f.state.clone()),
+            Path((id.to_string(), nid.to_string())),
+            good_headers(),
+            Json(body),
+        )
+        .await
+        .map(|(code, Json(v))| (code, v))
+    }
+
+    // TS-17 / TS-18: a valid note is created (201) and listed in order; an
+    // invalid one is a 400.
+    #[tokio::test]
+    async fn notes_are_added_listed_and_validated() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let before = notes_of(&f, &id).await;
+        assert_eq!(before["notes"][0]["id"], "n1");
+        let lh = before["listHash"].as_str().unwrap().to_string();
+        let (code, v) = add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "acceptance_criteria", "title": "Acceptance Criteria",
+                "body": "- graph tab", "expectedListHash": lh}),
+        )
+        .await
+        .expect("added");
+        assert_eq!(code, StatusCode::CREATED);
+        assert_eq!(v["note"]["type"], "acceptance_criteria");
+        assert!(v["note"]["hash"].is_string());
+        let after = notes_of(&f, &id).await;
+        assert_eq!(after["notes"].as_array().unwrap().len(), 2);
+        assert_eq!(after["notes"][1]["title"], "Acceptance Criteria");
+        assert_ne!(after["listHash"], lh.as_str());
+        let Json(item) = get_draft(State(f.state.clone()), Path(id.clone()))
+            .await
+            .expect("get");
+        let item = serde_json::to_value(item).unwrap();
+        assert_eq!(
+            item["notes"].as_array().unwrap().len(),
+            2,
+            "the item carries its notes"
+        );
+
+        let bad = add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "Not A Slug", "title": "x", "body": "",
+                "expectedListHash": after["listHash"]}),
+        )
+        .await;
+        assert_eq!(status(bad), 400);
+    }
+
+    // TS-58 / TS-20: edits to different notes both succeed; a stale hash on
+    // the same note is a 409 carrying the current note.
+    #[tokio::test]
+    async fn note_edits_conflict_only_on_the_same_note() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let lh = notes_of(&f, &id).await["listHash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "general", "title": "B",
+            "body": "b", "expectedListHash": lh}),
+        )
+        .await
+        .unwrap();
+        let notes = notes_of(&f, &id).await;
+        let (a, b) = (notes["notes"][0].clone(), notes["notes"][1].clone());
+        let (code, _) = edit(
+            &f,
+            &id,
+            "n1",
+            serde_json::json!({"body": "A1", "expectedHash": a["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::OK);
+        let (code, _) = edit(
+            &f,
+            &id,
+            b["id"].as_str().unwrap(),
+            serde_json::json!({"body": "B1", "expectedHash": b["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            code,
+            StatusCode::OK,
+            "another note's edit does not conflict"
+        );
+        let (code, v) = edit(
+            &f,
+            &id,
+            "n1",
+            serde_json::json!({"body": "A2", "expectedHash": a["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::CONFLICT);
+        assert_eq!(v["current"]["body"], "A1");
+        assert!(v["listHash"].is_string());
+    }
+
+    // TS-22 / TS-23 / TS-24 / TS-25 / TS-26 / TS-57: structural changes need
+    // the current list hash; reorder needs a permutation; the last note is
+    // cleared.
+    #[tokio::test]
+    async fn structural_note_changes_are_list_gated() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let lh0 = notes_of(&f, &id).await["listHash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (_, v) = add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "general",
+            "title": "Two", "body": "2", "expectedListHash": lh0}),
+        )
+        .await
+        .unwrap();
+        let two = v["note"]["id"].as_str().unwrap().to_string();
+        let lh = v["listHash"].as_str().unwrap().to_string();
+
+        let (code, _) = add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "general",
+            "title": "Stale", "body": "", "expectedListHash": lh0}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::CONFLICT, "stale add");
+
+        let reorder = |order: serde_json::Value, expected: String| {
+            let body: ReorderNotesBody = serde_json::from_value(
+                serde_json::json!({"order": order, "expectedListHash": expected}),
+            )
+            .unwrap();
+            reorder_notes(
+                State(f.state.clone()),
+                Path(id.clone()),
+                good_headers(),
+                Json(body),
+            )
+        };
+        assert_eq!(
+            status(reorder(serde_json::json!(["n1"]), lh.clone()).await),
+            400
+        );
+        let (code, _) = reorder(serde_json::json!([two, "n1"]), lh0.clone())
+            .await
+            .map(|(c, Json(v))| (c, v))
+            .unwrap();
+        assert_eq!(code, StatusCode::CONFLICT, "stale reorder");
+        let (code, v) = reorder(serde_json::json!([two, "n1"]), lh.clone())
+            .await
+            .map(|(c, Json(v))| (c, v))
+            .unwrap();
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(v["notes"][0]["id"], two.as_str());
+        let lh = v["listHash"].as_str().unwrap().to_string();
+
+        let del = |nid: String, expected: String| {
+            delete_note(
+                State(f.state.clone()),
+                Path((id.clone(), nid)),
+                Query(DeleteNoteParams {
+                    expected_list_hash: expected,
+                }),
+                good_headers(),
+            )
+        };
+        let (code, _) = del("n1".into(), lh0.clone())
+            .await
+            .map(|(c, Json(v))| (c, v))
+            .unwrap();
+        assert_eq!(code, StatusCode::CONFLICT, "stale delete");
+        let (_, v) = del(two.clone(), lh)
+            .await
+            .map(|(c, Json(v))| (c, v))
+            .unwrap();
+        let lh = v["listHash"].as_str().unwrap().to_string();
+        let (code, v) = del("n1".into(), lh)
+            .await
+            .map(|(c, Json(v))| (c, v))
+            .unwrap();
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(
+            v["notes"].as_array().unwrap().len(),
+            1,
+            "the last note is cleared"
+        );
+        assert_eq!(v["notes"][0]["body"], "");
+        assert_eq!(
+            status(del("zz99".into(), v["listHash"].as_str().unwrap().into()).await),
+            404
+        );
+    }
+
+    // TS-40: every note mutation needs the token, same origin and our Host.
+    #[tokio::test]
+    async fn note_mutations_refuse_a_missing_token_a_foreign_origin_and_a_bad_host() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let lh = notes_of(&f, &id).await["listHash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut no_token = good_headers();
+        no_token.remove("authorization");
+        let mut foreign = good_headers();
+        foreign.insert("origin", HeaderValue::from_static("http://evil.example"));
+        let mut bad_host = good_headers();
+        bad_host.insert("host", HeaderValue::from_static("evil.example"));
+        for (h, want) in [(no_token, 401), (foreign, 403), (bad_host, 403)] {
+            let body = serde_json::json!({"type": "general", "title": "T", "body": "",
+                "expectedListHash": lh});
+            assert_eq!(status(add(&f, &id, h.clone(), body).await), want);
+            let up: UpdateNoteBody =
+                serde_json::from_value(serde_json::json!({"body": "x", "expectedHash": "h"}))
+                    .unwrap();
+            assert_eq!(
+                status(
+                    update_note(
+                        State(f.state.clone()),
+                        Path((id.clone(), "n1".into())),
+                        h.clone(),
+                        Json(up)
+                    )
+                    .await
+                ),
+                want
+            );
+            assert_eq!(
+                status(
+                    delete_note(
+                        State(f.state.clone()),
+                        Path((id.clone(), "n1".into())),
+                        Query(DeleteNoteParams {
+                            expected_list_hash: lh.clone()
+                        }),
+                        h.clone()
+                    )
+                    .await
+                ),
+                want
+            );
+            let ro: ReorderNotesBody = serde_json::from_value(
+                serde_json::json!({"order": ["n1"], "expectedListHash": lh}),
+            )
+            .unwrap();
+            assert_eq!(
+                status(reorder_notes(State(f.state.clone()), Path(id.clone()), h, Json(ro)).await),
+                want
+            );
+        }
+    }
+
+    // TS-47: a legacy whole-body PUT that would drop a note is a 409.
+    #[tokio::test]
+    async fn a_legacy_body_put_that_drops_notes_is_a_409() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let lh = notes_of(&f, &id).await["listHash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "general", "title": "Two",
+            "body": "2", "expectedListHash": lh}),
+        )
+        .await
+        .unwrap();
+        let Json(item) = get_draft(State(f.state.clone()), Path(id.clone()))
+            .await
+            .unwrap();
+        let item = serde_json::to_value(item).unwrap();
+        let body: SaveBodyBody = serde_json::from_value(serde_json::json!({
+            "body": "flattened", "expectedHash": item["bodyHash"]}))
+        .unwrap();
+        let r = save_draft_body(
+            State(f.state.clone()),
+            Path(id.clone()),
+            good_headers(),
+            Json(body),
+        )
+        .await;
+        assert_eq!(status(r), 409);
     }
 
     // Nervous-system bug TS-10 / TS-11: an operator's worktree-thread comment
