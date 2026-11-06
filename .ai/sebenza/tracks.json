@@ -76,20 +76,20 @@
       "description": "Inbox item graph view (worktrees, tracks, progress, task dependency graph) and multiple typed notes per inbox item",
       "status": "doing",
       "created_at": "2026-11-05T00:00:00Z",
-      "updated_at": "2026-11-06T04:15:00Z",
+      "updated_at": "2026-11-06T04:16:30Z",
       "design_path": "./tracks/inbox_graph_notes_20261105/design.md",
       "test_plan_path": "./tracks/inbox_graph_notes_20261105/test-plan.md",
       "phases_summary": [
         {
           "id": "phase-1",
           "name": "Note codec and store",
-          "status": "doing",
+          "status": "done",
           "blocked_reason": null
         },
         {
           "id": "phase-2",
           "name": "Notes API and contract",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
@@ -131,8 +131,8 @@
       ],
       "progress": {
         "total_tasks": 46,
-        "completed_tasks": 4,
-        "percentage": 9
+        "completed_tasks": 8,
+        "percentage": 17
       },
       "spec_path": "./tracks/inbox_graph_notes_20261105/spec.md",
       "plan_path": "./tracks/inbox_graph_notes_20261105/plan.json"

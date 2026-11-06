@@ -5,7 +5,7 @@
     {
       "id": "phase-1",
       "name": "Note codec and store",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -40,19 +40,21 @@
           "id": "phase-1-task-5",
           "name": "Write tests for append-only conversions and note audit events",
           "description": "Write failing tests that apply_patch appends conversions and that note operations emit text-free audit events.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "508d4d5"
         },
         {
           "id": "phase-1-task-6",
           "name": "Make apply_patch append-only and emit note audit events",
           "description": "Change apply_patch from replacing to appending conversions and log note operations with ids, hashes, request id and caller.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "508d4d5"
         },
         {
           "id": "phase-1-task-7",
           "name": "Execute test scenarios TS-20, TS-28, TS-29, TS-30, TS-45, TS-46, TS-52, TS-64, TS-73, TS-74",
           "description": "Run the phase's test-plan scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-20",
             "TS-28",
@@ -64,27 +66,30 @@
             "TS-64",
             "TS-73",
             "TS-74"
-          ]
+          ],
+          "commit_sha": "508d4d5"
         },
         {
           "id": "phase-1-task-8",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "508d4d5"
         }
-      ]
+      ],
+      "checkpoint_sha": "508d4d5"
     },
     {
       "id": "phase-2",
       "name": "Notes API and contract",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for note routes",
           "description": "Write failing route tests for the five note endpoints covering status codes, 409 payloads, guard rejection and the legacy body PUT note-drop 409.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-2-task-2",
