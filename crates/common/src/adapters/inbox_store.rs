@@ -11,6 +11,10 @@ use crate::domain::model::{
     DraftStatus, FileRevision, INBOX_DRAFT_SCHEMA_VERSION, InboxDraft, InboxDraftFrontmatter,
     InboxDraftView, Priority, PrioritySource, ProjectRef, parse_inbox_file, render_inbox_file,
 };
+use crate::domain::note_codec::{
+    InboxNote, MAX_TITLE_CHARS, NOTES_SCHEMA_VERSION, is_valid_type, list_hash, new_note_id,
+    parse_notes, render_notes,
+};
 use crate::util::id::{is_ulid, random_ulid};
 use std::collections::HashMap;
 use std::fs;
@@ -41,6 +45,21 @@ pub enum InboxStoreError {
     },
     #[error("draft {id} has schema_version {version}, newer than this binary supports")]
     UnsupportedVersion { id: String, version: i32 },
+    /// A note edit raced another write. `current` is the note as it now is
+    /// (`None` for a structural change), with the list hash to retry against.
+    #[error("note conflict on {id}")]
+    NoteConflict {
+        id: String,
+        current: Option<InboxNote>,
+        list_hash: String,
+    },
+    #[error("draft {id} has no note {note_id}")]
+    NoteNotFound { id: String, note_id: String },
+    #[error("invalid note: {0}")]
+    InvalidNote(String),
+    /// A whole-body write would have removed notes the item has.
+    #[error("draft {id}: the new body drops notes {dropped:?}")]
+    NoteIdsDropped { id: String, dropped: Vec<String> },
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -224,7 +243,10 @@ impl InboxStore {
     }
 
     /// Load a draft for rewriting: refuse a newer schema, and stamp an older one
-    /// with the current version (v2 is additive, so this loses nothing).
+    /// with the current version. Every write stamps, so the v2 -> v3 step must
+    /// be lossless whatever triggers it: the old body is re-rendered through
+    /// the note codec as its single default note, escaping any line that a v3
+    /// reader would otherwise take for a marker.
     fn require_writable(&self, id: &str) -> Result<InboxDraft, InboxStoreError> {
         let mut draft = self.require_parsed(id)?;
         let version = draft.frontmatter.schema_version;
@@ -234,8 +256,167 @@ impl InboxStore {
                 version,
             });
         }
+        if version < NOTES_SCHEMA_VERSION {
+            draft.body = render_notes(&parse_notes(&draft.body, version));
+        }
         draft.frontmatter.schema_version = INBOX_DRAFT_SCHEMA_VERSION;
         Ok(draft)
+    }
+
+    /// The item's notes, read as its schema version wrote them, with the list
+    /// hash that gates structural changes.
+    pub fn notes(&self, id: &str) -> Result<(Vec<InboxNote>, String), InboxStoreError> {
+        let draft = self.require_parsed(id)?;
+        let notes = parse_notes(&draft.body, draft.frontmatter.schema_version);
+        let lh = list_hash(&notes);
+        Ok((notes, lh))
+    }
+
+    /// Rewrite the notes of `id` under its lock: `f` gets the current notes
+    /// and returns what to keep. The result is rendered back as the body.
+    fn with_notes<T>(
+        &self,
+        id: &str,
+        f: impl FnOnce(&mut Vec<InboxNote>) -> Result<T, InboxStoreError>,
+    ) -> Result<(T, Vec<InboxNote>), InboxStoreError> {
+        self.locked(id, || {
+            let mut draft = self.require_writable(id)?;
+            let mut notes = parse_notes(&draft.body, NOTES_SCHEMA_VERSION);
+            let out = f(&mut notes)?;
+            if notes.is_empty() {
+                notes.push(InboxNote::default_with(""));
+            }
+            draft.body = render_notes(&notes);
+            draft.frontmatter.updated_at = now_rfc3339();
+            self.atomic_write(id, &render_inbox_file(&draft))?;
+            Ok((out, notes))
+        })
+    }
+
+    /// Add a note after `after_id` (or last), if `expected_list_hash` is
+    /// current. Returns the new note and the full list.
+    pub fn add_note(
+        &self,
+        id: &str,
+        expected_list_hash: &str,
+        note_type: &str,
+        title: &str,
+        body: &str,
+        after_id: Option<&str>,
+    ) -> Result<(InboxNote, Vec<InboxNote>), InboxStoreError> {
+        let (note_type, title) = validate_note(note_type, title)?;
+        self.with_notes(id, |notes| {
+            check_list(id, notes, expected_list_hash)?;
+            let at = match after_id {
+                None => notes.len(),
+                Some(after) => {
+                    notes.iter().position(|n| n.id == after).ok_or_else(|| {
+                        InboxStoreError::NoteNotFound {
+                            id: id.to_string(),
+                            note_id: after.to_string(),
+                        }
+                    })? + 1
+                }
+            };
+            let note = InboxNote {
+                id: new_note_id(notes),
+                note_type,
+                title,
+                body: body.replace("\r\n", "\n"),
+            };
+            notes.insert(at, note.clone());
+            Ok(note)
+        })
+    }
+
+    /// Edit one note, if `expected_hash` is that note's current hash. Other
+    /// notes' edits never conflict with it.
+    pub fn update_note(
+        &self,
+        id: &str,
+        note_id: &str,
+        expected_hash: &str,
+        patch: NotePatch,
+    ) -> Result<(InboxNote, Vec<InboxNote>), InboxStoreError> {
+        self.with_notes(id, |notes| {
+            let lh = list_hash(notes);
+            let note = notes.iter_mut().find(|n| n.id == note_id).ok_or_else(|| {
+                InboxStoreError::NoteNotFound {
+                    id: id.to_string(),
+                    note_id: note_id.to_string(),
+                }
+            })?;
+            if note.hash() != expected_hash {
+                return Err(InboxStoreError::NoteConflict {
+                    id: id.to_string(),
+                    current: Some(note.clone()),
+                    list_hash: lh,
+                });
+            }
+            let (note_type, title) = validate_note(
+                patch.note_type.as_deref().unwrap_or(&note.note_type),
+                patch.title.as_deref().unwrap_or(&note.title),
+            )?;
+            note.note_type = note_type;
+            note.title = title;
+            if let Some(body) = patch.body {
+                note.body = body.replace("\r\n", "\n");
+            }
+            Ok(note.clone())
+        })
+    }
+
+    /// Remove one note, if `expected_list_hash` is current. Removing the last
+    /// note leaves one empty default note: an item never has zero notes.
+    pub fn delete_note(
+        &self,
+        id: &str,
+        note_id: &str,
+        expected_list_hash: &str,
+    ) -> Result<Vec<InboxNote>, InboxStoreError> {
+        self.with_notes(id, |notes| {
+            check_list(id, notes, expected_list_hash)?;
+            let at = notes.iter().position(|n| n.id == note_id).ok_or_else(|| {
+                InboxStoreError::NoteNotFound {
+                    id: id.to_string(),
+                    note_id: note_id.to_string(),
+                }
+            })?;
+            notes.remove(at);
+            Ok(())
+        })
+        .map(|(_, notes)| notes)
+    }
+
+    /// Put the notes in `order`, which must name every note exactly once, if
+    /// `expected_list_hash` is current. Ids are unchanged.
+    pub fn reorder_notes(
+        &self,
+        id: &str,
+        order: &[String],
+        expected_list_hash: &str,
+    ) -> Result<Vec<InboxNote>, InboxStoreError> {
+        self.with_notes(id, |notes| {
+            check_list(id, notes, expected_list_hash)?;
+            let mut want: Vec<&String> = order.iter().collect();
+            let mut have: Vec<&String> = notes.iter().map(|n| &n.id).collect();
+            want.sort();
+            have.sort();
+            if want != have {
+                return Err(InboxStoreError::InvalidNote(
+                    "the order must name every note exactly once".to_string(),
+                ));
+            }
+            let mut reordered = Vec::with_capacity(notes.len());
+            for nid in order {
+                if let Some(at) = notes.iter().position(|n| &n.id == nid) {
+                    reordered.push(notes.remove(at));
+                }
+            }
+            *notes = reordered;
+            Ok(())
+        })
+        .map(|(_, notes)| notes)
     }
 
     fn require_parsed(&self, id: &str) -> Result<InboxDraft, InboxStoreError> {
@@ -316,8 +497,11 @@ impl InboxStore {
         body: &str,
     ) -> Result<InboxDraft, InboxStoreError> {
         self.locked(id, || {
+            // The token is the hash of the body the client read, before any
+            // v3 re-rendering this write might do.
+            let on_disk = self.require_parsed(id)?.body;
             let mut draft = self.require_writable(id)?;
-            let actual = FileRevision::of_body(&draft.body);
+            let actual = FileRevision::of_body(&on_disk);
             if actual.body_hash != expected_hash {
                 return Err(InboxStoreError::Conflict {
                     id: id.to_string(),
@@ -325,7 +509,20 @@ impl InboxStore {
                     actual: actual.body_hash,
                 });
             }
-            draft.body = body.to_string();
+            let before = parse_notes(&draft.body, NOTES_SCHEMA_VERSION);
+            let after = parse_notes(body, NOTES_SCHEMA_VERSION);
+            let dropped: Vec<String> = before
+                .iter()
+                .filter(|b| !after.iter().any(|a| a.id == b.id))
+                .map(|b| b.id.clone())
+                .collect();
+            if !dropped.is_empty() {
+                return Err(InboxStoreError::NoteIdsDropped {
+                    id: id.to_string(),
+                    dropped,
+                });
+            }
+            draft.body = render_notes(&after);
             draft.frontmatter.updated_at = now_rfc3339();
             self.atomic_write(id, &render_inbox_file(&draft))?;
             Ok(draft)
@@ -601,6 +798,44 @@ fn apply_patch(fm: &mut InboxDraftFrontmatter, author: FrontmatterAuthor, patch:
     }
 }
 
+/// A partial note edit: absent fields keep their value.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NotePatch {
+    pub note_type: Option<String>,
+    pub title: Option<String>,
+    pub body: Option<String>,
+}
+
+/// A trimmed title and a valid type, or why not.
+fn validate_note(note_type: &str, title: &str) -> Result<(String, String), InboxStoreError> {
+    if !is_valid_type(note_type) {
+        return Err(InboxStoreError::InvalidNote(format!(
+            "type must be a slug of [a-z0-9_]{{1,40}}, got {note_type:?}"
+        )));
+    }
+    let title = title.trim().replace(['\n', '\r'], " ");
+    if title.is_empty() || title.chars().count() > MAX_TITLE_CHARS {
+        return Err(InboxStoreError::InvalidNote(format!(
+            "a title needs 1 to {MAX_TITLE_CHARS} characters"
+        )));
+    }
+    Ok((note_type.to_string(), title))
+}
+
+/// Refuse a structural change made against a stale list.
+fn check_list(id: &str, notes: &[InboxNote], expected: &str) -> Result<(), InboxStoreError> {
+    let current = list_hash(notes);
+    if current == expected {
+        Ok(())
+    } else {
+        Err(InboxStoreError::NoteConflict {
+            id: id.to_string(),
+            current: None,
+            list_hash: current,
+        })
+    }
+}
+
 impl Default for InboxStore {
     fn default() -> Self {
         Self::new()
@@ -628,6 +863,221 @@ mod tests {
             InboxDraftView::Parsed(d) => d,
             other => panic!("expected parsed, got {other:?}"),
         }
+    }
+
+    // --- Multiple notes (graph/notes track phase 1) -------------------------
+
+    use crate::domain::note_codec::{InboxNote, list_hash};
+
+    fn with_notes(s: &InboxStore) -> (String, Vec<InboxNote>) {
+        let d = s.create("Idea").unwrap();
+        let (_, lh) = s.notes(&d.id).unwrap();
+        let (_, notes) = s
+            .add_note(
+                &d.id,
+                &lh,
+                "acceptance_criteria",
+                "Acceptance Criteria",
+                "- works",
+                None,
+            )
+            .unwrap();
+        assert_eq!(notes.len(), 2);
+        let (notes, _) = s.notes(&d.id).unwrap();
+        (d.id, notes)
+    }
+
+    // TS-17 (store): a note is added after a given note and listed in order.
+    #[test]
+    fn notes_are_added_in_order_and_stamp_v3() {
+        let s = store();
+        let (id, notes) = with_notes(&s);
+        assert_eq!(notes[0].id, "n1");
+        assert_eq!(notes[1].note_type, "acceptance_criteria");
+        let lh = list_hash(&notes);
+        let (added, notes) = s
+            .add_note(&id, &lh, "context", "Context", "ctx", Some("n1"))
+            .unwrap();
+        assert_eq!(notes[1].id, added.id);
+        assert_eq!(parsed(s.get(&id).unwrap()).frontmatter.schema_version, 3);
+    }
+
+    // TS-18 (store): a bad type or empty title is refused, file unchanged.
+    #[test]
+    fn an_invalid_note_is_refused() {
+        let s = store();
+        let (id, notes) = with_notes(&s);
+        let before = fs::read_to_string(s.dir().join(format!("{id}.md"))).unwrap();
+        let lh = list_hash(&notes);
+        for (t, title) in [("Bad Type", "T"), ("general", "  ")] {
+            assert!(matches!(
+                s.add_note(&id, &lh, t, title, "b", None),
+                Err(InboxStoreError::InvalidNote(_))
+            ));
+        }
+        assert_eq!(
+            fs::read_to_string(s.dir().join(format!("{id}.md"))).unwrap(),
+            before
+        );
+    }
+
+    // TS-20: a stale note hash conflicts with the current note; another note's
+    // edit with its own hash succeeds.
+    #[test]
+    fn note_edits_conflict_per_note_only() {
+        let s = store();
+        let (id, notes) = with_notes(&s);
+        let (a, b) = (notes[0].clone(), notes[1].clone());
+        s.update_note(
+            &id,
+            &a.id,
+            &a.hash(),
+            NotePatch {
+                body: Some("A1".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        match s.update_note(
+            &id,
+            &a.id,
+            &a.hash(),
+            NotePatch {
+                body: Some("A2".into()),
+                ..Default::default()
+            },
+        ) {
+            Err(InboxStoreError::NoteConflict { current, .. }) => {
+                assert_eq!(current.expect("current").body, "A1")
+            }
+            other => panic!("expected conflict, got {other:?}"),
+        }
+        let (edited, _) = s
+            .update_note(
+                &id,
+                &b.id,
+                &b.hash(),
+                NotePatch {
+                    title: Some("AC".into()),
+                    ..Default::default()
+                },
+            )
+            .expect("other note edits cleanly");
+        assert_eq!(edited.title, "AC");
+    }
+
+    // TS-22 / TS-57 (store): structural changes need the current list hash.
+    #[test]
+    fn structural_changes_need_the_current_list_hash() {
+        let s = store();
+        let (id, notes) = with_notes(&s);
+        let stale = list_hash(&notes);
+        s.update_note(
+            &id,
+            "n1",
+            &notes[0].hash(),
+            NotePatch {
+                body: Some("x".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(matches!(
+            s.add_note(&id, &stale, "general", "T", "b", None),
+            Err(InboxStoreError::NoteConflict { .. })
+        ));
+        assert!(matches!(
+            s.reorder_notes(&id, &[notes[1].id.clone(), "n1".into()], &stale),
+            Err(InboxStoreError::NoteConflict { .. })
+        ));
+        assert!(matches!(
+            s.delete_note(&id, "n1", &stale),
+            Err(InboxStoreError::NoteConflict { .. })
+        ));
+    }
+
+    // TS-23 / TS-24 (store): reorder keeps ids; a non-permutation is refused.
+    #[test]
+    fn reorder_keeps_ids_and_needs_a_permutation() {
+        let s = store();
+        let (id, notes) = with_notes(&s);
+        let lh = list_hash(&notes);
+        assert!(matches!(
+            s.reorder_notes(&id, &["n1".into()], &lh),
+            Err(InboxStoreError::InvalidNote(_))
+        ));
+        let order = vec![notes[1].id.clone(), "n1".into()];
+        let after = s.reorder_notes(&id, &order, &lh).unwrap();
+        assert_eq!(
+            after.iter().map(|n| n.id.clone()).collect::<Vec<_>>(),
+            order
+        );
+        assert_eq!(after[1].body, notes[0].body);
+    }
+
+    // TS-25 / TS-26 (store): delete removes a note; the last one is cleared.
+    #[test]
+    fn deleting_the_last_note_clears_it() {
+        let s = store();
+        let (id, notes) = with_notes(&s);
+        let after = s
+            .delete_note(&id, &notes[1].id, &list_hash(&notes))
+            .unwrap();
+        assert_eq!(after.len(), 1);
+        let after = s.delete_note(&id, "n1", &list_hash(&after)).unwrap();
+        assert_eq!(after, vec![InboxNote::default_with("")]);
+        assert!(matches!(
+            s.delete_note(&id, "zz99", &list_hash(&after)),
+            Err(InboxStoreError::NoteNotFound { .. })
+        ));
+    }
+
+    // TS-29: the first note write on a legacy item keeps its text as n1.
+    #[test]
+    fn a_legacy_item_keeps_its_text_as_the_first_note() {
+        let s = store();
+        let d = s.create("Old").unwrap();
+        let hash = FileRevision::of_body("").body_hash;
+        s.save_body(&d.id, &hash, "Legacy text\n").unwrap();
+        let (notes, lh) = s.notes(&d.id).unwrap();
+        s.add_note(&d.id, &lh, "general", "More", "m", None)
+            .unwrap();
+        let (notes2, _) = s.notes(&d.id).unwrap();
+        assert_eq!(notes2[0], notes[0]);
+        assert_eq!(notes2[0].body, "Legacy text\n");
+    }
+
+    // TS-64: a v2 body with marker lookalikes survives a non-note write (the
+    // v3 stamp) byte-identically as n1.
+    #[test]
+    fn a_v2_body_survives_a_priority_write_byte_identically() {
+        let s = store();
+        let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let body = "intro\n<!-- sebenza:note id=ab type=general title=\"Forged\" -->\n\\<!-- sebenza:note x\nend\n";
+        let src = format!(
+            "---\nschema_version: 2\ntitle: Old\nstatus: Draft\ncreated_at: a\nupdated_at: a\nconversions: []\n---\n{body}"
+        );
+        fs::write(s.dir().join(format!("{id}.md")), src).unwrap();
+        s.set_priority(id, PriorityWrite::Agent(Priority::P1))
+            .unwrap();
+        let d = parsed(s.get(id).unwrap());
+        assert_eq!(d.frontmatter.schema_version, 3);
+        let (notes, _) = s.notes(id).unwrap();
+        assert_eq!(notes, vec![InboxNote::default_with(body)]);
+    }
+
+    // TS-47: a legacy whole-body PUT that would drop a note id is refused.
+    #[test]
+    fn a_legacy_body_put_cannot_drop_notes() {
+        let s = store();
+        let (id, _) = with_notes(&s);
+        let raw = parsed(s.get(&id).unwrap()).body;
+        let hash = FileRevision::of_body(&raw).body_hash;
+        assert!(matches!(
+            s.save_body(&id, &hash, "flattened"),
+            Err(InboxStoreError::NoteIdsDropped { .. })
+        ));
+        assert_eq!(parsed(s.get(&id).unwrap()).body, raw);
     }
 
     #[test]
