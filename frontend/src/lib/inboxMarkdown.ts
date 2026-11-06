@@ -19,6 +19,10 @@ import { mermaidFencePattern } from "./diagram/fences";
 // Lazy-load mermaid (large) so it stays out of the main bundle. Initialized
 // once, strictly.
 let mermaidReady: Promise<typeof import("mermaid").default> | null = null;
+
+/** Mermaid's own size limits, set explicitly rather than inherited: the item
+ *  graph collapses well below them, and a hostile plan cannot raise them. */
+export const MERMAID_LIMITS = { maxTextSize: 200_000, maxEdges: 2_000 } as const;
 function loadMermaid() {
   if (!mermaidReady) {
     mermaidReady = import("mermaid").then((m) => {
@@ -33,6 +37,7 @@ function loadMermaid() {
         // every node an empty box.
         flowchart: { htmlLabels: false },
         htmlLabels: false,
+        ...MERMAID_LIMITS,
       });
       return m.default;
     });
@@ -205,4 +210,12 @@ function escapeHtml(s: string): string {
 export function renderCommentMarkdown(source: string): string {
   const marked = new Marked({ async: false, gfm: true, breaks: true });
   return sanitize(taskBoxes(marked.parse(source) as string));
+}
+
+/** Render one mermaid source (built by our own code, e.g. the item graph) to
+ *  sanitized SVG, through the same strict loader and sanitizer as notes. */
+export async function renderMermaidSvg(source: string): Promise<string> {
+  const mermaid = await loadMermaid();
+  const { svg } = await mermaid.render(`sebenza-graph-${++mermaidSeq}`, source);
+  return sanitizeSvg(svg);
 }

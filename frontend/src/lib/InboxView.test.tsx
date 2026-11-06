@@ -14,6 +14,7 @@ const requests = vi.fn();
 const confirmRequest = vi.fn();
 const draftHelp = vi.fn();
 const updateNote = vi.fn();
+const graphFetch = vi.fn();
 type StreamCallbacks = {
   onJob: (job: Record<string, unknown>) => void;
   onError: (message: string) => void;
@@ -44,6 +45,7 @@ vi.mock("./api", () => ({
   deleteInboxNote: vi.fn(),
   reorderInboxNotes: vi.fn(),
   fetchInboxSummary: () => Promise.resolve({ openRequests: 0 }),
+  fetchInboxGraph: (...a: unknown[]) => graphFetch(...a),
   fetchInboxAgentJob: vi.fn(),
   connectInboxAgentStream: (_id: string, cb: StreamCallbacks) => {
     stream = cb;
@@ -65,6 +67,7 @@ vi.mock("./inboxMarkdown", () => ({
     ),
   sanitize: (s: string) => s,
   renderCommentMarkdown: (s: string) => `<p>${s}</p>`,
+  renderMermaidSvg: () => Promise.resolve("<svg></svg>"),
 }));
 
 import InboxView from "./InboxView";
@@ -607,5 +610,28 @@ describe("InboxView notes", () => {
     );
     expect(updateNote).toHaveBeenCalledTimes(1);
     expect(save).not.toHaveBeenCalled();
+  });
+});
+
+describe("InboxView graph tab", () => {
+  it("switches the item page to its graph", async () => {
+    const user = userEvent.setup();
+    draft.mockResolvedValue(full());
+    graphFetch.mockResolvedValue({
+      kind: "graph",
+      graph: {
+        draftId: ID, generatedAt: "t", etag: "e", truncated: false,
+        progress: { done: 0, total: 0 }, failed: 0, unavailable: 0, worktrees: [], edges: [],
+      },
+    });
+    render(<InboxView />);
+    await user.click(await screen.findByText("Rework the scorer"));
+    expect(await screen.findByLabelText("Draft body")).toBeInTheDocument();
+    await user.click(screen.getByRole("tab", { name: "Graph" }));
+    expect(await screen.findByText(/not been converted into worktrees yet/)).toBeInTheDocument();
+    expect(graphFetch).toHaveBeenCalledWith(ID, undefined, expect.any(AbortSignal));
+    expect(screen.queryByLabelText("Draft body")).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "Notes" }));
+    expect(await screen.findByLabelText("Draft body")).toBeInTheDocument();
   });
 });
