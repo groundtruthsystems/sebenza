@@ -1031,6 +1031,10 @@ export const InboxDraftSchema = z.object({
   priority: InboxPrioritySchema.default("P2"),
   prioritySource: InboxPrioritySourceSchema.default("agent"),
   conversions: z.array(ConversionOutcomeSchema).default([]),
+  /** The item's notes in operator order (schema v3). */
+  notes: z.array(z.lazy(() => InboxNoteSchema)).default([]),
+  /** Token for adding, deleting or reordering notes. */
+  listHash: z.string().default(""),
   raw: z.object({ text: z.string(), error: z.string() }).nullable(),
 });
 
@@ -1298,4 +1302,51 @@ export const ConversionJobSchema = z.object({
   outcomes: z.array(ConversionOutcomeSchema),
   finished: z.boolean(),
   error: z.string().optional(),
+});
+
+/** One note of an inbox item. `type` is a slug (`general`,
+ *  `acceptance_criteria`, ...); `hash` is the token an edit must echo. */
+export const InboxNoteSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  title: z.string(),
+  body: z.string(),
+  hash: z.string(),
+});
+
+export const InboxNotesSchema = z.object({
+  notes: z.array(InboxNoteSchema),
+  listHash: z.string(),
+});
+
+export const InboxNoteWriteSchema = InboxNotesSchema.extend({
+  note: InboxNoteSchema,
+});
+
+/** A 409 from a note write: the note as it now is (null for a structural
+ *  change), and the list hash to retry against. */
+export const InboxNoteConflictSchema = z.object({
+  error: z.string(),
+  current: InboxNoteSchema.nullable(),
+  listHash: z.string(),
+});
+
+export const AddInboxNoteRequestSchema = z.object({
+  type: z.string(),
+  title: z.string(),
+  body: z.string(),
+  afterId: z.string().optional(),
+  expectedListHash: z.string(),
+});
+
+export const UpdateInboxNoteRequestSchema = z.object({
+  type: z.string().optional(),
+  title: z.string().optional(),
+  body: z.string().optional(),
+  expectedHash: z.string(),
+});
+
+export const ReorderInboxNotesRequestSchema = z.object({
+  order: z.array(z.string()),
+  expectedListHash: z.string(),
 });

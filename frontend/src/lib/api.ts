@@ -3,6 +3,7 @@ import {
   InboxJobEventSchema,
   apiPaths,
   createApi,
+  createApiClient,
 } from "./api-contract";
 import type { InboxAgentJob, SaveTrackFileResponse } from "./api-contract";
 import type {
@@ -45,6 +46,9 @@ export const api = createApi(apiBase);
 
 /** Hub client — project list/add/remove + the migration sensor are global (no prefix). */
 const hubApi = createApi("");
+/** The same hub client without unwrapping, for routes whose 409 carries data
+ *  the caller needs (note conflicts). */
+const rawHubApi = createApiClient("");
 
 function mapAgentStatus(status: string): string {
   switch (status) {
@@ -569,6 +573,109 @@ export async function saveInboxDraftBody(
     body: { expectedHash, body },
     extraHeaders: inboxAuthHeaders(),
   });
+}
+
+export type InboxNote = {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  hash: string;
+};
+
+/** A note write: the new list (and note), or a conflict carrying what the
+ *  note or list now is. Other failures throw. */
+export type NoteWriteOutcome =
+  | { kind: "ok"; notes: InboxNote[]; listHash: string; note?: InboxNote }
+  | { kind: "conflict"; current: InboxNote | null; listHash: string };
+
+function noteOutcome(res: { status: number; body: unknown }): NoteWriteOutcome {
+  const body = res.body as {
+    notes?: InboxNote[];
+    listHash?: string;
+    note?: InboxNote;
+    current?: InboxNote | null;
+    error?: string;
+  };
+  if (res.status === 200 || res.status === 201) {
+    return {
+      kind: "ok",
+      notes: body.notes ?? [],
+      listHash: body.listHash ?? "",
+      note: body.note,
+    };
+  }
+  if (res.status === 409) {
+    return { kind: "conflict", current: body.current ?? null, listHash: body.listHash ?? "" };
+  }
+  throw new Error(body?.error ?? `HTTP ${res.status}`);
+}
+
+/** The item's notes and list hash. */
+export async function fetchInboxNotes(id: string) {
+  return hubApi.fetchInboxNotes({ params: { id } });
+}
+
+/** Add a note after `afterId` (or last), gated on the list hash. */
+export async function addInboxNote(
+  id: string,
+  note: { type: string; title: string; body: string; afterId?: string },
+  expectedListHash: string,
+): Promise<NoteWriteOutcome> {
+  return noteOutcome(
+    await rawHubApi.addInboxNote({
+      params: { id },
+      body: { ...note, expectedListHash },
+      extraHeaders: inboxAuthHeaders(),
+    }),
+  );
+}
+
+/** Edit one note, gated on that note's hash. */
+export async function updateInboxNote(
+  id: string,
+  noteId: string,
+  patch: { type?: string; title?: string; body?: string },
+  expectedHash: string,
+): Promise<NoteWriteOutcome> {
+  return noteOutcome(
+    await rawHubApi.updateInboxNote({
+      params: { id, nid: encodeURIComponent(noteId) },
+      body: { ...patch, expectedHash },
+      extraHeaders: inboxAuthHeaders(),
+    }),
+  );
+}
+
+/** Delete one note (the last is cleared instead), gated on the list hash. */
+export async function deleteInboxNote(
+  id: string,
+  noteId: string,
+  expectedListHash: string,
+): Promise<NoteWriteOutcome> {
+  return noteOutcome(
+    await rawHubApi.deleteInboxNote({
+      params: { id, nid: encodeURIComponent(noteId) },
+      query: { expectedListHash },
+      body: {},
+      extraHeaders: inboxAuthHeaders(),
+    }),
+  );
+}
+
+/** Put the notes in `order`, gated on the list hash. */
+export async function reorderInboxNotes(
+  id: string,
+  order: string[],
+  expectedListHash: string,
+): Promise<NoteWriteOutcome> {
+  return noteOutcome(
+    await rawHubApi.reorderInboxNotes({
+      params: { id },
+      body: { order, expectedListHash },
+      extraHeaders: inboxAuthHeaders(),
+    }),
+  );
 }
 
 /** Rename, link/unlink a project (`projectPath: null` unlinks), or drop. */
