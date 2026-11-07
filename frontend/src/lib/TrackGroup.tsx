@@ -40,7 +40,11 @@ export default function TrackGroup({
   const phases = track.phases_summary ?? [];
   const doneCount = phases.filter((p) => p.status === "done").length;
   const allDone = phases.length > 0 && doneCount === phases.length;
-  const hasDocs = !!track.spec_path || !!track.design_path || !!track.test_plan_path;
+  const hasDocs =
+    !!track.spec_path ||
+    !!track.design_path ||
+    !!track.test_plan_path ||
+    Object.values(track.architecture_paths ?? {}).some(Boolean);
 
   return (
     <div className="rounded-lg border border-edge">

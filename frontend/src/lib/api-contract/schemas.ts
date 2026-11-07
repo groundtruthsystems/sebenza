@@ -572,6 +572,18 @@ export const TrackSchema = z
     /// `test-plan.md`, from tracks.json `test_plan_path`. The server also fills
     /// this in when the file sits beside spec.md / design.md and the field was omitted.
     test_plan_path: z.string().optional(),
+    /// The split architecture docs (`<domain>-architecture.md`) readable beside
+    /// the track's other docs. Response-only: the server fills in only the
+    /// files that exist.
+    architecture_paths: z
+      .object({
+        business: z.string().optional(),
+        application: z.string().optional(),
+        data: z.string().optional(),
+        security: z.string().optional(),
+        technical: z.string().optional(),
+      })
+      .optional(),
     plan_path: z.string().optional(),
     phases_summary: z.array(PhaseSummarySchema).default([]),
     progress: TrackProgressSchema,

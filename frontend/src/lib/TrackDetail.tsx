@@ -7,7 +7,17 @@ import MarkdownEditor from "./MarkdownEditor";
 import TrackMarkdown from "./TrackMarkdown";
 import { saveDraftBody, type DraftLike } from "./inbox-editor";
 
-type DocsTab = "spec" | "design" | "test-plan";
+/** The split architecture docs, in the order their tabs appear. */
+const ARCHITECTURE_TABS = [
+  { key: "business", label: "Business" },
+  { key: "application", label: "Application" },
+  { key: "data", label: "Data" },
+  { key: "security", label: "Security" },
+  { key: "technical", label: "Technical" },
+] as const;
+
+type ArchitectureTab = (typeof ARCHITECTURE_TABS)[number]["key"];
+type DocsTab = "spec" | "design" | ArchitectureTab | "test-plan";
 
 /** The doc open in the editor: what was loaded (and its hash) and the edits. */
 interface Editing {
@@ -43,8 +53,9 @@ function TabBtn({
   );
 }
 
-/** Track "docs" modal — the group's `spec.md`, `design.md`, and `test-plan.md`
- *  (markdown + mermaid). The plan is visualized by the board itself + the
+/** Track "docs" modal — the group's `spec.md`, `design.md`, the split
+ *  `<domain>-architecture.md` docs it has, and `test-plan.md` (markdown +
+ *  mermaid). An architecture tab appears only when its file exists. The plan is visualized by the board itself + the
  *  per-phase detail.
  *
  *  With `saveFile`, each doc can be edited in the inbox's markdown editor and
@@ -61,15 +72,24 @@ export default function TrackDetail({
   track: Track;
   onclose: () => void;
 }) {
+  const arch = track.architecture_paths ?? {};
   const paths: Record<DocsTab, string | undefined> = {
     spec: track.spec_path,
     design: track.design_path,
+    business: arch.business,
+    application: arch.application,
+    data: arch.data,
+    security: arch.security,
+    technical: arch.technical,
     "test-plan": track.test_plan_path,
   };
   const hasSpec = !!paths.spec;
   const hasDesign = !!paths.design;
   const hasTestPlan = !!paths["test-plan"];
-  const [tab, setTab] = useState<DocsTab>(hasSpec ? "spec" : hasDesign ? "design" : "test-plan");
+  const archTabs = ARCHITECTURE_TABS.filter((t) => !!paths[t.key]);
+  const [tab, setTab] = useState<DocsTab>(
+    hasSpec ? "spec" : hasDesign ? "design" : (archTabs[0]?.key ?? "test-plan"),
+  );
 
   const [editing, setEditing] = useState<Editing | null>(null);
   const [opening, setOpening] = useState(false);
@@ -200,6 +220,11 @@ export default function TrackDetail({
           <TabBtn active={tab === "design"} disabled={!hasDesign} onClick={() => switchTab("design")}>
             Design
           </TabBtn>
+          {archTabs.map((t) => (
+            <TabBtn key={t.key} active={tab === t.key} disabled={false} onClick={() => switchTab(t.key)}>
+              {t.label}
+            </TabBtn>
+          ))}
           <TabBtn
             active={tab === "test-plan"}
             disabled={!hasTestPlan}
