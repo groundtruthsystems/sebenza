@@ -1,8 +1,11 @@
+import { z } from "zod";
 import {
   AgentsUiConversationEventSchema,
   InboxJobEventSchema,
   apiPaths,
   createApi,
+  createApiClient,
+  TaskGraphSchema,
 } from "./api-contract";
 import type { InboxAgentJob, SaveTrackFileResponse } from "./api-contract";
 import type {
@@ -45,6 +48,9 @@ export const api = createApi(apiBase);
 
 /** Hub client — project list/add/remove + the migration sensor are global (no prefix). */
 const hubApi = createApi("");
+/** The same hub client without unwrapping, for routes whose 409 carries data
+ *  the caller needs (note conflicts). */
+const rawHubApi = createApiClient("");
 
 function mapAgentStatus(status: string): string {
   switch (status) {
@@ -571,6 +577,129 @@ export async function saveInboxDraftBody(
   });
 }
 
+export type InboxNote = {
+  id: string;
+  type: string;
+  title: string;
+  body: string;
+  hash: string;
+};
+
+/** A note write: the new list (and note), or a conflict carrying what the
+ *  note or list now is. Other failures throw. */
+export type NoteWriteOutcome =
+  | { kind: "ok"; notes: InboxNote[]; listHash: string; note?: InboxNote }
+  | { kind: "conflict"; current: InboxNote | null; listHash: string };
+
+function noteOutcome(res: { status: number; body: unknown }): NoteWriteOutcome {
+  const body = res.body as {
+    notes?: InboxNote[];
+    listHash?: string;
+    note?: InboxNote;
+    current?: InboxNote | null;
+    error?: string;
+  };
+  if (res.status === 200 || res.status === 201) {
+    return {
+      kind: "ok",
+      notes: body.notes ?? [],
+      listHash: body.listHash ?? "",
+      note: body.note,
+    };
+  }
+  if (res.status === 409) {
+    return { kind: "conflict", current: body.current ?? null, listHash: body.listHash ?? "" };
+  }
+  throw new Error(body?.error ?? `HTTP ${res.status}`);
+}
+
+export type TaskGraph = z.infer<typeof TaskGraphSchema>;
+
+/** The item's worktree/track/task graph. With `etag`, an unchanged graph is
+ *  `{ kind: "unchanged" }` (304) and nothing is re-rendered. */
+export async function fetchInboxGraph(
+  id: string,
+  etag?: string,
+  signal?: AbortSignal,
+): Promise<{ kind: "graph"; graph: TaskGraph } | { kind: "unchanged" }> {
+  const res = await rawHubApi.fetchInboxGraph({
+    params: { id },
+    extraHeaders: etag ? { "if-none-match": `"${etag}"` } : {},
+    fetchOptions: signal ? { signal } : undefined,
+  });
+  if (res.status === 304) return { kind: "unchanged" };
+  if (res.status === 200) return { kind: "graph", graph: res.body as TaskGraph };
+  const body = res.body as { error?: string } | undefined;
+  throw new Error(body?.error ?? `HTTP ${res.status}`);
+}
+
+/** The item's notes and list hash. */
+export async function fetchInboxNotes(id: string) {
+  return hubApi.fetchInboxNotes({ params: { id } });
+}
+
+/** Add a note after `afterId` (or last), gated on the list hash. */
+export async function addInboxNote(
+  id: string,
+  note: { type: string; title: string; body: string; afterId?: string },
+  expectedListHash: string,
+): Promise<NoteWriteOutcome> {
+  return noteOutcome(
+    await rawHubApi.addInboxNote({
+      params: { id },
+      body: { ...note, expectedListHash },
+      extraHeaders: inboxAuthHeaders(),
+    }),
+  );
+}
+
+/** Edit one note, gated on that note's hash. */
+export async function updateInboxNote(
+  id: string,
+  noteId: string,
+  patch: { type?: string; title?: string; body?: string },
+  expectedHash: string,
+): Promise<NoteWriteOutcome> {
+  return noteOutcome(
+    await rawHubApi.updateInboxNote({
+      params: { id, nid: encodeURIComponent(noteId) },
+      body: { ...patch, expectedHash },
+      extraHeaders: inboxAuthHeaders(),
+    }),
+  );
+}
+
+/** Delete one note (the last is cleared instead), gated on the list hash. */
+export async function deleteInboxNote(
+  id: string,
+  noteId: string,
+  expectedListHash: string,
+): Promise<NoteWriteOutcome> {
+  return noteOutcome(
+    await rawHubApi.deleteInboxNote({
+      params: { id, nid: encodeURIComponent(noteId) },
+      query: { expectedListHash },
+      body: {},
+      extraHeaders: inboxAuthHeaders(),
+    }),
+  );
+}
+
+/** Put the notes in `order`, gated on the list hash. */
+export async function reorderInboxNotes(
+  id: string,
+  order: string[],
+  expectedListHash: string,
+): Promise<NoteWriteOutcome> {
+  return noteOutcome(
+    await rawHubApi.reorderInboxNotes({
+      params: { id },
+      body: { order, expectedListHash },
+      extraHeaders: inboxAuthHeaders(),
+    }),
+  );
+}
+
 /** Rename, link/unlink a project (`projectPath: null` unlinks), or drop. */
 export async function patchInboxDraft(
   id: string,
@@ -659,12 +788,29 @@ export async function postInboxComment(
   id: string,
   body: string,
   worktree?: { project: string; branch: string },
+  deliver?: boolean,
 ) {
   return hubApi.postInboxComment({
     params: { id },
-    body: worktree ? { body, worktree } : { body },
+    body: worktree
+      ? { body, worktree, ...(deliver === undefined ? {} : { deliver }) }
+      : { body },
     extraHeaders: inboxAuthHeaders(),
   });
+}
+
+/** Retry pasting an operator comment whose delivery to the agent failed. */
+export async function redeliverInboxComment(id: string, eventId: string) {
+  return hubApi.redeliverInboxComment({
+    params: { id, eventId },
+    body: {},
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Inbox-wide counts: requests waiting on the operator, for the nav badge. */
+export async function fetchInboxSummary() {
+  return hubApi.fetchInboxSummary();
 }
 
 /** Every request worktree agents raised against the item, with its state. */
@@ -729,10 +875,17 @@ export async function fetchInboxAgentJob(id: string, jobId: string) {
  *  is never written to the draft. Apply it with `saveInboxDraftBody` and the
  *  hash the editor holds: a 409 means the body changed and needs a merge.
  *  A 503 means the system agent is disabled. */
-export async function requestInboxDraftHelp(id: string, instruction?: string) {
+export async function requestInboxDraftHelp(
+  id: string,
+  instruction?: string,
+  noteId?: string,
+) {
   return hubApi.requestInboxDraftHelp({
     params: { id },
-    body: instruction ? { instruction } : {},
+    body: {
+      ...(instruction ? { instruction } : {}),
+      ...(noteId ? { noteId } : {}),
+    },
     extraHeaders: inboxAuthHeaders(),
   });
 }

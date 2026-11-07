@@ -290,7 +290,26 @@ dialog textarea:focus {
 
 .nav-rail-spacer { flex: 1; }
 
+/* Open inbox requests waiting on the operator. */
+.nav-rail-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger, #e5484d);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
 .nav-rail-btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;

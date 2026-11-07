@@ -27,4 +27,5 @@ pub mod session_restore_service;
 pub mod session_service;
 pub mod snapshot;
 pub mod tab_logic;
+pub mod task_graph;
 pub mod worktree_service;

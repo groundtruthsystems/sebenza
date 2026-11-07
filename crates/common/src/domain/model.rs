@@ -467,16 +467,17 @@ pub struct ProjectInfo {
 pub struct NotificationView {
     pub id: i64,
     pub branch: String,
-    pub r#type: String, // "agent_stopped" | "pr_opened" | "runtime_error" | "worktree_auto_removed"
+    pub r#type: String, // "agent_stopped" | "pr_opened" | "runtime_error" | "worktree_auto_removed" | "inbox_request"
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     pub timestamp: i64,
 }
 
-/// Version 2 adds `priority` and `priority_source`. Readers accept any version;
+/// Version 2 adds `priority` and `priority_source`; version 3 splits the body
+/// into typed notes ([`crate::domain::note_codec`]). Readers accept any version;
 /// the store refuses to write a draft whose version is newer than this.
-pub const INBOX_DRAFT_SCHEMA_VERSION: i32 = 2;
+pub const INBOX_DRAFT_SCHEMA_VERSION: i32 = 3;
 
 /// Inbox item priority, `P0` most urgent. Orders `P0 < P1 < P2 < P3`.
 #[derive(

@@ -6,16 +6,19 @@
 //! promoted draft destroys the only record of the prompts it produced.
 
 use crate::adapters::inbox_store::{
-    EventAuthor, FrontmatterAuthor, FrontmatterPatch, InboxStore, InboxStoreError, PriorityWrite,
+    EventAuthor, FrontmatterAuthor, FrontmatterPatch, InboxStore, InboxStoreError, NotePatch,
+    PriorityWrite,
 };
 use crate::adapters::projects_registry::ProjectsRegistry;
 use crate::domain::inbox_events::{
     AgentSession, AuthorKind, InboxEvent, InboxEventKind, REDACTED_BODY, RequestStatus,
-    RequestView, Thread, WorktreeKey, apply_redactions, content_hash as hash_of, fold_requests,
+    RequestView, TaskLink, Thread, WorktreeKey, apply_redactions, content_hash as hash_of,
+    fold_requests,
 };
 use crate::domain::model::{
     DraftStatus, InboxDraft, InboxDraftView, Priority, PrioritySource, ProjectRef, inbox_order,
 };
+use crate::domain::note_codec::InboxNote;
 use crate::services::inbox_convert::{
     ConversionItem, ConversionOutcome, ConversionRunner, ConversionTarget, TargetError,
     run_conversion_item, status_after, validate_targets,
@@ -93,9 +96,30 @@ pub struct DraftSummary {
     pub priority_source: PrioritySource,
     /// A request on the item needs the operator: triage or delivery failed.
     pub flagged: bool,
+    /// Requests a worktree agent is waiting on the operator for
+    /// ([`awaits_operator`]).
+    pub open_request_count: usize,
     /// True when the file did not parse; it still lists, so one bad draft
     /// cannot hide the rest.
     pub is_raw: bool,
+}
+
+/// Inbox-wide counts ([`InboxService::summary`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InboxSummary {
+    /// Requests waiting on the operator, across items that are not dropped.
+    pub open_requests: usize,
+}
+
+/// True while a request needs the operator: still open, carrying a proposal
+/// to confirm, or failed to deliver. `Confirmed` is in flight and `Resolved`
+/// is done.
+pub fn awaits_operator(status: RequestStatus) -> bool {
+    matches!(
+        status,
+        RequestStatus::Open | RequestStatus::Proposed | RequestStatus::DeliveryFailed
+    )
 }
 
 /// Listing filters. The default hides `Dropped`.
@@ -138,6 +162,19 @@ pub struct CommentView {
     pub warnings: Vec<String>,
     /// True when an operator tombstoned this row; `body` is then masked.
     pub redacted: bool,
+    /// For an operator comment on a worktree thread sent to the agent: the
+    /// latest delivery outcome. `None` when it was never sent.
+    pub delivery: Option<CommentDelivery>,
+    /// The latest failed delivery's reason.
+    pub delivery_error: Option<String>,
+}
+
+/// Where an operator comment's paste into the agent pane stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentDelivery {
+    Delivered,
+    Failed,
 }
 
 /// One worktree's thread.
@@ -184,6 +221,11 @@ pub struct AuditRecord {
     pub attempt: Option<u32>,
     /// Whether a confirmed resolution differs from the proposal shown.
     pub edited: Option<bool>,
+    /// The note a note operation touched.
+    pub note_id: Option<String>,
+    /// That note's hash before and after the operation (never its text).
+    pub hash_before: Option<String>,
+    pub hash_after: Option<String>,
 }
 
 impl AuditRecord {
@@ -204,6 +246,9 @@ impl AuditRecord {
             refusal: None,
             attempt: None,
             edited: None,
+            note_id: None,
+            hash_before: None,
+            hash_after: None,
         }
     }
 
@@ -281,6 +326,8 @@ pub enum IngressKind {
 pub struct WorktreeIngress {
     pub draft_id: String,
     pub worktree_path: String,
+    /// For a request: the plan task it blocks, if the agent named one.
+    pub task: Option<TaskLink>,
     pub branch: String,
     pub kind: IngressKind,
 }
@@ -309,6 +356,17 @@ pub fn parse_worktree_ingress(raw: &serde_json::Value) -> Option<Result<Worktree
         let worktree_path = required("worktreePath")?;
         let branch = required("branch")?;
         let body = required("body")?;
+        let task = match (field("trackId"), field("taskId")) {
+            (None, None) => None,
+            (Some(track_id), Some(task_id)) if is_plan_id(&track_id) && is_plan_id(&task_id) => {
+                Some(TaskLink { track_id, task_id })
+            }
+            _ => {
+                return Err(
+                    "trackId and taskId go together and must match [A-Za-z0-9_.-]{1,64}".into(),
+                );
+            }
+        };
         // The error never echoes `kind`: it is caller-chosen text.
         let kind = match kind {
             INGRESS_REQUEST_TYPE => IngressKind::Request {
@@ -321,11 +379,14 @@ pub fn parse_worktree_ingress(raw: &serde_json::Value) -> Option<Result<Worktree
         Ok(WorktreeIngress {
             draft_id,
             worktree_path,
+            task,
             branch,
             kind,
         })
     })())
 }
+
+pub use crate::domain::task_graph::is_plan_id;
 
 /// Reads and writes drafts under the rules above.
 pub struct InboxService {
@@ -421,6 +482,7 @@ impl InboxService {
                             continue;
                         }
                     }
+                    let requests = self.list_requests(&draft.id).unwrap_or_default();
                     DraftSummary {
                         id: draft.id.clone(),
                         title: draft.frontmatter.title.clone(),
@@ -432,9 +494,11 @@ impl InboxService {
                         priority_source: draft.frontmatter.priority_source,
                         // An unreadable sidecar must not hide the item; it
                         // lists unflagged and the error shows when opened.
-                        flagged: self
-                            .list_requests(&draft.id)
-                            .is_ok_and(|rs| rs.iter().any(|r| r.flagged)),
+                        flagged: requests.iter().any(|r| r.flagged),
+                        open_request_count: requests
+                            .iter()
+                            .filter(|r| awaits_operator(r.status))
+                            .count(),
                         is_raw: false,
                     }
                 }
@@ -457,13 +521,29 @@ impl InboxService {
                         priority: Priority::default(),
                         priority_source: PrioritySource::default(),
                         flagged: false,
+                        open_request_count: 0,
                         is_raw: true,
                     }
                 }
             };
             out.push(summary);
         }
+        // Stable, so `inbox_order` still decides within each band: an item a
+        // worktree is waiting on rises above quieter items of its priority,
+        // and unparseable drafts stay last.
+        out.sort_by_key(|s| (s.is_raw, s.priority, s.open_request_count == 0));
         Ok(out)
+    }
+
+    /// Inbox-wide counts for the navigation badge: requests waiting on the
+    /// operator across every item that is not dropped.
+    pub fn summary(&self) -> Result<InboxSummary, InboxServiceError> {
+        let open_requests = self
+            .list(&ListQuery::default())?
+            .iter()
+            .map(|s| s.open_request_count)
+            .sum();
+        Ok(InboxSummary { open_requests })
     }
 
     /// One draft, with its project link resolved.
@@ -600,10 +680,12 @@ impl InboxService {
         // Prior waves are kept: the draft is the ledger of everything it has
         // ever produced, not just the most recent run.
         let mut recorded = draft.frontmatter.conversions.clone();
+        let notes =
+            crate::domain::note_codec::parse_notes(&draft.body, draft.frontmatter.schema_version);
         let item = ConversionItem {
             draft_id: id,
             title: &draft.frontmatter.title,
-            body: &draft.body,
+            notes: &notes,
         };
         let outcomes = run_conversion_item(runner, &item, targets, |outcome| {
             if let Ok(value) = serde_yaml::to_value(outcome) {
@@ -762,15 +844,20 @@ impl InboxService {
         let events = self.events(id)?;
         let redacted = redacted_ids(&events);
         let requests = fold_requests(&events);
+        let deliveries = comment_deliveries(&events);
 
         let mut groups = CommentGroups::default();
         for key in worktree_keys(&draft) {
             group_for(&mut groups, &key);
         }
         for event in &events {
-            let Some(row) = comment_row(event, &redacted) else {
+            let Some(mut row) = comment_row(event, &redacted) else {
                 continue;
             };
+            if let Some((_, state, error)) = deliveries.get(&event.event_id) {
+                row.delivery = Some(*state);
+                row.delivery_error = error.clone();
+            }
             let thread = match (&event.kind, &row.request_id) {
                 (InboxEventKind::Comment { thread, .. }, _) => thread.clone(),
                 (_, Some(rid)) => requests
@@ -792,6 +879,233 @@ impl InboxService {
     /// (priority changes, tombstones, delivery bookkeeping).
     pub fn comment_view(&self, event: &InboxEvent) -> Option<CommentView> {
         comment_row(event, &std::collections::HashSet::new())
+    }
+
+    /// The item's notes and the list hash gating structural changes.
+    pub fn notes(&self, id: &str) -> Result<(Vec<InboxNote>, String), InboxServiceError> {
+        Ok(self.store.notes(id)?)
+    }
+
+    /// Add a note (see [`InboxStore::add_note`]), audited without its text.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_note(
+        &self,
+        id: &str,
+        caller: &Option<String>,
+        expected_list_hash: &str,
+        note_type: &str,
+        title: &str,
+        body: &str,
+        after_id: Option<&str>,
+    ) -> Result<(InboxNote, Vec<InboxNote>), InboxServiceError> {
+        self.cap("body", body.len(), self.limits.max_body_bytes)?;
+        let (note, notes) =
+            self.store
+                .add_note(id, expected_list_hash, note_type, title, body, after_id)?;
+        self.audit_note(
+            "inbox.note.added",
+            id,
+            caller,
+            &note.id,
+            None,
+            Some(note.hash()),
+        );
+        Ok((note, notes))
+    }
+
+    /// Edit one note (see [`InboxStore::update_note`]), audited without text.
+    pub fn update_note(
+        &self,
+        id: &str,
+        caller: &Option<String>,
+        note_id: &str,
+        expected_hash: &str,
+        patch: NotePatch,
+    ) -> Result<(InboxNote, Vec<InboxNote>), InboxServiceError> {
+        if let Some(body) = &patch.body {
+            self.cap("body", body.len(), self.limits.max_body_bytes)?;
+        }
+        let (note, notes) = self.store.update_note(id, note_id, expected_hash, patch)?;
+        self.audit_note(
+            "inbox.note.updated",
+            id,
+            caller,
+            note_id,
+            Some(expected_hash.to_string()),
+            Some(note.hash()),
+        );
+        Ok((note, notes))
+    }
+
+    /// Remove one note (see [`InboxStore::delete_note`]), audited.
+    pub fn delete_note(
+        &self,
+        id: &str,
+        caller: &Option<String>,
+        note_id: &str,
+        expected_list_hash: &str,
+    ) -> Result<Vec<InboxNote>, InboxServiceError> {
+        let before = self
+            .store
+            .notes(id)?
+            .0
+            .into_iter()
+            .find(|n| n.id == note_id)
+            .map(|n| n.hash());
+        let notes = self.store.delete_note(id, note_id, expected_list_hash)?;
+        self.audit_note("inbox.note.deleted", id, caller, note_id, before, None);
+        Ok(notes)
+    }
+
+    /// Reorder the notes (see [`InboxStore::reorder_notes`]), audited.
+    pub fn reorder_notes(
+        &self,
+        id: &str,
+        caller: &Option<String>,
+        order: &[String],
+        expected_list_hash: &str,
+    ) -> Result<Vec<InboxNote>, InboxServiceError> {
+        let notes = self.store.reorder_notes(id, order, expected_list_hash)?;
+        let mut record =
+            AuditRecord::new("inbox.note.reordered", id, AuthorKind::Operator).with_caller(caller);
+        record.hash_before = Some(expected_list_hash.to_string());
+        record.hash_after = Some(crate::domain::note_codec::list_hash(&notes));
+        self.audit.record(&record);
+        Ok(notes)
+    }
+
+    fn audit_note(
+        &self,
+        action: &'static str,
+        id: &str,
+        caller: &Option<String>,
+        note_id: &str,
+        before: Option<String>,
+        after: Option<String>,
+    ) {
+        let mut record = AuditRecord::new(action, id, AuthorKind::Operator).with_caller(caller);
+        record.note_id = Some(note_id.to_string());
+        record.hash_before = before;
+        record.hash_after = after;
+        self.audit.record(&record);
+    }
+
+    /// An operator comment, pasted into the worktree's agent pane when it is
+    /// on a worktree thread and `deliver` is set. The comment is kept whatever
+    /// happens to the paste; the second value is the delivery status event,
+    /// `None` when nothing was sent.
+    pub fn post_operator_comment(
+        &self,
+        id: &str,
+        author: EventAuthor,
+        thread: Thread,
+        body: &str,
+        deliver: bool,
+    ) -> Result<(InboxEvent, Option<InboxEvent>), InboxServiceError> {
+        let caller = author.caller.clone();
+        let event = self.add_comment(id, author, thread.clone(), body)?;
+        let Thread::Worktree(worktree) = thread else {
+            return Ok((event, None));
+        };
+        if !deliver {
+            return Ok((event, None));
+        }
+        let _guard = self.decisions.lock().unwrap_or_else(|e| e.into_inner());
+        let status = self.deliver_comment_attempt(id, &worktree, &event, body, 1, &caller)?;
+        Ok((event, Some(status)))
+    }
+
+    /// Retry pasting an operator comment whose delivery failed. A comment
+    /// already delivered, never sent, or not an operator's worktree comment
+    /// is refused.
+    pub fn redeliver_comment(
+        &self,
+        id: &str,
+        event_id: &str,
+        caller: Option<String>,
+    ) -> Result<InboxEvent, InboxServiceError> {
+        let _guard = self.decisions.lock().unwrap_or_else(|e| e.into_inner());
+        let events = self.events(id)?;
+        let comment = events
+            .iter()
+            .find(|e| e.event_id == event_id)
+            .ok_or_else(|| {
+                InboxServiceError::Invalid(format!("no comment {event_id} on this item"))
+            })?;
+        let (
+            InboxEventKind::Comment {
+                thread: Thread::Worktree(worktree),
+                body,
+                ..
+            },
+            AuthorKind::Operator,
+        ) = (&comment.kind, comment.author)
+        else {
+            return Err(InboxServiceError::Invalid(
+                "only an operator's worktree comment is delivered".to_string(),
+            ));
+        };
+        match comment_deliveries(&events).get(event_id) {
+            Some((attempt, CommentDelivery::Failed, _)) => {
+                let attempt = attempt + 1;
+                self.deliver_comment_attempt(id, worktree, comment, body, attempt, &caller)
+            }
+            Some((_, CommentDelivery::Delivered, _)) => Err(InboxServiceError::Invalid(
+                "this comment was already delivered".to_string(),
+            )),
+            None => Err(InboxServiceError::Invalid(
+                "this comment was kept as a note and never sent".to_string(),
+            )),
+        }
+    }
+
+    /// Paste one comment and append the outcome. Callers hold the decisions
+    /// lock, so two retries cannot both send.
+    fn deliver_comment_attempt(
+        &self,
+        id: &str,
+        worktree: &WorktreeKey,
+        comment: &InboxEvent,
+        body: &str,
+        attempt: u32,
+        caller: &Option<String>,
+    ) -> Result<InboxEvent, InboxServiceError> {
+        let title = self.parsed(id)?.frontmatter.title;
+        let delivery = self
+            .delivery
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let sent = match delivery {
+            Some(d) => d.deliver_comment(worktree, &title, body),
+            None => Err("no pane delivery is configured".to_string()),
+        };
+        let (action, kind) = match sent {
+            Ok(()) => (
+                "inbox.comment.delivered",
+                InboxEventKind::CommentDelivered { attempt },
+            ),
+            Err(error) => (
+                "inbox.comment.delivery_failed",
+                InboxEventKind::CommentDeliveryFailed {
+                    attempt,
+                    error: error.chars().take(MAX_ERROR_CHARS).collect(),
+                },
+            ),
+        };
+        let mut record = AuditRecord::new(action, id, AuthorKind::Operator)
+            .with_caller(caller)
+            .with_worktree(worktree);
+        record.attempt = Some(attempt);
+        let author = EventAuthor {
+            caller: caller.clone(),
+            ..EventAuthor::operator()
+        };
+        let event = self
+            .store
+            .append_event(id, author, Some(comment.event_id.clone()), kind)?;
+        self.audit.record(&record.with_event(&event));
+        Ok(event)
     }
 
     /// Append a comment. A worktree thread must name a worktree this item
@@ -860,6 +1174,19 @@ impl InboxService {
         title: &str,
         body: &str,
     ) -> Result<InboxEvent, InboxServiceError> {
+        self.open_request_on(id, author, worktree, title, body, None)
+    }
+
+    /// [`Self::open_request`], linked to the plan task it blocks.
+    fn open_request_on(
+        &self,
+        id: &str,
+        author: EventAuthor,
+        worktree: WorktreeKey,
+        title: &str,
+        body: &str,
+        task: Option<TaskLink>,
+    ) -> Result<InboxEvent, InboxServiceError> {
         let title = title.trim();
         if title.is_empty() || body.trim().is_empty() {
             return Err(InboxServiceError::Invalid(
@@ -901,6 +1228,7 @@ impl InboxService {
                 title: title.to_string(),
                 body: body.to_string(),
                 warnings: secret_warnings(&format!("{title}\n{body}")),
+                task,
             },
         )?;
         record.request_id = Some(request_id.clone());
@@ -952,17 +1280,20 @@ impl InboxService {
 
     fn ingest_unaudited(&self, ingress: &WorktreeIngress) -> Result<InboxEvent, InboxServiceError> {
         let draft = self.parsed(&ingress.draft_id)?;
-        let claimed = ingress.worktree_path.trim_end_matches('/');
+        let claimed = crate::util::path::comparable_path(&ingress.worktree_path);
         // Both halves must match one created conversion: the path from the
         // worktree's environment and the branch from its control.env. The
         // draft id alone is just a file the worktree could have rewritten.
+        // Paths are compared as the directories they name, not as strings: a
+        // relative `worktreeRoot` hands the agent `<repo>/../worktrees/<b>`
+        // while the conversion recorded git's canonical path.
         let conversion = created_conversions(&draft)
             .into_iter()
             .find(|c| {
                 c.branch == ingress.branch
                     && c.worktree_path
                         .as_deref()
-                        .is_some_and(|p| p.trim_end_matches('/') == claimed)
+                        .is_some_and(|p| crate::util::path::comparable_path(p) == claimed)
             })
             .ok_or_else(|| InboxServiceError::ForeignWorktree(draft.id.clone()))?;
         let key = WorktreeKey {
@@ -978,7 +1309,7 @@ impl InboxService {
                     .filter(|t| !t.is_empty())
                     .map(str::to_string)
                     .unwrap_or_else(|| title_from(body));
-                self.open_request(&draft.id, author, key, &title, body)
+                self.open_request_on(&draft.id, author, key, &title, body, ingress.task.clone())
             }
             IngressKind::Comment { body } => {
                 self.add_comment(&draft.id, author, Thread::Worktree(key), body)
@@ -1621,7 +1952,37 @@ fn comment_row(
         parent_event_id: event.parent_event_id.clone(),
         warnings,
         redacted: redacted.contains(&event.event_id),
+        delivery: None,
+        delivery_error: None,
     })
+}
+
+/// Each comment's latest delivery outcome, keyed by the comment's event id.
+fn comment_deliveries(
+    events: &[InboxEvent],
+) -> std::collections::HashMap<String, (u32, CommentDelivery, Option<String>)> {
+    let mut out = std::collections::HashMap::new();
+    for event in events {
+        let Some(parent) = &event.parent_event_id else {
+            continue;
+        };
+        let (attempt, state, error) = match &event.kind {
+            InboxEventKind::CommentDelivered { attempt } => {
+                (*attempt, CommentDelivery::Delivered, None)
+            }
+            InboxEventKind::CommentDeliveryFailed { attempt, error } => {
+                (*attempt, CommentDelivery::Failed, Some(error.clone()))
+            }
+            _ => continue,
+        };
+        let newer = out
+            .get(parent)
+            .is_none_or(|(seen, _, _): &(u32, CommentDelivery, Option<String>)| attempt > *seen);
+        if newer {
+            out.insert(parent.clone(), (attempt, state, error));
+        }
+    }
+    out
 }
 
 /// A request title from the first non-blank line of its body, cut to 80
@@ -2295,6 +2656,7 @@ mod collaboration_tests {
 
     fn request_from(id: &str, path: &str, branch: &str, body: &str) -> WorktreeIngress {
         WorktreeIngress {
+            task: None,
             draft_id: id.into(),
             worktree_path: path.into(),
             branch: branch.into(),
@@ -2447,6 +2809,7 @@ mod collaboration_tests {
             .expect("worktree");
         f.svc
             .ingest(&WorktreeIngress {
+                task: None,
                 draft_id: id.clone(),
                 worktree_path: "/wt/acme-demo/feat-x".into(),
                 branch: "feat-x".into(),
@@ -2602,12 +2965,293 @@ mod collaboration_tests {
             .expect("ingest");
     }
 
+    // Graph/notes TS-77: a request may name the plan task it blocks; the
+    // link is stored and folded into the request view. A malformed id is a
+    // refusal, not silently dropped.
+    #[test]
+    fn a_request_can_link_the_task_it_blocks() {
+        let f = fixture();
+        let id = converted(&f);
+        let mut ingress = request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b");
+        ingress.task = Some(TaskLink {
+            track_id: "notes_api_20261105".into(),
+            task_id: "phase-1-task-2".into(),
+        });
+        f.svc.ingest(&ingress).expect("ingest");
+        let r = &f.svc.list_requests(&id).unwrap()[0];
+        assert_eq!(
+            r.task,
+            Some(TaskLink {
+                track_id: "notes_api_20261105".into(),
+                task_id: "phase-1-task-2".into(),
+            })
+        );
+
+        let raw = serde_json::json!({
+            "type": "inbox.request", "draftId": id, "worktreePath": "/wt/acme-demo/feat-x",
+            "branch": "feat-x", "body": "b", "trackId": "../etc", "taskId": "t1",
+        });
+        assert!(parse_worktree_ingress(&raw).expect("inbox").is_err());
+    }
+
+    // --- Note operations (graph/notes TS-52) ---------------------------------
+
+    // TS-52: every note operation is audited with ids and hashes, never the
+    // title or body.
+    #[test]
+    fn note_operations_are_audited_without_text() {
+        use crate::adapters::inbox_store::NotePatch;
+        let f = fixture();
+        let id = f.svc.create("Idea").expect("create").id;
+        let caller = Some("ui".to_string());
+        let (_, lh) = f.svc.notes(&id).expect("notes");
+        let (added, notes) = f
+            .svc
+            .add_note(
+                &id,
+                &caller,
+                &lh,
+                "general",
+                "SECRET-TITLE",
+                "SECRET-BODY",
+                None,
+            )
+            .expect("add");
+        let (edited, _) = f
+            .svc
+            .update_note(
+                &id,
+                &caller,
+                &added.id,
+                &added.hash(),
+                NotePatch {
+                    body: Some("SECRET-EDIT".into()),
+                    ..Default::default()
+                },
+            )
+            .expect("edit");
+        let (notes2, lh2) = f.svc.notes(&id).expect("notes");
+        let order: Vec<String> = notes2.iter().rev().map(|n| n.id.clone()).collect();
+        let notes3 = f
+            .svc
+            .reorder_notes(&id, &caller, &order, &lh2)
+            .expect("reorder");
+        f.svc
+            .delete_note(
+                &id,
+                &caller,
+                &edited.id,
+                &crate::domain::note_codec::list_hash(&notes3),
+            )
+            .expect("delete");
+        let _ = notes;
+
+        let records: Vec<AuditRecord> = f
+            .audit
+            .all()
+            .into_iter()
+            .filter(|r| r.action.starts_with("inbox.note."))
+            .collect();
+        let actions: Vec<&str> = records.iter().map(|r| r.action).collect();
+        assert_eq!(
+            actions,
+            [
+                "inbox.note.added",
+                "inbox.note.updated",
+                "inbox.note.reordered",
+                "inbox.note.deleted"
+            ]
+        );
+        assert_eq!(records[1].note_id.as_deref(), Some(added.id.as_str()));
+        assert_eq!(
+            records[1].hash_before.as_deref(),
+            Some(added.hash().as_str())
+        );
+        assert_eq!(
+            records[1].hash_after.as_deref(),
+            Some(edited.hash().as_str())
+        );
+        assert!(records.iter().all(|r| r.caller.as_deref() == Some("ui")));
+        let dump = format!("{records:?}");
+        assert!(!dump.contains("SECRET"), "{dump}");
+    }
+
+    // --- Operator alerting (nervous-system bug TS-06, TS-07) -----------------
+
+    // TS-06: an item a worktree is waiting on shows how many requests are
+    // waiting and rises above quieter items of the same priority.
+    #[test]
+    fn items_with_open_requests_count_them_and_sort_first_within_priority() {
+        let f = fixture();
+        let asking = converted(&f);
+        let quiet = f.svc.create("Newer, nothing asked").expect("create").id;
+        let urgent = f.svc.create("Operator P0").expect("create").id;
+        f.svc
+            .set_priority(&urgent, Some(Priority::P0), None)
+            .expect("P0");
+        f.svc
+            .ingest(&request_from(
+                &asking,
+                "/wt/acme-demo/feat-x",
+                "feat-x",
+                "b",
+            ))
+            .expect("ingest");
+
+        let listed: Vec<(String, usize)> = f
+            .svc
+            .list(&ListQuery::default())
+            .expect("list")
+            .into_iter()
+            .map(|s| (s.id, s.open_request_count))
+            .collect();
+        assert_eq!(listed, vec![(urgent, 0), (asking, 1), (quiet, 0)]);
+    }
+
+    // TS-06: only requests still waiting on the operator count.
+    #[test]
+    fn only_requests_waiting_on_the_operator_count_as_open() {
+        use crate::domain::inbox_events::RequestStatus as S;
+        assert!(awaits_operator(S::Open));
+        assert!(awaits_operator(S::Proposed));
+        assert!(awaits_operator(S::DeliveryFailed));
+        assert!(!awaits_operator(S::Confirmed));
+        assert!(!awaits_operator(S::Resolved));
+    }
+
+    // TS-07: the summary totals open requests across items, ignoring dropped
+    // ones.
+    #[test]
+    fn the_summary_totals_open_requests_on_live_items() {
+        let f = fixture();
+        assert_eq!(f.svc.summary().expect("summary").open_requests, 0);
+        let id = converted(&f);
+        for _ in 0..2 {
+            f.svc
+                .ingest(&request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b"))
+                .expect("ingest");
+        }
+        assert_eq!(f.svc.summary().expect("summary").open_requests, 2);
+    }
+
+    // --- Canonical path matching (nervous-system bug TS-01..TS-03) -----------
+
+    /// A fresh real directory, so canonicalisation has something to resolve.
+    fn real_dir(tag: &str) -> std::path::PathBuf {
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("sebenza-ingest-{tag}-{}-{}", std::process::id(), n));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        dir.canonicalize().expect("canonical temp dir")
+    }
+
+    // TS-01: a relative worktreeRoot gives the agent `<repo>/../worktrees/<b>`
+    // while the conversion recorded git's canonical path. Same directory, so
+    // the request must land.
+    #[test]
+    fn a_non_canonical_claimed_path_to_the_same_worktree_is_accepted() {
+        let f = fixture();
+        let root = real_dir("ts01");
+        let repo = root.join("repo");
+        let worktree = root.join("worktrees").join("feat-x");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        let id = f.svc.create("Idea").expect("create").id;
+        convert_into(
+            &f,
+            &id,
+            "/code/acme-demo",
+            "feat-x",
+            worktree.to_str().unwrap(),
+        );
+
+        let claimed = format!("{}/../worktrees/feat-x", repo.display());
+        f.svc
+            .ingest(&request_from(&id, &claimed, "feat-x", "Which db?"))
+            .expect("non-canonical path to the converted worktree");
+        assert_eq!(f.svc.list_requests(&id).unwrap().len(), 1);
+    }
+
+    // TS-01 (lexical fallback): a path that no longer exists on disk still
+    // matches once `.`/`..` segments are resolved.
+    #[test]
+    fn a_missing_path_matches_after_lexical_normalisation() {
+        let f = fixture();
+        let id = converted(&f);
+        f.svc
+            .ingest(&request_from(
+                &id,
+                "/wt/elsewhere/../acme-demo/./feat-x",
+                "feat-x",
+                "b",
+            ))
+            .expect("lexically equal path");
+    }
+
+    // TS-02: canonicalising must not widen trust: a different directory is
+    // still foreign, however it is spelled.
+    #[test]
+    fn a_non_canonical_path_to_a_foreign_directory_is_refused() {
+        let f = fixture();
+        let root = real_dir("ts02");
+        let mine = root.join("worktrees").join("feat-x");
+        let other = root.join("worktrees").join("feat-y");
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let id = f.svc.create("Idea").expect("create").id;
+        convert_into(&f, &id, "/code/acme-demo", "feat-x", mine.to_str().unwrap());
+
+        for claimed in [
+            format!("{}/../feat-y", mine.display()),
+            "/wt/acme-demo/feat-x/..".to_string(),
+        ] {
+            let err = f
+                .svc
+                .ingest(&request_from(&id, &claimed, "feat-x", "b"))
+                .expect_err("foreign directory");
+            assert!(
+                matches!(err, InboxServiceError::ForeignWorktree(_)),
+                "{claimed}: {err:?}"
+            );
+        }
+        assert!(f.svc.events(&id).expect("events").is_empty());
+    }
+
+    // TS-03: a symlink that resolves to another item's worktree is that other
+    // worktree, and the branch check still applies to the right path.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_another_items_worktree_is_refused() {
+        let f = fixture();
+        let root = real_dir("ts03");
+        let mine = root.join("feat-x");
+        let theirs = root.join("feat-y");
+        std::fs::create_dir_all(&mine).unwrap();
+        std::fs::create_dir_all(&theirs).unwrap();
+        let link = root.join("looks-like-mine");
+        std::os::unix::fs::symlink(&theirs, &link).unwrap();
+        let id = f.svc.create("Idea").expect("create").id;
+        convert_into(&f, &id, "/code/acme-demo", "feat-x", mine.to_str().unwrap());
+
+        for (claimed, branch) in [
+            (link.to_str().unwrap().to_string(), "feat-x"),
+            (mine.to_str().unwrap().to_string(), "feat-y"),
+        ] {
+            assert!(matches!(
+                f.svc.ingest(&request_from(&id, &claimed, branch, "b")),
+                Err(InboxServiceError::ForeignWorktree(_))
+            ));
+        }
+    }
+
     #[test]
     fn a_request_without_a_title_takes_its_first_line() {
         let f = fixture();
         let id = converted(&f);
         f.svc
             .ingest(&WorktreeIngress {
+                task: None,
                 draft_id: id.clone(),
                 worktree_path: "/wt/acme-demo/feat-x".into(),
                 branch: "feat-x".into(),
@@ -2736,6 +3380,7 @@ mod collaboration_tests {
             Err(InboxServiceError::TooLarge { .. })
         ));
         let long_title = WorktreeIngress {
+            task: None,
             kind: IngressKind::Request {
                 title: Some("t".repeat(f.svc.limits.max_title_chars + 1)),
                 body: "b".into(),
@@ -2773,6 +3418,7 @@ mod collaboration_tests {
         let f = fixture_with(tight(100, 2, 100));
         let id = converted(&f);
         let c = WorktreeIngress {
+            task: None,
             kind: IngressKind::Comment { body: "c".into() },
             ..request_from(&id, "/wt/acme-demo/feat-x", "feat-x", "b")
         };
@@ -2813,6 +3459,7 @@ mod collaboration_tests {
             .expect("request");
         f.svc
             .ingest(&WorktreeIngress {
+                task: None,
                 kind: IngressKind::Comment {
                     body: secret.into(),
                 },
@@ -3056,6 +3703,138 @@ mod resolution_tests {
         }
     }
 
+    // --- Operator comment delivery (nervous-system bug TS-10, TS-11, TS-13) --
+
+    fn converted_item(f: &Fixture) -> String {
+        let id = f.svc.create("Task graph").expect("create").id;
+        convert_into(f, &id, "/code/acme-demo", "feat-x");
+        id
+    }
+
+    fn row_for<'a>(groups: &'a CommentGroups, event_id: &str) -> &'a CommentView {
+        groups
+            .worktrees
+            .iter()
+            .flat_map(|g| g.comments.iter())
+            .chain(groups.overall.iter())
+            .find(|c| c.event_id == event_id)
+            .expect("comment row")
+    }
+
+    // TS-10: an operator comment on a worktree thread reaches that worktree's
+    // agent pane, labelled as the operator's, and the row says so.
+    #[test]
+    fn a_worktree_comment_is_delivered_to_the_agent_pane() {
+        let f = fixture();
+        let id = converted_item(&f);
+        let (event, _) = f
+            .svc
+            .post_operator_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Worktree(wt()),
+                "Use Postgres.",
+                true,
+            )
+            .expect("comment");
+
+        let sent = f.pane.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].0, wt());
+        assert!(sent[0].1.contains("Operator comment on"), "{}", sent[0].1);
+        assert!(sent[0].1.contains("Task graph"), "{}", sent[0].1);
+        assert!(sent[0].1.contains("Use Postgres."), "{}", sent[0].1);
+
+        let groups = f.svc.list_comments(&id).expect("groups");
+        let row = row_for(&groups, &event.event_id);
+        assert_eq!(row.delivery, Some(CommentDelivery::Delivered));
+        assert_eq!(
+            groups.worktrees[0].comments.len(),
+            1,
+            "status events are not rows"
+        );
+    }
+
+    // TS-11: an operator can keep a worktree comment as a note, and overall
+    // comments never reach a pane.
+    #[test]
+    fn opted_out_and_overall_comments_are_not_delivered() {
+        let f = fixture();
+        let id = converted_item(&f);
+        let (kept, _) = f
+            .svc
+            .post_operator_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Worktree(wt()),
+                "Note to self",
+                false,
+            )
+            .expect("note");
+        let (overall, _) = f
+            .svc
+            .post_operator_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Overall,
+                "For everyone",
+                true,
+            )
+            .expect("overall");
+
+        assert!(f.pane.sent().is_empty());
+        let groups = f.svc.list_comments(&id).expect("groups");
+        assert_eq!(row_for(&groups, &kept.event_id).delivery, None);
+        assert_eq!(row_for(&groups, &overall.event_id).delivery, None);
+    }
+
+    // TS-13: a paste that fails is recorded on the comment, and a retry that
+    // succeeds appends a delivered status rather than editing the old one.
+    #[test]
+    fn a_failed_comment_delivery_is_recorded_and_can_be_retried() {
+        let f = fixture();
+        let id = converted_item(&f);
+        f.pane.fail_with(Some("no live agent pane"));
+        let (event, status) = f
+            .svc
+            .post_operator_comment(
+                &id,
+                EventAuthor::operator(),
+                Thread::Worktree(wt()),
+                "Ping",
+                true,
+            )
+            .expect("comment is kept even when delivery fails");
+        assert!(matches!(
+            status.map(|e| e.kind),
+            Some(InboxEventKind::CommentDeliveryFailed { attempt: 1, .. })
+        ));
+        let groups = f.svc.list_comments(&id).expect("groups");
+        let row = row_for(&groups, &event.event_id);
+        assert_eq!(row.delivery, Some(CommentDelivery::Failed));
+        assert_eq!(row.delivery_error.as_deref(), Some("no live agent pane"));
+
+        f.pane.fail_with(None);
+        let retried = f
+            .svc
+            .redeliver_comment(&id, &event.event_id, None)
+            .expect("retry");
+        assert!(matches!(
+            retried.kind,
+            InboxEventKind::CommentDelivered { attempt: 2 }
+        ));
+        let groups = f.svc.list_comments(&id).expect("groups");
+        assert_eq!(
+            row_for(&groups, &event.event_id).delivery,
+            Some(CommentDelivery::Delivered)
+        );
+        assert_eq!(f.pane.sent().len(), 1);
+        assert!(
+            f.svc.redeliver_comment(&id, &event.event_id, None).is_err(),
+            "a delivered comment is not re-sent"
+        );
+    }
+
     /// A converted item with one open request from `feat-x`.
     fn with_request(f: &Fixture, body: &str) -> (String, String) {
         let id = f.svc.create("Idea").expect("create").id;
@@ -3099,6 +3878,8 @@ mod resolution_tests {
                 InboxEventKind::ResolutionConfirmed { .. } => "resolution_confirmed",
                 InboxEventKind::Delivered { .. } => "delivered",
                 InboxEventKind::DeliveryFailed { .. } => "delivery_failed",
+                InboxEventKind::CommentDelivered { .. } => "comment_delivered",
+                InboxEventKind::CommentDeliveryFailed { .. } => "comment_delivery_failed",
                 InboxEventKind::PriorityChanged { .. } => "priority_changed",
                 InboxEventKind::Redacted { .. } => "redacted",
                 InboxEventKind::Unknown => "unknown",

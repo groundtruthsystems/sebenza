@@ -6,7 +6,7 @@
 //! substituting for the other.
 
 use crate::adapters::inbox_store::EventAuthor;
-use crate::domain::inbox_events::{Thread, WorktreeKey, request_id_of};
+use crate::domain::inbox_events::{InboxEvent, InboxEventKind, Thread, WorktreeKey, request_id_of};
 use crate::domain::model::{
     DraftStatus, FileRevision, InboxDraft, InboxDraftView, Priority, PrioritySource,
 };
@@ -30,6 +30,8 @@ use axum::http::HeaderMap;
 use axum::http::StatusCode;
 use axum::response::Json;
 use axum::response::{IntoResponse, Response};
+use common::adapters::inbox_store::{InboxStoreError, NotePatch};
+use common::domain::note_codec::{InboxNote, list_hash, parse_notes};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -75,6 +77,8 @@ pub struct DraftSummaryWire {
     pub priority_source: PrioritySource,
     /// A request needs the operator (triage or delivery failed).
     pub flagged: bool,
+    /// Requests a worktree agent is waiting on the operator for.
+    pub open_request_count: usize,
     pub is_raw: bool,
 }
 
@@ -90,6 +94,7 @@ impl From<DraftSummary> for DraftSummaryWire {
             priority: s.priority,
             priority_source: s.priority_source,
             flagged: s.flagged,
+            open_request_count: s.open_request_count,
             is_raw: s.is_raw,
         }
     }
@@ -115,8 +120,42 @@ pub struct DraftWire {
     /// Every wave this draft has produced, so a second conversion can start
     /// from the last one rather than a blank form.
     pub conversions: Vec<serde_yaml::Value>,
+    /// The item's notes in operator order, each with its edit token.
+    pub notes: Vec<NoteWire>,
+    /// The token for adding, deleting or reordering notes.
+    pub list_hash: String,
     /// Present instead of the fields above when the file did not parse.
     pub raw: Option<RawWire>,
+}
+
+/// One note as the API shows it: the codec's fields plus its edit token.
+#[derive(Debug, Serialize)]
+pub struct NoteWire {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub note_type: String,
+    pub title: String,
+    pub body: String,
+    pub hash: String,
+}
+
+impl From<&InboxNote> for NoteWire {
+    fn from(n: &InboxNote) -> Self {
+        Self {
+            id: n.id.clone(),
+            note_type: n.note_type.clone(),
+            title: n.title.clone(),
+            body: n.body.clone(),
+            hash: n.hash(),
+        }
+    }
+}
+
+fn notes_json(notes: &[InboxNote]) -> serde_json::Value {
+    serde_json::json!({
+        "notes": notes.iter().map(NoteWire::from).collect::<Vec<_>>(),
+        "listHash": list_hash(notes),
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -128,20 +167,25 @@ pub struct RawWire {
 
 fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
     match view {
-        InboxDraftView::Parsed(d) => DraftWire {
-            body_hash: FileRevision::of_body(&d.body).body_hash,
-            id: d.id,
-            title: d.frontmatter.title,
-            status: d.frontmatter.status,
-            created_at: d.frontmatter.created_at,
-            updated_at: d.frontmatter.updated_at,
-            body: d.body,
-            project: link.map(Into::into),
-            priority: d.frontmatter.priority,
-            priority_source: d.frontmatter.priority_source,
-            conversions: d.frontmatter.conversions,
-            raw: None,
-        },
+        InboxDraftView::Parsed(d) => {
+            let notes = parse_notes(&d.body, d.frontmatter.schema_version);
+            DraftWire {
+                list_hash: list_hash(&notes),
+                notes: notes.iter().map(NoteWire::from).collect(),
+                body_hash: FileRevision::of_body(&d.body).body_hash,
+                id: d.id,
+                title: d.frontmatter.title,
+                status: d.frontmatter.status,
+                created_at: d.frontmatter.created_at,
+                updated_at: d.frontmatter.updated_at,
+                body: d.body,
+                project: link.map(Into::into),
+                priority: d.frontmatter.priority,
+                priority_source: d.frontmatter.priority_source,
+                conversions: d.frontmatter.conversions,
+                raw: None,
+            }
+        }
         InboxDraftView::Raw {
             id,
             raw_text,
@@ -154,6 +198,8 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
             updated_at: String::new(),
             body: String::new(),
             body_hash: String::new(),
+            notes: Vec::new(),
+            list_hash: String::new(),
             project: None,
             priority: Priority::default(),
             priority_source: PrioritySource::default(),
@@ -187,6 +233,15 @@ impl From<InboxServiceError> for ApiError {
             InboxServiceError::Store(InboxStoreError::Unparsed { .. }) => {
                 ApiError::new(422, err.to_string())
             }
+            InboxServiceError::Store(InboxStoreError::NoteNotFound { .. }) => {
+                ApiError::new(404, err.to_string())
+            }
+            InboxServiceError::Store(InboxStoreError::InvalidNote(_)) => {
+                ApiError::new(400, err.to_string())
+            }
+            InboxServiceError::Store(
+                InboxStoreError::NoteConflict { .. } | InboxStoreError::NoteIdsDropped { .. },
+            ) => ApiError::new(409, err.to_string()),
             InboxServiceError::Invalid(_) => ApiError::new(400, err.to_string()),
             InboxServiceError::TooLarge { .. } => ApiError::new(413, err.to_string()),
             InboxServiceError::RateLimited | InboxServiceError::TooManyOpenRequests(_) => {
@@ -282,6 +337,240 @@ pub async fn list_drafts(
         .map(Into::into)
         .collect();
     Ok(Json(serde_json::json!({ "drafts": drafts })))
+}
+
+/// `GET /api/inbox/summary` — inbox-wide counts for the navigation badge:
+/// `{ "openRequests": n }`, requests waiting on the operator across every
+/// item that is not dropped.
+pub async fn inbox_summary(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let svc = inbox(&state);
+    let summary = tokio::task::spawn_blocking(move || svc.summary())
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
+    Ok(Json(serde_json::to_value(summary).unwrap_or_default()))
+}
+
+/// `GET /api/inbox/{id}/notes` — the item's notes and list hash.
+pub async fn list_notes(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (notes, _) = inbox(&state).notes(&id)?;
+    Ok(Json(notes_json(&notes)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddNoteBody {
+    #[serde(rename = "type")]
+    pub note_type: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub after_id: Option<String>,
+    pub expected_list_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateNoteBody {
+    #[serde(rename = "type", default)]
+    pub note_type: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub body: Option<String>,
+    pub expected_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderNotesBody {
+    pub order: Vec<String>,
+    pub expected_list_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteNoteParams {
+    pub expected_list_hash: String,
+}
+
+type NoteResponse = Result<(StatusCode, Json<serde_json::Value>), ApiError>;
+
+/// A note write's outcome: `ok` with the response body, a 409 carrying what
+/// the note (or list) now is so the editor can show it, or the mapped error.
+fn note_outcome(
+    result: Result<serde_json::Value, InboxServiceError>,
+    ok: StatusCode,
+) -> NoteResponse {
+    match result {
+        Ok(v) => Ok((ok, Json(v))),
+        Err(InboxServiceError::Store(InboxStoreError::NoteConflict {
+            current, list_hash, ..
+        })) => Ok((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "the note changed since you read it",
+                "current": current.as_deref().map(NoteWire::from),
+                "listHash": list_hash,
+            })),
+        )),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// `POST /api/inbox/{id}/notes` — add a note (201), gated on the list hash.
+pub async fn add_note(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<AddNoteBody>,
+) -> NoteResponse {
+    check(&headers, "POST")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let result = tokio::task::spawn_blocking(move || {
+        svc.add_note(
+            &id,
+            &caller,
+            &body.expected_list_hash,
+            &body.note_type,
+            &body.title,
+            &body.body,
+            body.after_id.as_deref(),
+        )
+        .map(|(note, notes)| {
+            let mut v = notes_json(&notes);
+            v["note"] = serde_json::to_value(NoteWire::from(&note)).unwrap_or_default();
+            v
+        })
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
+    note_outcome(result, StatusCode::CREATED)
+}
+
+/// `PUT /api/inbox/{id}/notes/{nid}` — edit one note, gated on its hash.
+pub async fn update_note(
+    State(state): State<AppState>,
+    Path((id, nid)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateNoteBody>,
+) -> NoteResponse {
+    check(&headers, "PUT")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let result = tokio::task::spawn_blocking(move || {
+        let patch = NotePatch {
+            note_type: body.note_type,
+            title: body.title,
+            body: body.body,
+        };
+        svc.update_note(&id, &caller, &nid, &body.expected_hash, patch)
+            .map(|(note, notes)| {
+                let mut v = notes_json(&notes);
+                v["note"] = serde_json::to_value(NoteWire::from(&note)).unwrap_or_default();
+                v
+            })
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
+    note_outcome(result, StatusCode::OK)
+}
+
+/// `DELETE /api/inbox/{id}/notes/{nid}?expectedListHash=` — remove a note;
+/// the last one is cleared instead.
+pub async fn delete_note(
+    State(state): State<AppState>,
+    Path((id, nid)): Path<(String, String)>,
+    Query(params): Query<DeleteNoteParams>,
+    headers: HeaderMap,
+) -> NoteResponse {
+    check(&headers, "DELETE")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let result = tokio::task::spawn_blocking(move || {
+        svc.delete_note(&id, &caller, &nid, &params.expected_list_hash)
+            .map(|notes| notes_json(&notes))
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
+    note_outcome(result, StatusCode::OK)
+}
+
+/// `POST /api/inbox/{id}/notes/reorder` — put the notes in a new order.
+pub async fn reorder_notes(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Json(body): Json<ReorderNotesBody>,
+) -> NoteResponse {
+    check(&headers, "POST")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let result = tokio::task::spawn_blocking(move || {
+        svc.reorder_notes(&id, &caller, &body.order, &body.expected_list_hash)
+            .map(|notes| notes_json(&notes))
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
+    note_outcome(result, StatusCode::OK)
+}
+
+/// `GET /api/inbox/{id}/graph` — the item's worktrees, tracks, tasks and
+/// dependencies ([`build_task_graph`]). Read-only and Host-checked like the
+/// other inbox reads. Answers 304 when `If-None-Match` matches the etag, which
+/// is computed from file stats before anything is parsed.
+pub async fn get_graph(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<axum::response::Response, ApiError> {
+    use axum::response::IntoResponse;
+    use common::services::task_graph::{GraphInput, build_task_graph, graph_etag};
+    check(&headers, "GET")?;
+    let if_none_match = headers
+        .get(axum::http::header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.trim_matches('"').to_string());
+    let svc = inbox(&state);
+    let manager = state.manager.clone();
+    let outcome = tokio::task::spawn_blocking(move || -> Result<_, InboxServiceError> {
+        let draft = match svc.get(&id)?.0 {
+            InboxDraftView::Parsed(d) => d,
+            InboxDraftView::Raw { error, .. } => {
+                return Err(InboxServiceError::Store(InboxStoreError::Unparsed {
+                    id,
+                    error,
+                }));
+            }
+        };
+        let requests = svc.list_requests(&id)?;
+        let ports = crate::services::inbox_graph::ServerGraphPorts::new(manager);
+        let input = GraphInput {
+            draft_id: &id,
+            conversions: &draft.frontmatter.conversions,
+            requests: &requests,
+            now: chrono::Utc::now().to_rfc3339(),
+        };
+        let etag = graph_etag(&input, &ports);
+        if if_none_match.as_deref() == Some(etag.as_str()) {
+            return Ok((etag, None));
+        }
+        Ok((etag, Some(build_task_graph(&input, &ports, &ports))))
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
+    let (etag, graph) = outcome;
+    let etag_header = [(axum::http::header::ETAG, format!("\"{etag}\""))];
+    Ok(match graph {
+        None => (StatusCode::NOT_MODIFIED, etag_header).into_response(),
+        Some(g) => (StatusCode::OK, etag_header, Json(g)).into_response(),
+    })
 }
 
 /// `GET /api/inbox/{id}` — one draft, with its project link resolved.
@@ -718,6 +1007,10 @@ pub struct PostCommentBody {
     /// A worktree thread; absent or null posts to the overall thread.
     #[serde(default)]
     pub worktree: Option<WorktreeKey>,
+    /// Paste a worktree-thread comment into that worktree's agent pane.
+    /// Absent means yes; overall-thread comments are never pasted.
+    #[serde(default)]
+    pub deliver: Option<bool>,
 }
 
 /// `POST /api/inbox/{id}/comments` — an operator comment.
@@ -739,10 +1032,62 @@ pub async fn post_comment(
         ..EventAuthor::operator()
     };
     let svc = inbox(&state);
-    let event = svc.add_comment(&id, author, thread, &body.body)?;
+    let deliver = body.deliver.unwrap_or(true);
+    let text = body.body;
+    let comment_id = id.clone();
+    let (event, _) = tokio::task::spawn_blocking({
+        let svc = svc.clone();
+        move || svc.post_operator_comment(&comment_id, author, thread, &text, deliver)
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
     Ok(Json(
-        serde_json::json!({ "comment": svc.comment_view(&event) }),
+        serde_json::json!({ "comment": comment_with_delivery(&svc, &id, &event) }),
     ))
+}
+
+/// `POST /api/inbox/{id}/comments/{eventId}/redeliver` — retry pasting an
+/// operator comment whose delivery failed.
+pub async fn redeliver_comment(
+    State(state): State<AppState>,
+    Path((id, event_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check(&headers, "POST")?;
+    let caller = caller_marker(&headers);
+    let svc = inbox(&state);
+    let (item, target) = (id.clone(), event_id.clone());
+    tokio::task::spawn_blocking({
+        let svc = svc.clone();
+        move || svc.redeliver_comment(&item, &target, caller)
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
+    let comment = svc
+        .events(&id)?
+        .into_iter()
+        .find(|e| e.event_id == event_id)
+        .map(|e| comment_with_delivery(&svc, &id, &e));
+    Ok(Json(serde_json::json!({ "comment": comment })))
+}
+
+/// The thread row for `event` as `list_comments` shows it, delivery state
+/// included; falls back to the bare view if the threads cannot be read.
+fn comment_with_delivery(
+    svc: &InboxService,
+    id: &str,
+    event: &InboxEvent,
+) -> Option<common::services::inbox_service::CommentView> {
+    svc.list_comments(id)
+        .ok()
+        .and_then(|groups| {
+            groups
+                .overall
+                .into_iter()
+                .chain(groups.worktrees.into_iter().flat_map(|g| g.comments))
+                .find(|c| c.event_id == event.event_id)
+        })
+        .or_else(|| svc.comment_view(event))
 }
 
 /// `GET /api/inbox/{id}/requests` — every request, folded from the log.
@@ -971,6 +1316,9 @@ pub struct DraftHelpBody {
     /// Optional steer for the proposal ("make it shorter").
     #[serde(default)]
     pub instruction: Option<String>,
+    /// The note to improve; absent means the whole item.
+    #[serde(default)]
+    pub note_id: Option<String>,
 }
 
 /// `POST /api/inbox/{id}/agent/draft-help` — queue a draft-help job and return
@@ -985,6 +1333,7 @@ pub async fn draft_help(
     use crate::services::system_agent::JobInput;
     use crate::services::system_agent::output::MAX_NOTE_BYTES;
     check(&headers, "POST")?;
+    let note_id = body.note_id.filter(|n| !n.trim().is_empty());
     let instruction = body
         .instruction
         .map(|i| i.trim().to_string())
@@ -1003,7 +1352,13 @@ pub async fn draft_help(
     let agent = state.system_agent.clone();
     let draft_id = id.clone();
     let job_id = tokio::task::spawn_blocking(move || {
-        agent.enqueue(&draft_id, JobInput::DraftHelp { instruction })
+        agent.enqueue(
+            &draft_id,
+            JobInput::DraftHelp {
+                instruction,
+                note_id,
+            },
+        )
     })
     .await
     .map_err(|_| ApiError::new(500, "task panicked".to_string()))??;
@@ -1374,16 +1729,43 @@ pub async fn inbox_runtime_event(
         Err(msg) => return Some(Err(ApiError::new(400, msg))),
     };
     let svc = inbox(state);
+    let draft_id = ingress.draft_id.clone();
     let outcome = tokio::task::spawn_blocking(move || svc.ingest(&ingress)).await;
     Some(match outcome {
         Err(_) => Err(ApiError::new(500, "task panicked".to_string())),
         Ok(Err(e)) => Err(e.into()),
-        Ok(Ok(event)) => Ok(Json(serde_json::json!({
-            "ok": true,
-            "eventId": event.event_id,
-            "requestId": request_id_of(&event.kind),
-        }))),
+        Ok(Ok(event)) => {
+            notify_request_opened(state, &draft_id, &event);
+            Ok(Json(serde_json::json!({
+                "ok": true,
+                "eventId": event.event_id,
+                "requestId": request_id_of(&event.kind),
+            })))
+        }
     })
+}
+
+/// Tell the operator a worktree agent is waiting on them: a notification on
+/// the project that owns the worktree, linking to the item. The text names the
+/// item, branch and request title only; the body may hold PHI and stays in the
+/// item (NFR-02). A project the server does not serve gets no notification;
+/// the item's count and the Inbox badge still show the request.
+fn notify_request_opened(state: &AppState, draft_id: &str, event: &InboxEvent) {
+    let InboxEventKind::RequestOpened {
+        worktree, title, ..
+    } = &event.kind
+    else {
+        return;
+    };
+    let Some(app) = state.manager.get_by_path(&worktree.project) else {
+        return;
+    };
+    let item_title = match inbox(state).get(draft_id) {
+        Ok((InboxDraftView::Parsed(draft), _)) => draft.frontmatter.title,
+        _ => String::new(),
+    };
+    app.notifications
+        .record_inbox_request(&worktree.branch, &item_title, title, draft_id);
 }
 
 #[cfg(test)]
@@ -1919,6 +2301,674 @@ mod tests {
         ));
     }
 
+    // --- Graph route (graph/notes phase 5) ------------------------------------
+
+    /// A converted worktree the project's runtime knows, with a Sebenza
+    /// workspace holding one planned track.
+    fn graph_worktree(f: &Fixture, project: &str, branch: &str) -> std::path::PathBuf {
+        let wt = f.base.join(format!("wt-{branch}"));
+        let ws = wt.join(".ai/sebenza");
+        std::fs::create_dir_all(ws.join("tracks/t_20261105")).unwrap();
+        std::fs::write(
+            ws.join("tracks.json"),
+            serde_json::json!({"tracks": [{"track_id": "t_20261105", "description": "T"}]})
+                .to_string(),
+        )
+        .unwrap();
+        std::fs::write(
+            ws.join("tracks/t_20261105/plan.json"),
+            serde_json::json!({"phases": [{"id": "phase-1", "name": "P", "status": "doing",
+                "tasks": [{"id": "a", "name": "A", "status": "done"},
+                          {"id": "b", "name": "B", "status": "doing", "depends_on": ["a"]}]}]})
+            .to_string(),
+        )
+        .unwrap();
+        let app = f.state.manager.get_by_path(project).expect("project");
+        app.runtime.lock().unwrap().upsert_worktree(
+            common::services::project_runtime::UpsertInput {
+                worktree_id: format!("id-{branch}"),
+                kind: Default::default(),
+                branch: branch.into(),
+                label: None,
+                base_branch: None,
+                path: wt.to_string_lossy().to_string(),
+                profile: None,
+                agent_name: Some("claude".into()),
+                agent_terminal_stale: false,
+                runtime: "host".into(),
+                source: common::domain::model::WorktreeSource::Ui,
+                oneshot: None,
+                tabs: vec![],
+                active_tab_id: None,
+            },
+        );
+        wt.canonicalize().unwrap()
+    }
+
+    async fn get_graph_json(
+        f: &Fixture,
+        id: &str,
+        headers: HeaderMap,
+    ) -> Result<(StatusCode, serde_json::Value, Option<String>), ApiError> {
+        let resp = get_graph(State(f.state.clone()), Path(id.to_string()), headers).await?;
+        let status = resp.status();
+        let etag = resp
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        };
+        Ok((status, body, etag))
+    }
+
+    fn host_only() -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("host", HeaderValue::from_static(HOST));
+        h
+    }
+
+    // TS-01 / TS-03 / TS-04 / TS-61 / TS-66 / TS-75: every converted worktree
+    // is listed with its state, progress and agent; failures carry a code,
+    // never the recorded error text or a worktree path.
+    #[tokio::test]
+    async fn the_graph_lists_every_worktree_with_state_and_progress() {
+        let f = fixture();
+        let project = project(&f, "acme", false);
+        let id = f.state.inbox.create("Task graph").expect("create").id;
+        let ok = graph_worktree(&f, &project, "feat-x");
+        convert_into(&f, &id, &project, "feat-x", &ok.to_string_lossy());
+        convert_into(
+            &f,
+            &id,
+            &project,
+            "gone",
+            &f.base.join("nope").to_string_lossy(),
+        );
+        let target = crate::services::inbox_convert::ConversionTarget {
+            project_path: project.clone(),
+            branch: "boom".into(),
+            ..Default::default()
+        };
+        let failed = ConversionOutcome::failed(
+            &target,
+            "boom at /secret/SYNTHETIC-PHI-MARKER".into(),
+            "t".into(),
+        );
+        f.store
+            .merge_frontmatter(
+                &id,
+                FrontmatterAuthor::Job,
+                FrontmatterPatch {
+                    conversions: Some(vec![serde_yaml::to_value(failed).unwrap()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let (code, g, etag) = get_graph_json(&f, &id, host_only()).await.expect("graph");
+        assert_eq!(code, StatusCode::OK);
+        assert!(etag.is_some());
+        let states: Vec<&str> = g["worktrees"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["state"].as_str().unwrap())
+            .collect();
+        assert_eq!(states, ["ok", "unavailable", "failed"]);
+        assert_eq!(
+            g["worktrees"][0]["progress"],
+            serde_json::json!({"done": 1, "total": 2})
+        );
+        assert_eq!(g["worktrees"][0]["agent"]["agent"], "claude");
+        assert_eq!(g["worktrees"][1]["errorCode"], "missing");
+        assert_eq!(g["worktrees"][2]["errorCode"], "conversion_failed");
+        let text = g.to_string();
+        assert!(!text.contains("SYNTHETIC-PHI-MARKER"));
+        assert!(
+            !text.contains(&ok.to_string_lossy().to_string()),
+            "no worktree paths"
+        );
+        assert!(
+            !text.contains("nope"),
+            "no recorded paths of missing worktrees"
+        );
+        assert!(
+            g["edges"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|e| e["kind"] == "depends_on")
+        );
+    }
+
+    // TS-41: a recorded path the project does not manage is not read.
+    #[tokio::test]
+    async fn an_unregistered_worktree_path_is_not_read() {
+        let f = fixture();
+        let project = project(&f, "acme", false);
+        let id = f.state.inbox.create("T").expect("create").id;
+        let stray = f.base.join("stray/.ai/sebenza");
+        std::fs::create_dir_all(&stray).unwrap();
+        std::fs::write(
+            stray.join("tracks.json"),
+            r#"{"tracks":[{"track_id":"leak_20261105"}]}"#,
+        )
+        .unwrap();
+        convert_into(
+            &f,
+            &id,
+            &project,
+            "stray",
+            &f.base.join("stray").to_string_lossy(),
+        );
+        let (_, g, _) = get_graph_json(&f, &id, host_only()).await.unwrap();
+        assert_eq!(g["worktrees"][0]["errorCode"], "not_registered");
+        assert!(!g.to_string().contains("leak"));
+    }
+
+    // TS-68 / TS-71: an unchanged graph is a 304 for its etag; a foreign Host
+    // is refused.
+    #[tokio::test]
+    async fn the_graph_honours_etags_and_the_host_check() {
+        let f = fixture();
+        let project = project(&f, "acme", false);
+        let id = f.state.inbox.create("T").expect("create").id;
+        let wt = graph_worktree(&f, &project, "feat-x");
+        convert_into(&f, &id, &project, "feat-x", &wt.to_string_lossy());
+        let (_, _, etag) = get_graph_json(&f, &id, host_only()).await.unwrap();
+        let mut h = host_only();
+        h.insert(
+            "if-none-match",
+            HeaderValue::from_str(&etag.unwrap()).unwrap(),
+        );
+        let (code, body, _) = get_graph_json(&f, &id, h).await.unwrap();
+        assert_eq!(code, StatusCode::NOT_MODIFIED);
+        assert!(body.is_null());
+
+        let mut evil = HeaderMap::new();
+        evil.insert("host", HeaderValue::from_static("evil.example"));
+        assert_eq!(
+            status(get_graph(State(f.state.clone()), Path(id.clone()), evil).await),
+            403
+        );
+    }
+
+    // --- Notes API (graph/notes phase 2) -------------------------------------
+
+    async fn notes_of(f: &Fixture, id: &str) -> serde_json::Value {
+        let Json(v) = list_notes(State(f.state.clone()), Path(id.to_string()))
+            .await
+            .expect("notes");
+        v
+    }
+
+    async fn add(
+        f: &Fixture,
+        id: &str,
+        h: HeaderMap,
+        body: serde_json::Value,
+    ) -> Result<(StatusCode, serde_json::Value), ApiError> {
+        let body: AddNoteBody = serde_json::from_value(body).expect("add body");
+        add_note(State(f.state.clone()), Path(id.to_string()), h, Json(body))
+            .await
+            .map(|(code, Json(v))| (code, v))
+    }
+
+    async fn edit(
+        f: &Fixture,
+        id: &str,
+        nid: &str,
+        body: serde_json::Value,
+    ) -> Result<(StatusCode, serde_json::Value), ApiError> {
+        let body: UpdateNoteBody = serde_json::from_value(body).expect("edit body");
+        update_note(
+            State(f.state.clone()),
+            Path((id.to_string(), nid.to_string())),
+            good_headers(),
+            Json(body),
+        )
+        .await
+        .map(|(code, Json(v))| (code, v))
+    }
+
+    // TS-17 / TS-18: a valid note is created (201) and listed in order; an
+    // invalid one is a 400.
+    #[tokio::test]
+    async fn notes_are_added_listed_and_validated() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let before = notes_of(&f, &id).await;
+        assert_eq!(before["notes"][0]["id"], "n1");
+        let lh = before["listHash"].as_str().unwrap().to_string();
+        let (code, v) = add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "acceptance_criteria", "title": "Acceptance Criteria",
+                "body": "- graph tab", "expectedListHash": lh}),
+        )
+        .await
+        .expect("added");
+        assert_eq!(code, StatusCode::CREATED);
+        assert_eq!(v["note"]["type"], "acceptance_criteria");
+        assert!(v["note"]["hash"].is_string());
+        let after = notes_of(&f, &id).await;
+        assert_eq!(after["notes"].as_array().unwrap().len(), 2);
+        assert_eq!(after["notes"][1]["title"], "Acceptance Criteria");
+        assert_ne!(after["listHash"], lh.as_str());
+        let Json(item) = get_draft(State(f.state.clone()), Path(id.clone()))
+            .await
+            .expect("get");
+        let item = serde_json::to_value(item).unwrap();
+        assert_eq!(
+            item["notes"].as_array().unwrap().len(),
+            2,
+            "the item carries its notes"
+        );
+
+        let bad = add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "Not A Slug", "title": "x", "body": "",
+                "expectedListHash": after["listHash"]}),
+        )
+        .await;
+        assert_eq!(status(bad), 400);
+    }
+
+    // TS-58 / TS-20: edits to different notes both succeed; a stale hash on
+    // the same note is a 409 carrying the current note.
+    #[tokio::test]
+    async fn note_edits_conflict_only_on_the_same_note() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let lh = notes_of(&f, &id).await["listHash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "general", "title": "B",
+            "body": "b", "expectedListHash": lh}),
+        )
+        .await
+        .unwrap();
+        let notes = notes_of(&f, &id).await;
+        let (a, b) = (notes["notes"][0].clone(), notes["notes"][1].clone());
+        let (code, _) = edit(
+            &f,
+            &id,
+            "n1",
+            serde_json::json!({"body": "A1", "expectedHash": a["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::OK);
+        let (code, _) = edit(
+            &f,
+            &id,
+            b["id"].as_str().unwrap(),
+            serde_json::json!({"body": "B1", "expectedHash": b["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            code,
+            StatusCode::OK,
+            "another note's edit does not conflict"
+        );
+        let (code, v) = edit(
+            &f,
+            &id,
+            "n1",
+            serde_json::json!({"body": "A2", "expectedHash": a["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::CONFLICT);
+        assert_eq!(v["current"]["body"], "A1");
+        assert!(v["listHash"].is_string());
+    }
+
+    // TS-22 / TS-23 / TS-24 / TS-25 / TS-26 / TS-57: structural changes need
+    // the current list hash; reorder needs a permutation; the last note is
+    // cleared.
+    #[tokio::test]
+    async fn structural_note_changes_are_list_gated() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let lh0 = notes_of(&f, &id).await["listHash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let (_, v) = add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "general",
+            "title": "Two", "body": "2", "expectedListHash": lh0}),
+        )
+        .await
+        .unwrap();
+        let two = v["note"]["id"].as_str().unwrap().to_string();
+        let lh = v["listHash"].as_str().unwrap().to_string();
+
+        let (code, _) = add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "general",
+            "title": "Stale", "body": "", "expectedListHash": lh0}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::CONFLICT, "stale add");
+
+        let reorder = |order: serde_json::Value, expected: String| {
+            let body: ReorderNotesBody = serde_json::from_value(
+                serde_json::json!({"order": order, "expectedListHash": expected}),
+            )
+            .unwrap();
+            reorder_notes(
+                State(f.state.clone()),
+                Path(id.clone()),
+                good_headers(),
+                Json(body),
+            )
+        };
+        assert_eq!(
+            status(reorder(serde_json::json!(["n1"]), lh.clone()).await),
+            400
+        );
+        let (code, _) = reorder(serde_json::json!([two, "n1"]), lh0.clone())
+            .await
+            .map(|(c, Json(v))| (c, v))
+            .unwrap();
+        assert_eq!(code, StatusCode::CONFLICT, "stale reorder");
+        let (code, v) = reorder(serde_json::json!([two, "n1"]), lh.clone())
+            .await
+            .map(|(c, Json(v))| (c, v))
+            .unwrap();
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(v["notes"][0]["id"], two.as_str());
+        let lh = v["listHash"].as_str().unwrap().to_string();
+
+        let del = |nid: String, expected: String| {
+            delete_note(
+                State(f.state.clone()),
+                Path((id.clone(), nid)),
+                Query(DeleteNoteParams {
+                    expected_list_hash: expected,
+                }),
+                good_headers(),
+            )
+        };
+        let (code, _) = del("n1".into(), lh0.clone())
+            .await
+            .map(|(c, Json(v))| (c, v))
+            .unwrap();
+        assert_eq!(code, StatusCode::CONFLICT, "stale delete");
+        let (_, v) = del(two.clone(), lh)
+            .await
+            .map(|(c, Json(v))| (c, v))
+            .unwrap();
+        let lh = v["listHash"].as_str().unwrap().to_string();
+        let (code, v) = del("n1".into(), lh)
+            .await
+            .map(|(c, Json(v))| (c, v))
+            .unwrap();
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(
+            v["notes"].as_array().unwrap().len(),
+            1,
+            "the last note is cleared"
+        );
+        assert_eq!(v["notes"][0]["body"], "");
+        assert_eq!(
+            status(del("zz99".into(), v["listHash"].as_str().unwrap().into()).await),
+            404
+        );
+    }
+
+    // TS-40: every note mutation needs the token, same origin and our Host.
+    #[tokio::test]
+    async fn note_mutations_refuse_a_missing_token_a_foreign_origin_and_a_bad_host() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let lh = notes_of(&f, &id).await["listHash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let mut no_token = good_headers();
+        no_token.remove("authorization");
+        let mut foreign = good_headers();
+        foreign.insert("origin", HeaderValue::from_static("http://evil.example"));
+        let mut bad_host = good_headers();
+        bad_host.insert("host", HeaderValue::from_static("evil.example"));
+        for (h, want) in [(no_token, 401), (foreign, 403), (bad_host, 403)] {
+            let body = serde_json::json!({"type": "general", "title": "T", "body": "",
+                "expectedListHash": lh});
+            assert_eq!(status(add(&f, &id, h.clone(), body).await), want);
+            let up: UpdateNoteBody =
+                serde_json::from_value(serde_json::json!({"body": "x", "expectedHash": "h"}))
+                    .unwrap();
+            assert_eq!(
+                status(
+                    update_note(
+                        State(f.state.clone()),
+                        Path((id.clone(), "n1".into())),
+                        h.clone(),
+                        Json(up)
+                    )
+                    .await
+                ),
+                want
+            );
+            assert_eq!(
+                status(
+                    delete_note(
+                        State(f.state.clone()),
+                        Path((id.clone(), "n1".into())),
+                        Query(DeleteNoteParams {
+                            expected_list_hash: lh.clone()
+                        }),
+                        h.clone()
+                    )
+                    .await
+                ),
+                want
+            );
+            let ro: ReorderNotesBody = serde_json::from_value(
+                serde_json::json!({"order": ["n1"], "expectedListHash": lh}),
+            )
+            .unwrap();
+            assert_eq!(
+                status(reorder_notes(State(f.state.clone()), Path(id.clone()), h, Json(ro)).await),
+                want
+            );
+        }
+    }
+
+    // TS-47: a legacy whole-body PUT that would drop a note is a 409.
+    #[tokio::test]
+    async fn a_legacy_body_put_that_drops_notes_is_a_409() {
+        let f = fixture();
+        let id = new_draft(&f);
+        let lh = notes_of(&f, &id).await["listHash"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        add(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"type": "general", "title": "Two",
+            "body": "2", "expectedListHash": lh}),
+        )
+        .await
+        .unwrap();
+        let Json(item) = get_draft(State(f.state.clone()), Path(id.clone()))
+            .await
+            .unwrap();
+        let item = serde_json::to_value(item).unwrap();
+        let body: SaveBodyBody = serde_json::from_value(serde_json::json!({
+            "body": "flattened", "expectedHash": item["bodyHash"]}))
+        .unwrap();
+        let r = save_draft_body(
+            State(f.state.clone()),
+            Path(id.clone()),
+            good_headers(),
+            Json(body),
+        )
+        .await;
+        assert_eq!(status(r), 409);
+    }
+
+    // Nervous-system bug TS-10 / TS-11: an operator's worktree-thread comment
+    // is pasted into that worktree's pane unless they opt out; overall
+    // comments never are.
+    #[tokio::test]
+    async fn operator_worktree_comments_reach_the_pane_unless_opted_out() {
+        let f = fixture();
+        let id = converted(&f);
+        let wt = serde_json::json!({"project": "/code/acme-demo", "branch": "feat-x"});
+
+        let v = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "Use Postgres.", "worktree": wt}),
+        )
+        .await
+        .expect("delivered comment");
+        assert_eq!(v["comment"]["delivery"], "delivered");
+        let sent = f.pane.0.lock().unwrap().clone();
+        assert_eq!(sent.len(), 1);
+        assert!(sent[0].1.contains("Use Postgres."));
+
+        let kept = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "Note only", "worktree": wt, "deliver": false}),
+        )
+        .await
+        .expect("kept comment");
+        assert!(kept["comment"]["delivery"].is_null());
+        comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "Everyone"}),
+        )
+        .await
+        .expect("overall");
+        assert_eq!(f.pane.0.lock().unwrap().len(), 1, "only the first was sent");
+    }
+
+    // Nervous-system bug TS-13: retrying a delivered or unsent comment is a
+    // 400; the route needs the token.
+    #[tokio::test]
+    async fn redelivering_a_comment_is_guarded() {
+        let f = fixture();
+        let id = converted(&f);
+        let v = comment(
+            &f,
+            &id,
+            good_headers(),
+            serde_json::json!({"body": "Hi", "worktree": {"project": "/code/acme-demo", "branch": "feat-x"}}),
+        )
+        .await
+        .expect("comment");
+        let event_id = v["comment"]["eventId"].as_str().unwrap().to_string();
+        let retry = |h: HeaderMap| {
+            redeliver_comment(
+                State(f.state.clone()),
+                Path((id.clone(), event_id.clone())),
+                h,
+            )
+        };
+        let mut no_token = HeaderMap::new();
+        no_token.insert("host", HeaderValue::from_static(HOST));
+        assert_eq!(status(retry(no_token).await), 401);
+        assert_eq!(
+            status(retry(good_headers()).await),
+            400,
+            "already delivered"
+        );
+    }
+
+    // Nervous-system bug TS-06 / TS-07: the list carries each item's open
+    // request count, and the summary totals them for the nav badge.
+    #[tokio::test]
+    async fn the_list_and_summary_report_open_requests() {
+        let f = fixture();
+        let id = converted(&f);
+        let Json(empty) = inbox_summary(State(f.state.clone()))
+            .await
+            .expect("summary");
+        assert_eq!(empty["openRequests"], 0);
+
+        runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/acme-demo/feat-x", "feat-x", "Which db?"),
+        )
+        .await
+        .expect("accepted");
+
+        let Json(list) = list_drafts(State(f.state.clone()), Query(ListParams::default()))
+            .await
+            .expect("list");
+        assert_eq!(list["drafts"][0]["id"], id.as_str());
+        assert_eq!(list["drafts"][0]["openRequestCount"], 1);
+        let Json(summary) = inbox_summary(State(f.state.clone()))
+            .await
+            .expect("summary");
+        assert_eq!(summary["openRequests"], 1);
+    }
+
+    // Nervous-system bug TS-09: opening a request records a notification on
+    // the owning project, naming the item, branch and title but never the
+    // body.
+    #[tokio::test]
+    async fn an_agent_request_notifies_the_operator_without_its_body() {
+        let f = fixture();
+        let project = project(&f, "acme", false);
+        let id = f.state.inbox.create("Task graph").expect("create").id;
+        convert_into(&f, &id, &project, "feat-x", "/wt/acme/feat-x");
+
+        runtime(
+            &f,
+            Some(TOKEN),
+            request_payload(&id, "/wt/acme/feat-x", "feat-x", "SYNTHETIC-PHI-MARKER-123"),
+        )
+        .await
+        .expect("accepted");
+
+        let app = f.state.manager.get_by_path(&project).expect("project");
+        let notes = app.notifications.list();
+        let n = notes
+            .iter()
+            .find(|n| n.r#type == "inbox_request")
+            .expect("inbox_request notification");
+        assert_eq!(n.branch, "feat-x");
+        assert!(n.message.contains("Task graph"), "{}", n.message);
+        assert!(n.message.contains("Need a decision"), "{}", n.message);
+        assert!(!n.message.contains("SYNTHETIC-PHI-MARKER-123"));
+        assert_eq!(n.url.as_deref(), Some(format!("/inbox?item={id}").as_str()));
+    }
+
     #[tokio::test]
     async fn an_agentctl_comment_lands_in_its_worktree_group() {
         let f = fixture();
@@ -2433,6 +3483,7 @@ mod tests {
             headers,
             Json(DraftHelpBody {
                 instruction: instruction.map(str::to_string),
+                note_id: None,
             }),
         )
         .await

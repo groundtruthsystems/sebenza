@@ -993,6 +993,43 @@ mod tests {
         fs::remove_dir_all(&ctl.base).ok();
     }
 
+    // Graph/notes TS-77: `--track`/`--task` link a request to the plan task
+    // it blocks, so the graph can show it on that node.
+    #[test]
+    fn agentctl_request_can_name_the_blocked_task() {
+        if !have_python() {
+            eprintln!("python3 not found; skipping");
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = capture_one_post(listener);
+        let ctl = ctl_worktree(port, Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+        let out = run_ctl(
+            &ctl,
+            &[
+                "request",
+                "--body",
+                "Which db?",
+                "--track",
+                "notes_api_20261105",
+                "--task",
+                "phase-1-task-2",
+            ],
+            "",
+        );
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let (_, body) = server.join().unwrap().expect("a POST arrived");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["trackId"], "notes_api_20261105");
+        assert_eq!(v["taskId"], "phase-1-task-2");
+        fs::remove_dir_all(&ctl.base).ok();
+    }
+
     // TS-11: the request carries the origin item from inbox-origin.json and
     // the worktree's own path, so the server can cross-check them.
     #[test]

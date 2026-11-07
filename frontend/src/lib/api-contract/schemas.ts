@@ -260,6 +260,7 @@ export const AppNotificationSchema = z.object({
     "pr_opened",
     "runtime_error",
     "worktree_auto_removed",
+    "inbox_request",
   ]),
   message: z.string(),
   url: z.string().optional(),
@@ -571,6 +572,18 @@ export const TrackSchema = z
     /// `test-plan.md`, from tracks.json `test_plan_path`. The server also fills
     /// this in when the file sits beside spec.md / design.md and the field was omitted.
     test_plan_path: z.string().optional(),
+    /// The split architecture docs (`<domain>-architecture.md`) readable beside
+    /// the track's other docs. Response-only: the server fills in only the
+    /// files that exist.
+    architecture_paths: z
+      .object({
+        business: z.string().optional(),
+        application: z.string().optional(),
+        data: z.string().optional(),
+        security: z.string().optional(),
+        technical: z.string().optional(),
+      })
+      .optional(),
     plan_path: z.string().optional(),
     phases_summary: z.array(PhaseSummarySchema).default([]),
     progress: TrackProgressSchema,
@@ -986,7 +999,14 @@ export const InboxDraftSummarySchema = z.object({
   prioritySource: InboxPrioritySourceSchema.default("agent"),
   /** A request needs the operator: triage or delivery failed. */
   flagged: z.boolean().default(false),
+  /** Requests a worktree agent is waiting on the operator for. */
+  openRequestCount: z.number().int().nonnegative().default(0),
   isRaw: z.boolean(),
+});
+
+/** Inbox-wide counts for the navigation badge. */
+export const InboxSummarySchema = z.object({
+  openRequests: z.number().int().nonnegative(),
 });
 
 export const InboxDraftListSchema = z.object({
@@ -1007,6 +1027,9 @@ export const ConversionOutcomeSchema = z.object({
   worktreePath: z.string().optional(),
   error: z.string().optional(),
   at: z.string(),
+  /** The notes this worktree was sent (list hash and types). */
+  notesListHash: z.string().optional(),
+  noteTypes: z.array(z.string()).optional(),
 });
 
 /** `bodyHash` is what a save must echo back; it is the only thing that gates a
@@ -1023,6 +1046,10 @@ export const InboxDraftSchema = z.object({
   priority: InboxPrioritySchema.default("P2"),
   prioritySource: InboxPrioritySourceSchema.default("agent"),
   conversions: z.array(ConversionOutcomeSchema).default([]),
+  /** The item's notes in operator order (schema v3). */
+  notes: z.array(z.lazy(() => InboxNoteSchema)).default([]),
+  /** Token for adding, deleting or reordering notes. */
+  listHash: z.string().default(""),
   raw: z.object({ text: z.string(), error: z.string() }).nullable(),
 });
 
@@ -1070,6 +1097,11 @@ export const InboxCommentSchema = z.object({
   parentEventId: z.string().nullable(),
   warnings: z.array(z.string()).default([]),
   redacted: z.boolean(),
+  /** An operator's worktree comment sent to the agent: the latest paste
+   *  outcome. Absent or null when it was kept as a note. */
+  delivery: z.enum(["delivered", "failed"]).nullish(),
+  /** Why the latest paste failed. */
+  deliveryError: z.string().nullish(),
 });
 
 export const InboxCommentGroupsSchema = z.object({
@@ -1083,6 +1115,12 @@ export const InboxCommentGroupsSchema = z.object({
 export const PostInboxCommentRequestSchema = z.object({
   body: z.string(),
   worktree: InboxWorktreeKeySchema.optional(),
+  /** Paste a worktree-thread comment into the agent pane. Default true. */
+  deliver: z.boolean().optional(),
+});
+
+export const RedeliverInboxCommentResponseSchema = z.object({
+  comment: InboxCommentSchema.nullable(),
 });
 
 export const PostInboxCommentResponseSchema = z.object({
@@ -1177,6 +1215,8 @@ export const InboxJobEventSchema = z.object({
  *  the proposal. */
 export const InboxDraftHelpRequestSchema = z.object({
   instruction: z.string().optional(),
+  /** Improve this note only; absent means the whole item. */
+  noteId: z.string().optional(),
 });
 
 /** The queued job. Its result arrives on the job (GET or the `inbox.job`
@@ -1279,4 +1319,137 @@ export const ConversionJobSchema = z.object({
   outcomes: z.array(ConversionOutcomeSchema),
   finished: z.boolean(),
   error: z.string().optional(),
+});
+
+/** One note of an inbox item. `type` is a slug (`general`,
+ *  `acceptance_criteria`, ...); `hash` is the token an edit must echo. */
+export const InboxNoteSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  title: z.string(),
+  body: z.string(),
+  hash: z.string(),
+});
+
+export const InboxNotesSchema = z.object({
+  notes: z.array(InboxNoteSchema),
+  listHash: z.string(),
+});
+
+export const InboxNoteWriteSchema = InboxNotesSchema.extend({
+  note: InboxNoteSchema,
+});
+
+/** A 409 from a note write: the note as it now is (null for a structural
+ *  change), and the list hash to retry against. */
+export const InboxNoteConflictSchema = z.object({
+  error: z.string(),
+  current: InboxNoteSchema.nullable(),
+  listHash: z.string(),
+});
+
+export const AddInboxNoteRequestSchema = z.object({
+  type: z.string(),
+  title: z.string(),
+  body: z.string(),
+  afterId: z.string().optional(),
+  expectedListHash: z.string(),
+});
+
+export const UpdateInboxNoteRequestSchema = z.object({
+  type: z.string().optional(),
+  title: z.string().optional(),
+  body: z.string().optional(),
+  expectedHash: z.string(),
+});
+
+export const ReorderInboxNotesRequestSchema = z.object({
+  order: z.array(z.string()),
+  expectedListHash: z.string(),
+});
+
+/** `.ai/sebenza/inbox-notes.json` as the daemon writes it into a converted
+ *  worktree (`sebenza-inbox-notes-v1`). Additive: unknown fields pass. */
+export const InboxNotesManifestSchema = z.object({
+  schema: z.literal("sebenza-inbox-notes-v1"),
+  draft_id: z.string(),
+  title: z.string(),
+  notes: z.array(
+    z.object({ id: z.string(), type: z.string(), title: z.string(), body: z.string() }),
+  ),
+  siblings: z.array(z.object({ branch: z.string(), project_path: z.string() })).default([]),
+});
+
+// --- Inbox item graph (GET /api/inbox/:id/graph) ---------------------------
+
+export const GraphProgressSchema = z.object({ done: z.number(), total: z.number() });
+
+export const GraphTaskSchema = z.object({
+  id: z.string(),
+  taskId: z.string(),
+  name: z.string(),
+  status: z.string(),
+  dependsOn: z.array(z.string()).default([]),
+  request: z
+    .object({
+      requestId: z.string().nullable(),
+      status: z.string(),
+      source: z.enum(["inbox", "plan"]),
+    })
+    .nullable()
+    .default(null),
+});
+
+export const GraphPhaseSchema = z.object({
+  id: z.string(),
+  phaseId: z.string(),
+  name: z.string(),
+  status: z.string(),
+  progress: GraphProgressSchema,
+  tasks: z.array(GraphTaskSchema),
+});
+
+export const GraphTrackSchema = z.object({
+  id: z.string(),
+  trackId: z.string(),
+  description: z.string(),
+  status: z.string(),
+  currentPhase: z.string().nullable(),
+  designing: z.boolean(),
+  errorCode: z.string().nullable(),
+  progress: GraphProgressSchema,
+  phases: z.array(GraphPhaseSchema),
+});
+
+export const GraphWorktreeSchema = z.object({
+  id: z.string(),
+  branch: z.string(),
+  projectPath: z.string(),
+  state: z.enum(["ok", "unavailable", "failed", "no_workspace"]),
+  errorCode: z.string().nullable(),
+  progress: GraphProgressSchema,
+  agent: z
+    .object({ status: z.string(), feedbackState: z.string(), agent: z.string().nullable() })
+    .nullable(),
+  tracks: z.array(GraphTrackSchema),
+});
+
+export const GraphEdgeSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  kind: z.enum(["contains", "depends_on"]),
+  dangling: z.boolean(),
+  flag: z.string().nullable(),
+});
+
+export const TaskGraphSchema = z.object({
+  draftId: z.string(),
+  generatedAt: z.string(),
+  etag: z.string(),
+  truncated: z.boolean(),
+  progress: GraphProgressSchema,
+  failed: z.number(),
+  unavailable: z.number(),
+  worktrees: z.array(GraphWorktreeSchema),
+  edges: z.array(GraphEdgeSchema),
 });

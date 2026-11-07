@@ -89,6 +89,8 @@ def build_parser():
     request = subparsers.add_parser("request", help="ask the operator for help on this worktree's origin inbox item")
     request.add_argument("--title", help="one line; defaults to the first line of the body")
     request.add_argument("--body", required=True, help="the request text, or - to read stdin")
+    request.add_argument("--track", help="the plan track this request blocks (with --task)")
+    request.add_argument("--task", help="the plan task this request blocks (with --track)")
 
     comment = subparsers.add_parser("comment", help="comment on this worktree's thread of its origin inbox item")
     comment.add_argument("--body", required=True, help="the comment text, or - to read stdin")
@@ -325,6 +327,13 @@ def send_inbox(command, args, control_env):
     title = getattr(args, "title", None)
     if title and title.strip():
         payload["title"] = title.strip()
+    track, task = getattr(args, "track", None), getattr(args, "task", None)
+    if bool(track) != bool(task):
+        print("--track and --task go together; nothing sent", file=sys.stderr)
+        return 1
+    if track and task:
+        payload["trackId"] = track.strip()
+        payload["taskId"] = task.strip()
     return 0 if send_payload(payload, control_env) else 1
 
 

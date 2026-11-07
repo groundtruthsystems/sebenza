@@ -316,10 +316,28 @@ pub fn build_router(state: AppState) -> Router {
             get(crate::inbox_routes::list_drafts).post(crate::inbox_routes::create_draft),
         )
         .route(
+            "/api/inbox/summary",
+            get(crate::inbox_routes::inbox_summary),
+        )
+        .route(
             "/api/inbox/{id}",
             get(crate::inbox_routes::get_draft)
                 .patch(crate::inbox_routes::patch_draft)
                 .delete(crate::inbox_routes::delete_draft),
+        )
+        .route("/api/inbox/{id}/graph", get(crate::inbox_routes::get_graph))
+        .route(
+            "/api/inbox/{id}/notes",
+            get(crate::inbox_routes::list_notes).post(crate::inbox_routes::add_note),
+        )
+        .route(
+            "/api/inbox/{id}/notes/reorder",
+            post(crate::inbox_routes::reorder_notes),
+        )
+        .route(
+            "/api/inbox/{id}/notes/{nid}",
+            axum::routing::put(crate::inbox_routes::update_note)
+                .delete(crate::inbox_routes::delete_note),
         )
         .route(
             "/api/inbox/{id}/body",
@@ -384,6 +402,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/inbox/{id}/convert/instructions",
             post(crate::inbox_routes::convert_instructions),
+        )
+        .route(
+            "/api/inbox/{id}/comments/{event_id}/redeliver",
+            post(crate::inbox_routes::redeliver_comment),
         )
         .route(
             "/api/inbox/{id}/comments/{event_id}/redact",

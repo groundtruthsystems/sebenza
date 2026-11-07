@@ -81,6 +81,27 @@ describe("TracksBoard", () => {
     expect(screen.getByRole("button", { name: "View" })).toBeInTheDocument();
   });
 
+  // TS-82: a track whose only docs are split architecture files is viewable.
+  it("offers View when a track only has architecture docs", async () => {
+    vi.mocked(fetchTracks).mockResolvedValue({
+      tracks: [
+        {
+          track_id: "arch_20261106",
+          description: "Split architecture",
+          status: "backlog",
+          architecture_paths: { security: "./tracks/arch_20261106/security-architecture.md" },
+          phases_summary: [],
+          progress: { total_tasks: 0, completed_tasks: 0, percentage: 0 },
+        },
+      ],
+    } as unknown as Tracks);
+
+    render(<TracksBoard worktree={worktree} />);
+
+    await waitFor(() => expect(screen.getByText("Split architecture")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "View" })).toBeInTheDocument();
+  });
+
   it("shows the empty state when there is no Sebenza workspace", async () => {
     vi.mocked(fetchTracks).mockResolvedValue(null);
 

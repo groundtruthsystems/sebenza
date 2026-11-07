@@ -6,7 +6,7 @@
 //! sink the whole view, so every registry entry comes back with a `status` and
 //! the reader decides how to render it.
 
-use crate::adapters::fs::{TrackFileError, annotate_test_plan_paths, read_track_file_in};
+use crate::adapters::fs::{TrackFileError, annotate_track_doc_paths, read_track_file_in};
 use crate::adapters::sebenza_registry::{RegistryRead, SebenzaRegistry};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -110,7 +110,7 @@ fn resolve_project(entry: crate::adapters::sebenza_registry::RegistryProject) ->
             Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
                 Ok(mut value) => {
                     if let Some(workspace) = tracks_path.parent() {
-                        annotate_test_plan_paths(workspace, &mut value);
+                        annotate_track_doc_paths(workspace, &mut value);
                     }
                     (ProjectStatus::Ok, Some(value), None)
                 }
@@ -274,6 +274,7 @@ mod tests {
         let track_dir = ws.join("tracks").join("inbox_20260914");
         fs::create_dir_all(&track_dir).unwrap();
         fs::write(track_dir.join("test-plan.md"), "# Test plan\n").unwrap();
+        fs::write(track_dir.join("application-architecture.md"), "# A\n").unwrap();
         fs::write(
             ws.join("tracks.json"),
             r#"{"tracks":[{"track_id":"inbox_20260914","spec_path":"./tracks/inbox_20260914/spec.md"}]}"#,
@@ -295,6 +296,11 @@ mod tests {
         assert_eq!(
             portfolio.projects[0].tracks.as_ref().unwrap()["tracks"][0]["test_plan_path"],
             "./tracks/inbox_20260914/test-plan.md"
+        );
+        // TS-79: the portfolio drill-down sees the split architecture docs too.
+        assert_eq!(
+            portfolio.projects[0].tracks.as_ref().unwrap()["tracks"][0]["architecture_paths"]["application"],
+            "./tracks/inbox_20260914/application-architecture.md"
         );
 
         fs::remove_dir_all(&root).ok();

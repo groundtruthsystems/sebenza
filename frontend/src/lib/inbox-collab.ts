@@ -25,21 +25,26 @@ export interface SortableItem {
   priority?: Priority;
   createdAt?: string;
   isRaw: boolean;
+  /** Requests a worktree agent is waiting on the operator for. */
+  openRequestCount?: number;
 }
 
 /**
- * The server's `inbox_order`, reproduced so a list the client re-sorts (after
+ * The server's list order, reproduced so a list the client re-sorts (after
  * a local priority change, say) never disagrees with the next fetch: priority,
- * then newest created, then id descending; unparseable items last.
+ * then items with open requests, then newest created, then id descending;
+ * unparseable items last.
  */
 export function sortInboxItems<T extends SortableItem>(items: T[]): T[] {
   const rank = (p?: Priority) => PRIORITIES.indexOf(p ?? "P2");
   const desc = (a = "", b = "") => (a < b ? 1 : a > b ? -1 : 0);
+  const waiting = (i: T) => ((i.openRequestCount ?? 0) > 0 ? 1 : 0);
   return [...items].sort((a, b) => {
     if (a.isRaw !== b.isRaw) return a.isRaw ? 1 : -1;
     if (a.isRaw) return desc(a.id, b.id);
     return (
       rank(a.priority) - rank(b.priority) ||
+      waiting(b) - waiting(a) ||
       desc(a.createdAt, b.createdAt) ||
       desc(a.id, b.id)
     );

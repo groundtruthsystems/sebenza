@@ -7,8 +7,8 @@
 use crate::services::project_manager::ProjectApp;
 use common::adapters::fs::get_worktree_storage_paths;
 use common::services::inbox_convert::{
-    ConversionRunner, ConversionTarget, NOTE_REL_PATH, ORIGIN_REL_PATH, SEBENZA_INDEX_REL_PATH,
-    WRITTEN_REL_PATHS,
+    ConversionRunner, ConversionTarget, NOTE_REL_PATH, NOTES_MANIFEST_REL_PATH, ORIGIN_REL_PATH,
+    SEBENZA_INDEX_REL_PATH, WRITTEN_REL_PATHS,
 };
 use common::services::lifecycle_service::{CreateMode, CreateWorktreesInput};
 use std::path::Path;
@@ -79,11 +79,11 @@ impl ConversionRunner for ServerConversionRunner {
     }
 
     fn write_note(&self, worktree_path: &str, body: &str) -> Result<(), String> {
-        let path = Path::new(worktree_path).join(NOTE_REL_PATH);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        std::fs::write(&path, body).map_err(|e| e.to_string())
+        write_private(worktree_path, NOTE_REL_PATH, body)
+    }
+
+    fn write_notes_manifest(&self, worktree_path: &str, json: &str) -> Result<(), String> {
+        write_private(worktree_path, NOTES_MANIFEST_REL_PATH, json)
     }
 
     fn exclude_note(&self, worktree_path: &str) -> Result<(), String> {
@@ -165,4 +165,59 @@ fn git_common_dir_of(worktree_path: &str) -> Result<String, String> {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Write `contents` to `<worktree>/<rel>` readable by the owner only (0600),
+/// tightening a file that already exists. Notes may hold PHI (T-06).
+fn write_private(worktree_path: &str, rel: &str, contents: &str) -> Result<(), String> {
+    use std::io::Write;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let path = Path::new(worktree_path).join(rel);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+        .map_err(|e| e.to_string())?;
+    file.write_all(contents.as_bytes())
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    // TS-49: the notes a conversion writes may hold PHI, so both files are
+    // owner-only, including when they replace an older, wider file.
+    #[test]
+    fn note_files_are_written_owner_only() {
+        let dir = std::env::temp_dir().join(format!("sebenza-runner-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let wt = dir.to_string_lossy().to_string();
+        std::fs::create_dir_all(dir.join(".ai/sebenza")).unwrap();
+        std::fs::write(dir.join(NOTE_REL_PATH), "old").unwrap();
+        std::fs::set_permissions(
+            dir.join(NOTE_REL_PATH),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        write_private(&wt, NOTE_REL_PATH, "# notes").unwrap();
+        write_private(&wt, NOTES_MANIFEST_REL_PATH, "{}").unwrap();
+        for rel in [NOTE_REL_PATH, NOTES_MANIFEST_REL_PATH] {
+            let meta = std::fs::metadata(dir.join(rel)).unwrap();
+            assert_eq!(meta.permissions().mode() & 0o777, 0o600, "{rel}");
+        }
+        assert_eq!(
+            std::fs::read_to_string(dir.join(NOTE_REL_PATH)).unwrap(),
+            "# notes"
+        );
+    }
 }

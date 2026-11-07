@@ -52,6 +52,9 @@ pub enum InboxEventKind {
         body: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         warnings: Vec<String>,
+        /// The plan task the agent is blocked on, when it named one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task: Option<TaskLink>,
     },
     Proposal {
         request_id: String,
@@ -93,6 +96,17 @@ pub enum InboxEventKind {
     },
     DeliveryFailed {
         request_id: String,
+        attempt: u32,
+        error: String,
+    },
+    /// An operator comment on a worktree thread reached that worktree's agent
+    /// pane. Its parent is the comment.
+    CommentDelivered {
+        attempt: u32,
+    },
+    /// Pasting an operator comment failed; the comment itself is kept. Its
+    /// parent is the comment. Older binaries skip this line when reading.
+    CommentDeliveryFailed {
         attempt: u32,
         error: String,
     },
@@ -161,6 +175,17 @@ pub struct RequestView {
     pub attempts: u32,
     pub warnings: Vec<String>,
     pub opened_at: String,
+    /// The plan task this request blocks, as the agent named it.
+    pub task: Option<TaskLink>,
+}
+
+/// A plan task a request is about: `track_id` and `task_id` from the
+/// worktree's `plan.json`. Self-declared by the agent, so display-only.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskLink {
+    pub track_id: String,
+    pub task_id: String,
 }
 
 /// Fold the log into one view per request, in the order requests were opened.
@@ -174,6 +199,7 @@ pub fn fold_requests(events: &[InboxEvent]) -> Vec<RequestView> {
             title,
             body,
             warnings,
+            task,
         } = &e.kind
         {
             if views.iter().all(|v| &v.request_id != request_id) {
@@ -195,6 +221,7 @@ pub fn fold_requests(events: &[InboxEvent]) -> Vec<RequestView> {
                     attempts: 0,
                     warnings: warnings.clone(),
                     opened_at: e.ts.clone(),
+                    task: task.clone(),
                 });
             }
             continue;
@@ -344,6 +371,7 @@ mod tests {
                 title: "Need a decision".into(),
                 body: "Which db?".into(),
                 warnings: vec![],
+                task: None,
             },
         )
     }

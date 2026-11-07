@@ -59,6 +59,13 @@ role. It is off unless `~/.ai/sebenza.yaml` has a `systemAgent:` block. No new c
 a shell stub (`crates/sebenza-server/src/services/system_agent/testdata/stub-agent.sh`), never
 the real CLI.
 
+**Inbox notes and item graph (dated 2026-11-06).** Multiple notes live in the single draft file
+as `<!-- sebenza:note id= type= title= -->` markers (draft schema v3); note and list hashes use
+the existing SHA-1 helper for concurrency only, because no new crates were added. The item graph
+is built on demand from each converted worktree's `tracks.json` / `plan.json` (no new store),
+confined to daemon-registered worktrees, and rendered client-side as Mermaid (`strict` +
+DOMPurify). Cross-repo shapes are pinned by golden fixtures in `crates/common/testdata/contracts/`.
+
 `sebenza-cli init` reports each tool's detected version, so a session-format or hook change
 that breaks history can be diagnosed against the version actually installed rather than
 guessed at. opencode moves fast — 1.18.7 → 1.18.9 was observed within a day — so the

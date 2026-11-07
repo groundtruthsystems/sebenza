@@ -207,22 +207,32 @@ pub fn resolve_tracks_dir(worktree_path: &str) -> Option<PathBuf> {
 /// Read `<worktree>/.ai/sebenza/tracks.json` (`sebenza-tracks-v1`) as parsed JSON.
 /// `None` when there is no workspace, the file is absent, or it doesn't parse.
 ///
-/// A track whose directory contains `test-plan.md` (beside `spec.md` / `design.md`)
-/// gains a response-only `test_plan_path`. `tracks.json` on disk is not rewritten.
+/// Each track gains response-only document paths for the files that are
+/// actually readable beside its other docs: `test_plan_path` and
+/// `architecture_paths`. `tracks.json` on disk is not rewritten.
 pub fn read_tracks(worktree_path: &str) -> Option<serde_json::Value> {
     let dir = resolve_tracks_dir(worktree_path)?;
     let content = fs::read_to_string(dir.join("tracks.json")).ok()?;
     let mut value: serde_json::Value = serde_json::from_str(&content).ok()?;
-    annotate_test_plan_paths(&dir, &mut value);
+    annotate_track_doc_paths(&dir, &mut value);
     Some(value)
 }
 
-/// When `test-plan.md` is readable beside a track's other docs, set
-/// `test_plan_path` on the in-memory track. A recorded path that does not
-/// resolve is dropped so the board does not offer a missing file. An explicit
-/// readable path wins; otherwise the sibling of `spec_path` / `design_path` /
-/// `plan_path`, then `./tracks/<track_id>/test-plan.md`.
-pub(crate) fn annotate_test_plan_paths(workspace: &Path, tracks: &mut serde_json::Value) {
+/// The split architecture docs a design may produce, keyed by the domain the
+/// viewer labels them with. Order is the order the viewer shows them in.
+pub const ARCHITECTURE_DOCS: [(&str, &str); 5] = [
+    ("business", "business-architecture.md"),
+    ("application", "application-architecture.md"),
+    ("data", "data-architecture.md"),
+    ("security", "security-architecture.md"),
+    ("technical", "technical-architecture.md"),
+];
+
+/// Set the response-only document paths on every track: `test_plan_path` and
+/// `architecture_paths` (`{ <domain>: <path> }`). Only files that resolve
+/// inside the workspace and exist are reported; a recorded path that does not
+/// resolve is dropped, so the board never offers a missing or escaping file.
+pub(crate) fn annotate_track_doc_paths(workspace: &Path, tracks: &mut serde_json::Value) {
     let Some(list) = tracks.get_mut("tracks").and_then(|v| v.as_array_mut()) else {
         return;
     };
@@ -230,44 +240,92 @@ pub(crate) fn annotate_test_plan_paths(workspace: &Path, tracks: &mut serde_json
         let Some(obj) = track.as_object_mut() else {
             continue;
         };
-        let candidate = test_plan_candidates(obj)
-            .into_iter()
-            .find(|path| track_file_is_file(workspace, path));
-        match candidate {
-            Some(path) => {
-                obj.insert(
-                    "test_plan_path".to_string(),
-                    serde_json::Value::String(path),
-                );
+        let recorded = |obj: &serde_json::Map<String, serde_json::Value>| {
+            obj.get("test_plan_path")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        };
+        let test_plan = first_readable(workspace, obj, recorded(obj), "test-plan.md");
+        set_or_remove(
+            obj,
+            "test_plan_path",
+            test_plan.map(serde_json::Value::String),
+        );
+
+        let mut arch = serde_json::Map::new();
+        for (domain, file) in ARCHITECTURE_DOCS {
+            let recorded = obj
+                .get("architecture_paths")
+                .and_then(|v| v.get(domain))
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            if let Some(path) = first_readable(workspace, obj, recorded, file) {
+                arch.insert(domain.to_string(), serde_json::Value::String(path));
             }
-            None => {
-                obj.remove("test_plan_path");
-            }
+        }
+        let arch = (!arch.is_empty()).then_some(serde_json::Value::Object(arch));
+        set_or_remove(obj, "architecture_paths", arch);
+    }
+}
+
+fn set_or_remove(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: Option<serde_json::Value>,
+) {
+    match value {
+        Some(v) => {
+            obj.insert(key.to_string(), v);
+        }
+        None => {
+            obj.remove(key);
         }
     }
 }
 
-fn test_plan_candidates(track: &serde_json::Map<String, serde_json::Value>) -> Vec<String> {
+/// The first readable candidate for `file_name`: an explicit recorded path,
+/// then the sibling of `spec_path` / `design_path` / `plan_path`, then
+/// `./tracks/<track_id>/<file_name>`.
+fn first_readable(
+    workspace: &Path,
+    track: &serde_json::Map<String, serde_json::Value>,
+    recorded: Option<String>,
+    file_name: &str,
+) -> Option<String> {
+    doc_candidates(track, recorded, file_name)
+        .into_iter()
+        .find(|path| track_file_is_file(workspace, path))
+}
+
+fn doc_candidates(
+    track: &serde_json::Map<String, serde_json::Value>,
+    recorded: Option<String>,
+    file_name: &str,
+) -> Vec<String> {
     let mut out = Vec::new();
-    if let Some(path) = track.get("test_plan_path").and_then(|v| v.as_str()) {
-        push_test_plan(&mut out, path);
+    if let Some(path) = recorded {
+        push_candidate(&mut out, &path);
     }
     for key in ["spec_path", "design_path", "plan_path"] {
-        if let Some(anchor) = track.get(key).and_then(|v| v.as_str()) {
-            if let Some(sibling) = test_plan_sibling(anchor) {
-                push_test_plan(&mut out, &sibling);
-            }
+        let sibling = track
+            .get(key)
+            .and_then(|v| v.as_str())
+            .and_then(|anchor| doc_sibling(anchor, file_name));
+        if let Some(sibling) = sibling {
+            push_candidate(&mut out, &sibling);
         }
     }
-    if let Some(id) = track.get("track_id").and_then(|v| v.as_str()) {
-        if let Some(path) = conventional_test_plan(id) {
-            push_test_plan(&mut out, &path);
-        }
+    let conventional = track
+        .get("track_id")
+        .and_then(|v| v.as_str())
+        .and_then(|id| conventional_doc(id, file_name));
+    if let Some(path) = conventional {
+        push_candidate(&mut out, &path);
     }
     out
 }
 
-fn push_test_plan(out: &mut Vec<String>, path: &str) {
+fn push_candidate(out: &mut Vec<String>, path: &str) {
     let path = path.trim();
     if path.is_empty() || out.iter().any(|existing| existing == path) {
         return;
@@ -275,9 +333,9 @@ fn push_test_plan(out: &mut Vec<String>, path: &str) {
     out.push(path.to_string());
 }
 
-/// `./tracks/<id>/spec.md` → `./tracks/<id>/test-plan.md`, preserving the
+/// `./tracks/<id>/spec.md` → `./tracks/<id>/<file_name>`, preserving the
 /// anchor's prefix. Rejects `..` so a hostile path field cannot escape.
-fn test_plan_sibling(anchor: &str) -> Option<String> {
+fn doc_sibling(anchor: &str, file_name: &str) -> Option<String> {
     let anchor = anchor.trim();
     let slash = anchor.rfind('/')?;
     if slash == 0 {
@@ -287,10 +345,10 @@ fn test_plan_sibling(anchor: &str) -> Option<String> {
     if parent.is_empty() || parent.split('/').any(|part| part == "..") {
         return None;
     }
-    Some(format!("{parent}/test-plan.md"))
+    Some(format!("{parent}/{file_name}"))
 }
 
-fn conventional_test_plan(track_id: &str) -> Option<String> {
+fn conventional_doc(track_id: &str, file_name: &str) -> Option<String> {
     if track_id.is_empty()
         || !track_id
             .chars()
@@ -298,7 +356,7 @@ fn conventional_test_plan(track_id: &str) -> Option<String> {
     {
         return None;
     }
-    Some(format!("./tracks/{track_id}/test-plan.md"))
+    Some(format!("./tracks/{track_id}/{file_name}"))
 }
 
 /// Read a text file at `<workspace_dir>/<rel>` (e.g. `tracks/<id>/plan.json`) — the
@@ -668,6 +726,115 @@ mod tests {
         assert_eq!(
             tracks["tracks"][0]["test_plan_path"],
             "./tracks/inbox_20260914/test-plan.md"
+        );
+
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    // TS-79: the split architecture docs present beside a track's other docs
+    // are reported as response-only `architecture_paths`; absent ones are not.
+    #[test]
+    fn read_tracks_reports_present_architecture_docs() {
+        let wt = temp_worktree();
+        let wt_str = wt.to_string_lossy().to_string();
+        let dir = wt.join(".ai").join("sebenza");
+        let track_dir = dir.join("tracks").join("arch_20261106");
+        fs::create_dir_all(&track_dir).unwrap();
+        fs::write(track_dir.join("design.md"), "# Design\n").unwrap();
+        fs::write(track_dir.join("business-architecture.md"), "# B\n").unwrap();
+        fs::write(track_dir.join("security-architecture.md"), "# S\n").unwrap();
+        let raw = r#"{"tracks":[{
+            "track_id":"arch_20261106",
+            "design_path":"./tracks/arch_20261106/design.md"
+        }]}"#;
+        fs::write(dir.join("tracks.json"), raw).unwrap();
+
+        let tracks = read_tracks(&wt_str).unwrap();
+        assert_eq!(
+            tracks["tracks"][0]["architecture_paths"],
+            serde_json::json!({
+                "business": "./tracks/arch_20261106/business-architecture.md",
+                "security": "./tracks/arch_20261106/security-architecture.md",
+            })
+        );
+        assert_eq!(fs::read_to_string(dir.join("tracks.json")).unwrap(), raw);
+
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    // TS-79: a track with no architecture docs carries no field at all.
+    #[test]
+    fn read_tracks_omits_architecture_paths_when_none_exist() {
+        let wt = temp_worktree();
+        let wt_str = wt.to_string_lossy().to_string();
+        let dir = wt.join(".ai").join("sebenza");
+        fs::create_dir_all(dir.join("tracks").join("arch_20261106")).unwrap();
+        fs::write(
+            dir.join("tracks.json"),
+            r#"{"tracks":[{"track_id":"arch_20261106","architecture_paths":{"data":"./x.md"}}]}"#,
+        )
+        .unwrap();
+
+        let tracks = read_tracks(&wt_str).unwrap();
+        assert!(tracks["tracks"][0].get("architecture_paths").is_none());
+
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    // TS-80: a recorded path that escapes the workspace or is missing is never
+    // offered; the conventional sibling is used instead when it exists.
+    #[test]
+    fn architecture_paths_never_escape_the_workspace() {
+        let wt = temp_worktree();
+        let wt_str = wt.to_string_lossy().to_string();
+        let dir = wt.join(".ai").join("sebenza");
+        let track_dir = dir.join("tracks").join("arch_20261106");
+        fs::create_dir_all(&track_dir).unwrap();
+        fs::write(wt.join(".ai").join("secret.md"), "secret").unwrap();
+        fs::write(track_dir.join("data-architecture.md"), "# D\n").unwrap();
+        fs::write(
+            dir.join("tracks.json"),
+            r#"{"tracks":[{"track_id":"arch_20261106","architecture_paths":{
+                "data":"../secret.md",
+                "technical":"../secret.md",
+                "application":"./tracks/arch_20261106/missing.md"
+            }}]}"#,
+        )
+        .unwrap();
+
+        let tracks = read_tracks(&wt_str).unwrap();
+        assert_eq!(
+            tracks["tracks"][0]["architecture_paths"],
+            serde_json::json!({ "data": "./tracks/arch_20261106/data-architecture.md" })
+        );
+
+        fs::remove_dir_all(&wt).ok();
+    }
+
+    // TS-79: an explicit, readable path recorded in tracks.json wins.
+    #[test]
+    fn architecture_paths_honour_a_readable_recorded_path() {
+        let wt = temp_worktree();
+        let wt_str = wt.to_string_lossy().to_string();
+        let dir = wt.join(".ai").join("sebenza");
+        let track_dir = dir
+            .join("tracks")
+            .join("arch_20261106")
+            .join("architecture");
+        fs::create_dir_all(&track_dir).unwrap();
+        fs::write(track_dir.join("technical.md"), "# T\n").unwrap();
+        fs::write(
+            dir.join("tracks.json"),
+            r#"{"tracks":[{"track_id":"arch_20261106","architecture_paths":{
+                "technical":"./tracks/arch_20261106/architecture/technical.md"
+            }}]}"#,
+        )
+        .unwrap();
+
+        let tracks = read_tracks(&wt_str).unwrap();
+        assert_eq!(
+            tracks["tracks"][0]["architecture_paths"]["technical"],
+            "./tracks/arch_20261106/architecture/technical.md"
         );
 
         fs::remove_dir_all(&wt).ok();

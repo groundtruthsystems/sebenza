@@ -98,6 +98,69 @@ describe("TrackDetail", () => {
     expect(fetchFile).toHaveBeenCalledWith("./tracks/inbox_20260914/test-plan.md");
   });
 
+  // TS-81: a tab per present architecture doc, none for absent ones.
+  it("shows a tab for each architecture doc the track has", async () => {
+    const BIZ = "./tracks/inbox_20260914/business-architecture.md";
+    const SEC = "./tracks/inbox_20260914/security-architecture.md";
+    const fetchFile = fetchFileFor({
+      "./tracks/inbox_20260914/spec.md": "# Spec\n\nThe requirements.",
+      [BIZ]: "# Business\n\nThe capability map.",
+      [SEC]: "# Security\n\nThe threat model.",
+    });
+    const user = userEvent.setup();
+    render(
+      <TrackDetail
+        fetchFile={fetchFile}
+        track={{ ...track, architecture_paths: { business: BIZ, security: SEC } } as Track}
+        onclose={() => {}}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("The requirements.")).toBeInTheDocument());
+
+    for (const absent of ["Application", "Data", "Technical"]) {
+      expect(screen.queryByRole("button", { name: absent })).not.toBeInTheDocument();
+    }
+    await user.click(screen.getByRole("button", { name: "Business" }));
+    await waitFor(() => expect(screen.getByText("The capability map.")).toBeInTheDocument());
+    expect(fetchFile).toHaveBeenCalledWith(BIZ);
+    await user.click(screen.getByRole("button", { name: "Security" }));
+    await waitFor(() => expect(screen.getByText("The threat model.")).toBeInTheDocument());
+  });
+
+  // TS-81: a track with no architecture docs shows no architecture tabs.
+  it("shows no architecture tabs for a track without them", async () => {
+    render(
+      <TrackDetail
+        fetchFile={fetchFileFor({ "./tracks/inbox_20260914/spec.md": "# Spec\n\nThe requirements." })}
+        track={track}
+        onclose={() => {}}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("The requirements.")).toBeInTheDocument());
+    for (const name of ["Business", "Application", "Data", "Security", "Technical"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+  });
+
+  // TS-81: opened on a track with only architecture docs, the first one shows.
+  it("opens on the first architecture doc when there is no spec or design", async () => {
+    const DATA = "./tracks/inbox_20260914/data-architecture.md";
+    render(
+      <TrackDetail
+        fetchFile={fetchFileFor({ [DATA]: "# Data\n\nThe lineage." })}
+        track={{
+          ...track,
+          spec_path: undefined,
+          design_path: undefined,
+          test_plan_path: undefined,
+          architecture_paths: { data: DATA },
+        } as Track}
+        onclose={() => {}}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("The lineage.")).toBeInTheDocument());
+  });
+
   describe("editing", () => {
     const SPEC = "./tracks/inbox_20260914/spec.md";
 
@@ -124,6 +187,28 @@ describe("TrackDetail", () => {
       };
       return { file, fetchFile, saveFile, external };
     }
+
+    // TS-82: an architecture doc is edited and saved like spec/design.
+    it("edits an architecture doc against its own path", async () => {
+      const TECH = "./tracks/inbox_20260914/technical-architecture.md";
+      const { saveFile, fetchFile } = disk("old tech");
+      const user = userEvent.setup();
+      render(
+        <TrackDetail
+          fetchFile={fetchFile}
+          saveFile={saveFile}
+          track={{ ...track, architecture_paths: { technical: TECH } } as Track}
+          onclose={() => {}}
+        />,
+      );
+      await user.click(await screen.findByRole("button", { name: "Technical" }));
+      await user.click(await screen.findByRole("button", { name: "Edit" }));
+      const editor = await screen.findByLabelText("Track document");
+      await user.clear(editor);
+      await user.type(editor, "new tech");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(saveFile).toHaveBeenCalledWith(TECH, "h1", "new tech"));
+    });
 
     it("is read-only without a saver", async () => {
       const { fetchFile } = disk("The requirements.");
