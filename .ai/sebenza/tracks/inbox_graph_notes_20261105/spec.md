@@ -43,6 +43,7 @@ Legacy items migrate without loss.
 - FR-22: The CLI gains read-only `inbox notes <id>` and `inbox graph <id>`, whose JSON equals the API.
 - FR-24: Requests accept optional `trackId`/`taskId` (agentctl `--track`/`--task`); the graph reads `current_phase_id` and task `request` fields when present.
 - FR-23: Contract fixtures live in `crates/common/testdata/contracts/` and are published to agent-extensions-skills.
+- FR-25: The track viewer shows a tab for each `business|application|data|security|technical-architecture.md` present beside the track's docs, reported as response-only `architecture_paths`.
 
 ## Non-Functional Requirements
 - NFR-01: Every note mutation passes the existing inbox guard (control token, Origin, Host).
@@ -76,6 +77,7 @@ Legacy items migrate without loss.
 - AC-19 (NFR-02, NFR-03): Path escapes are refused and the payload is redacted. TS-41, TS-42, TS-65, TS-66, TS-71
 - AC-20 (NFR-05, NFR-06): Caps and the 304 response hold. TS-43, TS-68
 - AC-22 (FR-24): Requests link to task nodes and sibling-written graph fields are honoured. TS-77, TS-78
+- AC-23 (FR-25): Present architecture docs get a tab, absent ones none, and no path escapes the workspace. TS-79, TS-80, TS-81, TS-82
 - AC-21 (PHI): The PhiNotice and convert reminder are shown, using synthetic data only. TS-56
 
 ## Out of Scope

@@ -112,6 +112,10 @@ No new tooling. The bar is the Workflow's >80% coverage on new code.
 | TS-76 | UC-01 | Frontend | P2 | Given a worktree whose agent awaits feedback, When rendered, Then a "waiting on you" badge shows | badge text |
 | TS-77 | UC-12, Contract | Integration | P1 | Given agentctl request with --track/--task, When ingested and graph built, Then RequestOpened stores them and the task node carries the request | event fields; node request |
 | TS-78 | UC-02, Contract | Unit | P1 | Given tracks.json current_phase_id and plan task request {request_id,status}, When built, Then current phase and request badge come from them | node fields |
+| TS-79 | UC-14 | Unit | P1 | Given a track dir holding some `<domain>-architecture.md` files, When tracks.json is read, Then `architecture_paths` lists exactly the present files, response-only | annotated JSON; tracks.json unchanged |
+| TS-80 | UC-14, T-02 | Unit | P1 | Given a recorded architecture path that is missing or escapes the workspace (`../`), When read, Then it is dropped or replaced by the conventional sibling | no escaping path in response |
+| TS-81 | UC-14 | Frontend | P1 | Given a track with architecture files, When the docs modal opens, Then a tab per present domain renders its file, and absent domains show no tab | tabs; fetched path |
+| TS-82 | UC-14 | Frontend | P2 | Given a track with only architecture files, When the board renders, Then the Docs button is offered; and an architecture tab is editable like the others | Docs button; save call |
 
 ## Traceability
 
@@ -135,6 +139,7 @@ No new tooling. The bar is the Workflow's >80% coverage on new code.
 | UC-11 | TS-34, TS-38 |
 | UC-12 | TS-35, TS-36, TS-77 |
 | UC-13 | TS-37, TS-72 |
+| UC-14 | TS-79, TS-80, TS-81, TS-82 |
 | T-01 (High) | TS-40 |
 | T-02 (High) | TS-41, TS-42, TS-65, TS-66, TS-71 |
 | T-05 (High) | TS-48 |

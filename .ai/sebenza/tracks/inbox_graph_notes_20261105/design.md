@@ -36,6 +36,7 @@ Primary flows are numbered `UC-nn`; alternate flows `UC-nna`.
 | UC-11 | Worktree agent | Read notes by type, e.g. the acceptance criteria |
 | UC-12 | Worktree agent | Declare task dependencies (`depends_on`) in `plan.json`, incl. cross-worktree |
 | UC-13 | System agent | Draft-help and triage see all notes, not only the first |
+| UC-14 | Operator | View a track's split architecture docs (business, application, data, security, technical) in the track viewer |
 
 Diagram is a `flowchart LR` approximation of a UML use-case diagram.
 

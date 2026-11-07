@@ -567,6 +567,56 @@
         }
       ],
       "checkpoint_sha": "1e673cd"
+    },
+    {
+      "id": "phase-9",
+      "name": "Split architecture docs in the track viewer",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-9-task-1",
+          "name": "Write tests for architecture doc paths",
+          "description": "Write failing Rust tests for the response-only architecture_paths annotation and its traversal guard.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-9-task-2",
+          "name": "Implement architecture_paths annotation",
+          "description": "Annotate each track with the readable <domain>-architecture.md files beside its other docs, in both worktree and portfolio reads.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-9-task-3",
+          "name": "Write tests for architecture tabs",
+          "description": "Write failing TrackDetail and TrackGroup tests for a tab per present architecture file.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-9-task-4",
+          "name": "Implement architecture tabs in the track viewer",
+          "description": "Add the schema field and a viewer tab per present architecture domain, editable like spec/design.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-9-task-5",
+          "name": "Execute test scenarios TS-79..TS-82",
+          "description": "Run and report TS-79..TS-82.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-79",
+            "TS-80",
+            "TS-81",
+            "TS-82"
+          ]
+        },
+        {
+          "id": "phase-9-task-6",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
     }
   ]
 }

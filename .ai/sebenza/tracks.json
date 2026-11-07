@@ -74,9 +74,9 @@
       "track_id": "inbox_graph_notes_20261105",
       "type": "feature",
       "description": "Inbox item graph view (worktrees, tracks, progress, task dependency graph) and multiple typed notes per inbox item",
-      "status": "done",
+      "status": "doing",
       "created_at": "2026-11-05T00:00:00Z",
-      "updated_at": "2026-11-06T04:49:27Z",
+      "updated_at": "2026-11-07T02:29:20Z",
       "design_path": "./tracks/inbox_graph_notes_20261105/design.md",
       "test_plan_path": "./tracks/inbox_graph_notes_20261105/test-plan.md",
       "phases_summary": [
@@ -127,12 +127,18 @@
           "name": "Final verification",
           "status": "done",
           "blocked_reason": null
+        },
+        {
+          "id": "phase-9",
+          "name": "Split architecture docs in the track viewer",
+          "status": "backlog",
+          "blocked_reason": null
         }
       ],
       "progress": {
-        "total_tasks": 46,
+        "total_tasks": 52,
         "completed_tasks": 46,
-        "percentage": 100
+        "percentage": 88
       },
       "spec_path": "./tracks/inbox_graph_notes_20261105/spec.md",
       "plan_path": "./tracks/inbox_graph_notes_20261105/plan.json"
