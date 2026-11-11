@@ -74,16 +74,16 @@
       "track_id": "software_factory_20261111",
       "type": "feature",
       "description": "Sebenza Software Factory: two-phase solution-level (inbox coordinator, analyst, architect, reviewer, approvals) and project-level (ordered architects, independent reviewer, code-review rounds) workflow, plus migration of the sebenza skills into skills/",
-      "status": "backlog",
+      "status": "doing",
       "created_at": "2026-11-11T00:00:00Z",
-      "updated_at": "2026-11-11T23:02:32Z",
+      "updated_at": "2026-11-11T23:03:34Z",
       "design_path": "./tracks/software_factory_20261111/design.md",
       "test_plan_path": "./tracks/software_factory_20261111/test-plan.md",
       "phases_summary": [
         {
           "id": "phase-1",
           "name": "Skills migration (behaviour-neutral)",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         },
         {
@@ -131,8 +131,8 @@
       ],
       "progress": {
         "total_tasks": 43,
-        "completed_tasks": 0,
-        "percentage": 0
+        "completed_tasks": 1,
+        "percentage": 2
       },
       "origin": {
         "inbox_item_id": "01M75PKDJNMCNTD4EM28NX4H0P",
@@ -140,9 +140,9 @@
         "branch": "sebenza-factory"
       },
       "request": {
-        "request_id": "01M76BWC7PGM9A5Q010V6Y9WXP",
-        "status": "resolved",
-        "raised_at": "2026-11-11T22:32:58Z"
+        "request_id": "01M76DJWY526GGWFQDCN8WW39Y",
+        "status": "open",
+        "raised_at": "2026-11-11T23:02:45Z"
       },
       "spec_path": "./tracks/software_factory_20261111/spec.md",
       "plan_path": "./tracks/software_factory_20261111/plan.json",

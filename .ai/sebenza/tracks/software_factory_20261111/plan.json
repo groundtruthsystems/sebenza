@@ -5,20 +5,21 @@
     {
       "id": "phase-1",
       "name": "Skills migration (behaviour-neutral)",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-1-task-1",
           "name": "Write structure and marketplace tests",
           "description": "Add skills/scripts tests asserting the moved tree matches MIGRATION.md and the repo marketplace names sebenza with source ./skills.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "ed55e99"
         },
         {
           "id": "phase-1-task-2",
           "name": "Move the sebenza plugin into skills/",
           "description": "Copy the plugin from gts-agent-extensions commit d5cc5a0 into skills/ unchanged, with MIGRATION.md recording source and listing.",
-          "status": "backlog",
+          "status": "doing",
           "depends_on": [
             "phase-1-task-1"
           ]
