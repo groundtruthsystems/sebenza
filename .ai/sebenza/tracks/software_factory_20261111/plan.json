@@ -19,16 +19,17 @@
           "id": "phase-1-task-2",
           "name": "Move the sebenza plugin into skills/",
           "description": "Copy the plugin from gts-agent-extensions commit d5cc5a0 into skills/ unchanged, with MIGRATION.md recording source and listing.",
-          "status": "doing",
+          "status": "done",
           "depends_on": [
             "phase-1-task-1"
-          ]
+          ],
+          "commit_sha": "6b15679"
         },
         {
           "id": "phase-1-task-3",
           "name": "Add repo marketplace, CI and install wiring",
           "description": "Add .claude-plugin/marketplace.json, ci.yml running cargo, frontend and python tests, install.sh --with-plugin and the workflow.md python command.",
-          "status": "backlog",
+          "status": "doing",
           "depends_on": [
             "phase-1-task-1"
           ]
