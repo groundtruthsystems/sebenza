@@ -5,7 +5,7 @@
     {
       "id": "phase-1",
       "name": "Skills migration (behaviour-neutral)",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -63,9 +63,11 @@
           "id": "phase-1-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "11fd0b3"
         }
-      ]
+      ],
+      "checkpoint_sha": "11fd0b3"
     },
     {
       "id": "phase-2",
