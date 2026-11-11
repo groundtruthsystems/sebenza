@@ -103,6 +103,25 @@ Each flag has a matching environment variable — `SEBENZA_INSTALL_DIR`,
 `SEBENZA_VERSION`, `SEBENZA_REPO` — and `GITHUB_TOKEN` is used for the release
 lookup when set. Re-running the script upgrades an existing install in place.
 
+#### Sebenza skills for Claude Code
+
+The Sebenza workflow skills (`sebenza-architect`, `-plan`, `-implement`,
+`-review`, `-revert`, `-setup`, `-status`), their specialist architect agents and
+inbox hooks live in this repository under [`skills/`](skills/). The repository
+root is a Claude Code marketplace named `sebenza`, with one plugin, also named
+`sebenza`:
+
+```bash
+claude plugin marketplace add groundtruthsystems/sebenza   # or a path to a local clone
+claude plugin install sebenza@sebenza
+```
+
+On Claude Code 2.1.275 or later this is one step:
+`/plugin install sebenza --marketplace groundtruthsystems/sebenza`.
+`install.sh --with-plugin` does the same after installing the binaries. The
+plugin used to be `sebenza@gts-agent-skills`; see
+[`skills/MIGRATION.md`](skills/MIGRATION.md) for where it came from.
+
 ### 3. Configure a project
 
 Every repo Sebenza serves needs a `.ai/sebenza.yaml`. From inside your project:
@@ -487,6 +506,7 @@ cd frontend && npm run dev        # http://localhost:5112
 # Tests
 cargo test                        # Rust workspace
 cd frontend && npm test           # frontend (vitest)
+python3 -m unittest discover -s skills/scripts   # skills plugin (stdlib only)
 ```
 
 See [`CLAUDE.md`](CLAUDE.md) for AI-assistant / contribution guidance.

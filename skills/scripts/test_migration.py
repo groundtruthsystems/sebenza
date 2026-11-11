@@ -76,6 +76,15 @@ class Marketplace(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(PLUGIN, "scripts", "inbox.py")))
 
 
+    def test_install_script_and_readme_use_the_stable_ids(self):
+        with open(os.path.join(REPO, "scripts", "install.sh"), encoding="utf-8") as fh:
+            install = fh.read()
+        self.assertIn("--with-plugin", install)
+        self.assertIn('PLUGIN_ID="sebenza@sebenza"', install)
+        with open(os.path.join(REPO, "README.md"), encoding="utf-8") as fh:
+            self.assertIn("claude plugin install sebenza@sebenza", fh.read())
+
+
 class Layout(unittest.TestCase):
     """TS-34/TS-35: structure intact, provenance recorded."""
 

@@ -86,6 +86,7 @@ All tasks follow a strict lifecycle:
     ```bash
     cd frontend && npm run test:coverage    # vitest + @vitest/coverage-v8
     cargo test                              # Rust (add cargo-llvm-cov if installed)
+    python3 -m unittest discover -s skills/scripts   # Sebenza skills plugin (stdlib only)
     ```
 
     Target: >80% coverage for new code.
@@ -183,7 +184,7 @@ that also concludes a phase in `plan.json`.
     -   Before execution, you **must** announce the exact shell command you will
         use to run the tests.
     -   **Example Announcement:** "I will now run the automated test suite to
-        verify the phase. **Command:** `cargo test && cd frontend && CI=true npm test`"
+        verify the phase. **Command:** `cargo test && python3 -m unittest discover -s skills/scripts && cd frontend && CI=true npm test`"
     -   Execute the announced command.
     -   If tests fail, you **must** inform the user and begin debugging. You may
         attempt to propose a fix a **maximum of two times**. If the tests still
