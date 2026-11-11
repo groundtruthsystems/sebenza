@@ -72,6 +72,74 @@ fn resolve_optional_tool(tool: &str) -> Option<String> {
     })
 }
 
+/// Plugin id of the Sebenza skills: marketplace `sebenza` (this repository's
+/// root) publishing plugin `sebenza` from `skills/`. Stable: other repositories'
+/// docs point users at it.
+const SEBENZA_PLUGIN_ID: &str = "sebenza@sebenza";
+/// Where the skills were installed from before they moved into this repository.
+const LEGACY_PLUGIN_ID: &str = "sebenza@gts-agent-skills";
+
+#[derive(Debug, PartialEq, Eq)]
+enum PluginStatus {
+    Installed { version: Option<String> },
+    Legacy,
+    Missing,
+}
+
+/// Classify Claude Code's `installed_plugins.json`. Pure, so it is testable
+/// without a Claude install; a missing or unreadable file means not installed.
+fn sebenza_plugin_status(installed_plugins_json: Option<&str>) -> PluginStatus {
+    let Some(doc) = installed_plugins_json
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+    else {
+        return PluginStatus::Missing;
+    };
+    let plugins = &doc["plugins"];
+    if let Some(entries) = plugins.get(SEBENZA_PLUGIN_ID) {
+        let version = entries
+            .as_array()
+            .and_then(|list| list.iter().find_map(|e| e["version"].as_str()))
+            .map(str::to_string);
+        return PluginStatus::Installed { version };
+    }
+    if plugins.get(LEGACY_PLUGIN_ID).is_some() {
+        return PluginStatus::Legacy;
+    }
+    PluginStatus::Missing
+}
+
+fn plugin_status_line(status: &PluginStatus) -> String {
+    let install = format!(
+        "claude plugin marketplace add groundtruthsystems/sebenza && claude plugin install {SEBENZA_PLUGIN_ID}"
+    );
+    match status {
+        PluginStatus::Installed { version: Some(v) } => {
+            format!("  ✓ Sebenza skills plugin ({SEBENZA_PLUGIN_ID} {v})")
+        }
+        PluginStatus::Installed { version: None } => {
+            format!("  ✓ Sebenza skills plugin ({SEBENZA_PLUGIN_ID})")
+        }
+        PluginStatus::Legacy => format!(
+            "  ○ Sebenza skills plugin — installed from the old marketplace ({LEGACY_PLUGIN_ID}); \
+             the skills now ship from this repository. Switch with: {install}"
+        ),
+        PluginStatus::Missing => {
+            format!("  ○ Sebenza skills plugin — not installed (optional). Install with: {install}")
+        }
+    }
+}
+
+fn report_sebenza_plugin() {
+    let text = std::env::var_os("HOME").and_then(|home| {
+        std::fs::read_to_string(Path::new(&home).join(".claude/plugins/installed_plugins.json"))
+            .ok()
+    });
+    println!(
+        "{}",
+        plugin_status_line(&sebenza_plugin_status(text.as_deref()))
+    );
+}
+
 /// Best-effort `--version`. Reported so a user can see WHICH version they have when a
 /// session-format or hook change breaks history, rather than guessing.
 fn tool_version(path: &str) -> Option<String> {
@@ -149,6 +217,11 @@ pub fn run(cwd: &str) -> i32 {
         } else {
             println!("  gh is installed but not authenticated. Run: gh auth login");
         }
+    }
+
+    // Step 3b — the Sebenza skills plugin for Claude Code (informational).
+    if which("claude") {
+        report_sebenza_plugin();
     }
 
     // Step 4 — config.
@@ -233,6 +306,49 @@ mod tests {
         // claude and codex install onto PATH, so they need no fallback.
         assert!(home_relative_candidates("claude").is_empty());
         assert!(home_relative_candidates("codex").is_empty());
+    }
+
+    /// The skills ship from this repository as `sebenza@sebenza` (track
+    /// software_factory_20261111, AC-M.0); `init` must say which one is installed.
+    #[test]
+    fn plugin_status_finds_the_sebenza_marketplace_install() {
+        let json =
+            r#"{"version":2,"plugins":{"sebenza@sebenza":[{"scope":"user","version":"1.1.0"}]}}"#;
+        assert_eq!(
+            sebenza_plugin_status(Some(json)),
+            PluginStatus::Installed {
+                version: Some("1.1.0".into())
+            }
+        );
+    }
+
+    #[test]
+    fn plugin_status_flags_the_old_gts_marketplace_install() {
+        let json = r#"{"version":2,"plugins":{"sebenza@gts-agent-skills":[{"scope":"local"}]}}"#;
+        assert_eq!(sebenza_plugin_status(Some(json)), PluginStatus::Legacy);
+    }
+
+    #[test]
+    fn plugin_status_is_missing_without_a_file_an_entry_or_valid_json() {
+        assert_eq!(sebenza_plugin_status(None), PluginStatus::Missing);
+        assert_eq!(
+            sebenza_plugin_status(Some("not json")),
+            PluginStatus::Missing
+        );
+        let other = r#"{"version":2,"plugins":{"kaituhi@gts-agent-skills":[{}]}}"#;
+        assert_eq!(sebenza_plugin_status(Some(other)), PluginStatus::Missing);
+    }
+
+    #[test]
+    fn plugin_status_lines_name_the_stable_install_commands() {
+        let missing = plugin_status_line(&PluginStatus::Missing);
+        assert!(
+            missing.contains("claude plugin install sebenza@sebenza"),
+            "{missing}"
+        );
+        let legacy = plugin_status_line(&PluginStatus::Legacy);
+        assert!(legacy.contains("sebenza@gts-agent-skills"), "{legacy}");
+        assert!(legacy.contains("sebenza@sebenza"), "{legacy}");
     }
 
     #[test]

@@ -7,3 +7,4 @@ frontend/dist/
 .ai/sebenza/inbox-origin.json
 .ai/sebenza/inbox-notes.json
 .ai/sebenza/inbox-note.md
+__pycache__/
