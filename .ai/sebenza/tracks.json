@@ -76,7 +76,7 @@
       "description": "Sebenza Software Factory: two-phase solution-level (inbox coordinator, analyst, architect, reviewer, approvals) and project-level (ordered architects, independent reviewer, code-review rounds) workflow, plus migration of the sebenza skills into skills/",
       "status": "doing",
       "created_at": "2026-11-11T00:00:00Z",
-      "updated_at": "2026-11-11T23:10:53Z",
+      "updated_at": "2026-11-11T23:11:13Z",
       "design_path": "./tracks/software_factory_20261111/design.md",
       "test_plan_path": "./tracks/software_factory_20261111/test-plan.md",
       "phases_summary": [
@@ -131,8 +131,8 @@
       ],
       "progress": {
         "total_tasks": 43,
-        "completed_tasks": 4,
-        "percentage": 9
+        "completed_tasks": 5,
+        "percentage": 12
       },
       "origin": {
         "inbox_item_id": "01M75PKDJNMCNTD4EM28NX4H0P",

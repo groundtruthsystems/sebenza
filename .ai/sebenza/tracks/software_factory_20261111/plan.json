@@ -49,14 +49,15 @@
           "id": "phase-1-task-5",
           "name": "Execute test scenarios TS-63, TS-34, TS-35, TS-36, TS-46",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
-          "status": "doing",
+          "status": "done",
           "test_scenarios": [
             "TS-63",
             "TS-34",
             "TS-35",
             "TS-36",
             "TS-46"
-          ]
+          ],
+          "commit_sha": "c7f5e50"
         },
         {
           "id": "phase-1-task-6",
