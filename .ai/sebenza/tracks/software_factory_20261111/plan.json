@@ -39,16 +39,17 @@
           "id": "phase-1-task-4",
           "name": "Report plugin presence in sebenza-cli init",
           "description": "Make sebenza-cli init report whether the sebenza plugin is installed.",
-          "status": "doing",
+          "status": "done",
           "depends_on": [
             "phase-1-task-1"
-          ]
+          ],
+          "commit_sha": "dd59be2"
         },
         {
           "id": "phase-1-task-5",
           "name": "Execute test scenarios TS-63, TS-34, TS-35, TS-36, TS-46",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-63",
             "TS-34",
