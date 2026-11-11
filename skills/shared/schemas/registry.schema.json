@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sebenza-registry-v1",
+  "title": "Sebenza Daemon Registry Schema",
+  "description": "JSON schema for central daemon registry tracking multiple projects",
+  "type": "object",
+  "required": ["$schema", "version", "projects"],
+  "properties": {
+    "$schema": {
+      "const": "sebenza-registry-v1"
+    },
+    "version": {
+      "type": "string",
+      "const": "1.0"
+    },
+    "projects": {
+      "type": "array",
+      "description": "Registered projects",
+      "items": {
+        "$ref": "#/$defs/project"
+      }
+    }
+  },
+  "$defs": {
+    "project": {
+      "type": "object",
+      "required": ["name", "path", "tracks_file", "registered_at", "last_synced"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Project name"
+        },
+        "path": {
+          "type": "string",
+          "description": "Absolute path to project root"
+        },
+        "tracks_file": {
+          "type": "string",
+          "description": "Absolute path to project's tracks.json"
+        },
+        "worktree": {
+          "type": "string",
+          "description": "Worktree identifier when this entry is a linked git worktree; absent for a main checkout"
+        },
+        "repo_path": {
+          "type": "string",
+          "description": "Absolute path to the main checkout root when this entry is a linked git worktree; absent for a main checkout"
+        },
+        "registered_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When project was registered"
+        },
+        "last_synced": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last time project data was synced"
+        }
+      }
+    }
+  }
+}

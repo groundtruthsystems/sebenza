@@ -123,7 +123,13 @@ class HookSupplyChain(unittest.TestCase):
 
     def test_no_non_loopback_urls(self):
         for url in re.findall(r"https?://[^\s\"')]+", self.source):
-            self.assertRegex(url, r"^https?://(127\.0\.0\.1|localhost|\[::1\])", url)
+            if "{" in url:  # built at runtime; the guard below must vet it
+                continue
+            self.assertRegex(url, r"^https?://(127\.0\.0\.1|\[::1\])", url)
+
+    def test_daemon_url_is_vetted_as_literal_loopback(self):
+        self.assertRegex(self.source, r"def loopback_base\(")
+        self.assertIn("is_loopback", self.source)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,38 @@
+{
+  "description": "Sebenza's inbox nervous system. SessionStart puts pending operator answers and comments in front of the agent before any other work; Stop and SubagentStop refuse to end a turn while a blocked item has no inbox request, so the operator always learns that input is needed. All three fail open: no inbox, no daemon, no python3 or any error means silence, and the Stop block is capped at two per session.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v python3 >/dev/null 2>&1 || exit 0; exec python3 \"$CLAUDE_PLUGIN_ROOT/scripts/inbox.py\" hook session-start",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v python3 >/dev/null 2>&1 || exit 0; exec python3 \"$CLAUDE_PLUGIN_ROOT/scripts/inbox.py\" hook stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "command -v python3 >/dev/null 2>&1 || exit 0; exec python3 \"$CLAUDE_PLUGIN_ROOT/scripts/inbox.py\" hook subagent-stop",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}
