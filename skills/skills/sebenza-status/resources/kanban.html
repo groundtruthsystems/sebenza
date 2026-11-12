@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sebenza Kanban Board</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --border-color: #30363d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --accent-blue: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-yellow: #d29922;
+            --accent-red: #f85149;
+            --accent-purple: #a371f7;
+            --column-backlog: #30363d;
+            --column-doing: #1f6feb;
+            --column-blocked: #f85149;
+            --column-unblocked: #d29922;
+            --column-done: #238636;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+        }
+
+        .header {
+            background-color: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            font-size: 20px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .btn {
+            background-color: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 8px 16px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.2s;
+        }
+
+        .btn:hover {
+            background-color: var(--border-color);
+        }
+
+        .btn-primary {
+            background-color: var(--accent-green);
+            border-color: var(--accent-green);
+        }
+
+        .btn-primary:hover {
+            background-color: #2ea043;
+        }
+
+        .project-info {
+            padding: 12px 24px;
+            background-color: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .project-name {
+            font-weight: 600;
+            color: var(--accent-blue);
+        }
+
+        .worktree-badge {
+            display: none;
+            margin-left: 8px;
+            padding: 2px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .stats {
+            display: flex;
+            gap: 24px;
+        }
+
+        .stat {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .stat-value {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .kanban-container {
+            display: flex;
+            gap: 0;
+            padding: 0;
+            overflow-x: auto;
+            min-height: calc(100vh - 120px);
+        }
+
+        .kanban-column {
+            min-width: 280px;
+            flex: 1;
+            background-color: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .kanban-column:last-child {
+            border-right: none;
+        }
+
+        .column-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            background-color: var(--bg-secondary);
+            z-index: 10;
+        }
+
+        .column-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .column-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .column-backlog .column-indicator { background-color: var(--column-backlog); }
+        .column-doing .column-indicator { background-color: var(--column-doing); }
+        .column-blocked .column-indicator { background-color: var(--column-blocked); }
+        .column-unblocked .column-indicator { background-color: var(--column-unblocked); }
+        .column-done .column-indicator { background-color: var(--column-done); }
+
+        .column-count {
+            background-color: var(--bg-tertiary);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .column-content {
+            flex: 1;
+            padding: 12px;
+            overflow-y: auto;
+        }
+
+        .swimlane {
+            margin-bottom: 16px;
+        }
+
+        .swimlane-header {
+            padding: 8px 12px;
+            background-color: var(--bg-tertiary);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .swimlane-title {
+            font-size: 13px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .track-type {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .track-type-feature { background-color: rgba(88, 166, 255, 0.2); color: var(--accent-blue); }
+        .track-type-bug { background-color: rgba(248, 81, 73, 0.2); color: var(--accent-red); }
+        .track-type-chore { background-color: rgba(139, 148, 158, 0.2); color: var(--text-secondary); }
+        .track-type-refactor { background-color: rgba(163, 113, 247, 0.2); color: var(--accent-purple); }
+
+        .progress-bar {
+            width: 60px;
+            height: 4px;
+            background-color: var(--bg-primary);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background-color: var(--accent-green);
+            transition: width 0.3s ease;
+        }
+
+        .phase-card {
+            background-color: var(--bg-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 12px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: border-color 0.2s, transform 0.2s;
+        }
+
+        .phase-card:hover {
+            border-color: var(--accent-blue);
+            transform: translateY(-1px);
+        }
+
+        .phase-card.blocked {
+            border-color: var(--accent-red);
+            border-width: 2px;
+        }
+
+        .phase-name {
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .phase-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .task-count {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .blocked-reason {
+            background-color: rgba(248, 81, 73, 0.1);
+            border: 1px solid var(--accent-red);
+            border-radius: 4px;
+            padding: 8px;
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--accent-red);
+        }
+
+        .detail-panel {
+            position: fixed;
+            right: -400px;
+            top: 0;
+            width: 400px;
+            height: 100vh;
+            background-color: var(--bg-secondary);
+            border-left: 1px solid var(--border-color);
+            transition: right 0.3s ease;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .detail-panel.open {
+            right: 0;
+        }
+
+        .detail-header {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .detail-title {
+            font-weight: 600;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 20px;
+        }
+
+        .detail-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+        }
+
+        .detail-section {
+            margin-bottom: 24px;
+        }
+
+        .detail-section h3 {
+            font-size: 12px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+        }
+
+        .task-list {
+            list-style: none;
+        }
+
+        .task-item {
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+        }
+
+        .task-status-icon {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        .task-status-icon.backlog { background-color: var(--column-backlog); }
+        .task-status-icon.doing { background-color: var(--column-doing); }
+        .task-status-icon.blocked { background-color: var(--column-blocked); }
+        .task-status-icon.unblocked { background-color: var(--column-unblocked); }
+        .task-status-icon.done { background-color: var(--column-done); }
+
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s, visibility 0.3s;
+            z-index: 99;
+        }
+
+        .overlay.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state svg {
+            width: 48px;
+            height: 48px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        #file-input {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <h1>
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="7" height="7"></rect>
+                <rect x="14" y="3" width="7" height="7"></rect>
+                <rect x="14" y="14" width="7" height="7"></rect>
+                <rect x="3" y="14" width="7" height="7"></rect>
+            </svg>
+            Sebenza Kanban
+        </h1>
+        <div class="header-actions">
+            <input type="file" id="file-input" accept=".json" multiple>
+            <button class="btn" onclick="document.getElementById('file-input').click()">Load tracks.json</button>
+            <button class="btn" onclick="loadRegistry()">Load Registry</button>
+            <button class="btn btn-primary" onclick="loadSampleData()">Load Sample</button>
+        </div>
+    </header>
+
+    <div class="project-info" id="project-info" style="display: none;">
+        <div>
+            <span class="project-name" id="project-name">Project Name</span>
+            <span class="worktree-badge" id="project-worktree" title="Linked git worktree"></span>
+        </div>
+        <div class="stats">
+            <div class="stat">
+                <span>Tracks:</span>
+                <span class="stat-value" id="stat-tracks">0</span>
+            </div>
+            <div class="stat">
+                <span>Tasks:</span>
+                <span class="stat-value" id="stat-tasks">0/0</span>
+            </div>
+            <div class="stat">
+                <span>Progress:</span>
+                <span class="stat-value" id="stat-progress">0%</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="kanban-container">
+        <div class="kanban-column column-backlog">
+            <div class="column-header">
+                <div class="column-title">
+                    <div class="column-indicator"></div>
+                    Backlog
+                </div>
+                <span class="column-count" id="count-backlog">0</span>
+            </div>
+            <div class="column-content" id="column-backlog"></div>
+        </div>
+
+        <div class="kanban-column column-doing">
+            <div class="column-header">
+                <div class="column-title">
+                    <div class="column-indicator"></div>
+                    Doing
+                </div>
+                <span class="column-count" id="count-doing">0</span>
+            </div>
+            <div class="column-content" id="column-doing"></div>
+        </div>
+
+        <div class="kanban-column column-blocked">
+            <div class="column-header">
+                <div class="column-title">
+                    <div class="column-indicator"></div>
+                    Blocked
+                </div>
+                <span class="column-count" id="count-blocked">0</span>
+            </div>
+            <div class="column-content" id="column-blocked"></div>
+        </div>
+
+        <div class="kanban-column column-unblocked">
+            <div class="column-header">
+                <div class="column-title">
+                    <div class="column-indicator"></div>
+                    Unblocked
+                </div>
+                <span class="column-count" id="count-unblocked">0</span>
+            </div>
+            <div class="column-content" id="column-unblocked"></div>
+        </div>
+
+        <div class="kanban-column column-done">
+            <div class="column-header">
+                <div class="column-title">
+                    <div class="column-indicator"></div>
+                    Done
+                </div>
+                <span class="column-count" id="count-done">0</span>
+            </div>
+            <div class="column-content" id="column-done"></div>
+        </div>
+    </div>
+
+    <div class="overlay" id="overlay" onclick="closeDetail()"></div>
+
+    <div class="detail-panel" id="detail-panel">
+        <div class="detail-header">
+            <div class="detail-title" id="detail-title">Phase Details</div>
+            <button class="close-btn" onclick="closeDetail()">&times;</button>
+        </div>
+        <div class="detail-content" id="detail-content"></div>
+    </div>
+
+    <script>
+        let tracksData = null;
+
+        document.getElementById('file-input').addEventListener('change', handleFileSelect);
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeDetail();
+        });
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    try {
+                        const data = JSON.parse(e.target.result);
+                        if (data.$schema === 'sebenza-tracks-v1') {
+                            tracksData = data;
+                            renderKanban();
+                        } else if (data.$schema === 'sebenza-registry-v1') {
+                            alert('Registry loaded. Select a project to view.');
+                        }
+                    } catch (err) {
+                        alert('Invalid JSON file');
+                    }
+                };
+                reader.readAsText(file);
+            }
+        }
+
+        function loadRegistry() {
+            alert('To load from ~/.ai/sebenza/registry.json, the kanban needs to be served from a backend that can access the filesystem. For now, use "Load tracks.json" to load a specific project.');
+        }
+
+        function loadSampleData() {
+            tracksData = {
+                "$schema": "sebenza-tracks-v1",
+                "version": "1.0",
+                "project": {
+                    "name": "my-awesome-project",
+                    "path": "/home/user/projects/my-awesome-project",
+                    "registered_at": "2025-01-28T10:00:00Z"
+                },
+                "tracks": [
+                    {
+                        "track_id": "auth_20250128",
+                        "type": "feature",
+                        "description": "Implement user authentication",
+                        "status": "doing",
+                        "blocked_reason": null,
+                        "created_at": "2025-01-28T10:00:00Z",
+                        "updated_at": "2025-01-28T14:30:00Z",
+                        "plan_path": "./tracks/auth_20250128/plan.json",
+                        "spec_path": "./tracks/auth_20250128/spec.md",
+                        "phases_summary": [
+                            { "id": "phase-1", "name": "Setup Auth Module", "status": "done", "blocked_reason": null },
+                            { "id": "phase-2", "name": "Implement Login", "status": "doing", "blocked_reason": null },
+                            { "id": "phase-3", "name": "Implement Logout", "status": "backlog", "blocked_reason": null }
+                        ],
+                        "progress": { "total_tasks": 8, "completed_tasks": 3, "percentage": 37.5 }
+                    },
+                    {
+                        "track_id": "bugfix_20250128",
+                        "type": "bug",
+                        "description": "Fix memory leak in data processor",
+                        "status": "blocked",
+                        "blocked_reason": "Need clarification on expected memory limits",
+                        "created_at": "2025-01-28T11:00:00Z",
+                        "updated_at": "2025-01-28T15:00:00Z",
+                        "plan_path": "./tracks/bugfix_20250128/plan.json",
+                        "spec_path": "./tracks/bugfix_20250128/spec.md",
+                        "phases_summary": [
+                            { "id": "phase-1", "name": "Identify Leak Source", "status": "done", "blocked_reason": null },
+                            { "id": "phase-2", "name": "Implement Fix", "status": "blocked", "blocked_reason": "Need clarification on expected memory limits" }
+                        ],
+                        "progress": { "total_tasks": 4, "completed_tasks": 1, "percentage": 25 }
+                    },
+                    {
+                        "track_id": "dashboard_20250127",
+                        "type": "feature",
+                        "description": "Build analytics dashboard",
+                        "status": "backlog",
+                        "blocked_reason": null,
+                        "created_at": "2025-01-27T09:00:00Z",
+                        "updated_at": "2025-01-27T09:00:00Z",
+                        "plan_path": "./tracks/dashboard_20250127/plan.json",
+                        "spec_path": "./tracks/dashboard_20250127/spec.md",
+                        "phases_summary": [
+                            { "id": "phase-1", "name": "Design UI Components", "status": "backlog", "blocked_reason": null },
+                            { "id": "phase-2", "name": "Implement Charts", "status": "backlog", "blocked_reason": null },
+                            { "id": "phase-3", "name": "Connect to API", "status": "backlog", "blocked_reason": null }
+                        ],
+                        "progress": { "total_tasks": 12, "completed_tasks": 0, "percentage": 0 }
+                    },
+                    {
+                        "track_id": "refactor_20250125",
+                        "type": "refactor",
+                        "description": "Refactor database access layer",
+                        "status": "done",
+                        "blocked_reason": null,
+                        "created_at": "2025-01-25T10:00:00Z",
+                        "updated_at": "2025-01-27T16:00:00Z",
+                        "plan_path": "./tracks/refactor_20250125/plan.json",
+                        "spec_path": "./tracks/refactor_20250125/spec.md",
+                        "phases_summary": [
+                            { "id": "phase-1", "name": "Create Repository Pattern", "status": "done", "blocked_reason": null },
+                            { "id": "phase-2", "name": "Migrate Queries", "status": "done", "blocked_reason": null }
+                        ],
+                        "progress": { "total_tasks": 6, "completed_tasks": 6, "percentage": 100 }
+                    }
+                ]
+            };
+            renderKanban();
+        }
+
+        function renderKanban() {
+            if (!tracksData) return;
+
+            // Update project info
+            document.getElementById('project-info').style.display = 'flex';
+            document.getElementById('project-name').textContent = tracksData.project.name;
+
+            // Linked git worktree, if any
+            const worktreeBadge = document.getElementById('project-worktree');
+            const worktree = tracksData.project.worktree;
+            worktreeBadge.textContent = worktree ? `⑃ ${worktree}` : '';
+            worktreeBadge.style.display = worktree ? 'inline-block' : 'none';
+
+            // Calculate stats
+            const totalTracks = tracksData.tracks.length;
+            let totalTasks = 0;
+            let completedTasks = 0;
+            tracksData.tracks.forEach(t => {
+                totalTasks += t.progress.total_tasks;
+                completedTasks += t.progress.completed_tasks;
+            });
+            const percentage = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+
+            document.getElementById('stat-tracks').textContent = totalTracks;
+            document.getElementById('stat-tasks').textContent = `${completedTasks}/${totalTasks}`;
+            document.getElementById('stat-progress').textContent = `${percentage}%`;
+
+            // Clear columns
+            const columns = ['backlog', 'doing', 'blocked', 'unblocked', 'done'];
+            columns.forEach(col => {
+                document.getElementById(`column-${col}`).innerHTML = '';
+            });
+
+            // Group phases by status
+            const phaseCounts = { backlog: 0, doing: 0, blocked: 0, unblocked: 0, done: 0 };
+
+            // Render each track as a swimlane
+            tracksData.tracks.forEach(track => {
+                // A track registered during the design stage has no plan yet, so no phases.
+                // Show it in its own status column instead of dropping it off the board.
+                if (!track.phases_summary || track.phases_summary.length === 0) {
+                    const swimlane = createSwimlane(track, [], track.status);
+                    swimlane.appendChild(createPlaceholderCard(track));
+                    document.getElementById(`column-${track.status}`).appendChild(swimlane);
+                    return;
+                }
+                columns.forEach(status => {
+                    const phases = track.phases_summary.filter(p => p.status === status);
+                    if (phases.length > 0) {
+                        const swimlane = createSwimlane(track, phases, status);
+                        document.getElementById(`column-${status}`).appendChild(swimlane);
+                        phaseCounts[status] += phases.length;
+                    }
+                });
+            });
+
+            // Update counts
+            columns.forEach(col => {
+                document.getElementById(`count-${col}`).textContent = phaseCounts[col];
+            });
+        }
+
+        function createSwimlane(track, phases, status) {
+            const swimlane = document.createElement('div');
+            swimlane.className = 'swimlane';
+
+            const header = document.createElement('div');
+            header.className = 'swimlane-header';
+            header.innerHTML = `
+                <div class="swimlane-title">
+                    <span class="track-type track-type-${track.type}">${track.type}</span>
+                    ${track.track_id}
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: ${track.progress.percentage}%"></div>
+                </div>
+            `;
+            swimlane.appendChild(header);
+
+            phases.forEach(phase => {
+                const card = createPhaseCard(track, phase);
+                swimlane.appendChild(card);
+            });
+
+            return swimlane;
+        }
+
+        // Card for a track that has no plan yet (design stage, or planned but empty).
+        function createPlaceholderCard(track) {
+            const card = document.createElement('div');
+            card.className = 'phase-card';
+            const stage = track.design_path
+                ? 'In design — no plan yet'
+                : 'No plan yet';
+            card.innerHTML = `
+                <div class="phase-name">${stage}</div>
+                <div class="phase-meta">
+                    <span class="task-count">${track.description || ''}</span>
+                </div>
+            `;
+            return card;
+        }
+
+        function createPhaseCard(track, phase) {
+            const card = document.createElement('div');
+            card.className = 'phase-card' + (phase.status === 'blocked' ? ' blocked' : '');
+            card.onclick = () => openDetail(track, phase);
+
+            let html = `
+                <div class="phase-name">${phase.name}</div>
+                <div class="phase-meta">
+                    <span class="task-count">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M9 11l3 3L22 4"></path>
+                            <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>
+                        </svg>
+                        Phase ${phase.id.replace('phase-', '')}
+                    </span>
+                </div>
+            `;
+
+            if (phase.blocked_reason) {
+                html += `<div class="blocked-reason">${phase.blocked_reason}</div>`;
+            }
+
+            card.innerHTML = html;
+            return card;
+        }
+
+        function openDetail(track, phase) {
+            document.getElementById('detail-title').textContent = phase.name;
+
+            let content = `
+                <div class="detail-section">
+                    <h3>Track</h3>
+                    <p>${track.description}</p>
+                    <p style="color: var(--text-secondary); font-size: 12px; margin-top: 4px;">${track.track_id}</p>
+                </div>
+                <div class="detail-section">
+                    <h3>Status</h3>
+                    <p style="text-transform: capitalize;">${phase.status}</p>
+                </div>
+            `;
+
+            if (phase.blocked_reason) {
+                content += `
+                    <div class="detail-section">
+                        <h3>Blocked Reason</h3>
+                        <div class="blocked-reason">${phase.blocked_reason}</div>
+                    </div>
+                `;
+            }
+
+            content += `
+                <div class="detail-section">
+                    <h3>Progress</h3>
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <div class="progress-bar" style="flex: 1; height: 8px;">
+                            <div class="progress-fill" style="width: ${track.progress.percentage}%"></div>
+                        </div>
+                        <span>${track.progress.completed_tasks}/${track.progress.total_tasks}</span>
+                    </div>
+                </div>
+                <div class="detail-section">
+                    <h3>Files</h3>
+                    <p style="font-family: monospace; font-size: 12px;">${track.spec_path}</p>
+                    <p style="font-family: monospace; font-size: 12px;">${track.plan_path}</p>
+                </div>
+            `;
+
+            document.getElementById('detail-content').innerHTML = content;
+            document.getElementById('detail-panel').classList.add('open');
+            document.getElementById('overlay').classList.add('visible');
+        }
+
+        function closeDetail() {
+            document.getElementById('detail-panel').classList.remove('open');
+            document.getElementById('overlay').classList.remove('visible');
+        }
+    </script>
+</body>
+</html>

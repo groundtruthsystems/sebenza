@@ -1,0 +1,86 @@
+{
+  "$schema": "sebenza-plan-v1",
+  "track_id": "docs_hygiene_20260727",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Realign agent-facing documentation",
+      "status": "done",
+      "blocked_reason": null,
+      "checkpoint_sha": "8906a52",
+      "tasks": [
+        {
+          "id": "phase-1-task-1",
+          "name": "Capture baseline acceptance checks (Red)",
+          "description": "Run the three acceptance checks and record the current failures in the track before editing anything: (a) stale-reference grep `git grep -in conductor -- . ':!documentation/'`; (b) path-existence check over every path named in CLAUDE.md; (c) relative-link resolution across CLAUDE.md, README.md and QUICKSTART.md. This is the Red phase equivalent per workflow.md step 3 — it proves the checks are meaningful.",
+          "status": "done",
+          "commit_sha": "e6f8ad5"
+        },
+        {
+          "id": "phase-1-task-2",
+          "name": "Rewrite CLAUDE.md as a pointer to .ai/sebenza/",
+          "description": "FR1. Replace the Conductor-era content with the actual layout: repo as the gts-agent-skills marketplace; top-level .claude-plugin/, sebenza/, sangoma/, documentation/, hooks/, .lsp.json, .mcp.json; plugin-internal skills/, agents/, commands/, shared/; the extension-type selection rule. Defer product, tech stack, workflow, style guides and track status to .ai/sebenza/index.md rather than restating them (NFR4). Target under ~80 lines (NFR3). No path named may be absent from disk (NFR2).",
+          "status": "done",
+          "commit_sha": "7e7f736"
+        },
+        {
+          "id": "phase-1-task-3",
+          "name": "Remove the stale legacy note at README.md:43",
+          "description": "FR2. Delete the blockquote claiming root-level skills/conductor/, commands/conductor/ and agents/ hold the pre-plugin Conductor framework — all three directories were removed in bda2fd2. While in the file, confirm the surrounding repository-structure diagram still matches disk.",
+          "status": "done",
+          "commit_sha": "8906a52"
+        },
+        {
+          "id": "phase-1-task-4",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md 'Phase Completion Verification and Checkpointing Protocol'. Re-run all three acceptance checks and confirm green; read CLAUDE.md end to end to confirm criterion 7 (workflow rules reachable in one hop); attach the verification report as a git note; set checkpoint_sha and sync tracks.json.",
+          "status": "done",
+          "commit_sha": "8906a52"
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Clear the migration residue",
+      "status": "done",
+      "blocked_reason": null,
+      "checkpoint_sha": "3a85385",
+      "tasks": [
+        {
+          "id": "phase-2-task-1",
+          "name": "Commit QUICKSTART.md",
+          "description": "FR3. The file is untracked while README.md:7 already links to it, so a fresh clone has a broken link. Review its content for accuracy against the current marketplace before staging. RESOLVED EARLY: the file was carried into e6f8ad5 by a stray staged index entry (see the phase-1 checkpoint note on 8906a52). Content verified unmodified and the README link resolves, so FR3 is satisfied; marked done against e6f8ad5 by user decision rather than rewriting a published commit.",
+          "status": "done",
+          "commit_sha": "e6f8ad5"
+        },
+        {
+          "id": "phase-2-task-2",
+          "name": "Delete documentation/conductor/index.html",
+          "description": "FR4. Remove the legacy Conductor documentation page (13 stale references) and the documentation/conductor/ directory it leaves empty. Git history preserves the file. After this, re-run the stale-reference grep without the documentation/ exclusion — it should be clean apart from the two incidental mentions in .ai/sebenza/.",
+          "status": "done",
+          "commit_sha": "d6ecf8d"
+        },
+        {
+          "id": "phase-2-task-3",
+          "name": "Add incompleteness banner to WAY_OF_WORK_ENGINEERING.md",
+          "description": "FR5. Leave the existing content untouched; prepend a visible banner noting the document is incomplete (it ends mid-sentence at 'A product manager ``') and that .ai/sebenza/product-guidelines.md holds the working definition of the five engineering roles until it is finished. Writing the actual content is explicitly out of scope.",
+          "status": "done",
+          "commit_sha": "3a85385"
+        },
+        {
+          "id": "phase-2-task-4",
+          "name": "Remove the ~/.conductor directory",
+          "description": "FR6. It contains only registry.json, whose single entry points at this repo's deleted conductor/tracks.json. Sebenza now uses ~/.ai/sebenza/registry.json. This is outside the repository, so it produces no commit — verify by absence and note the action in the task's git note on the next commit.",
+          "status": "done"
+        },
+        {
+          "id": "phase-2-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md checkpoint protocol. Sweep all seven acceptance criteria including a clean `git status --porcelain` and the absence of documentation/conductor/ and ~/.conductor; attach the verification report as a git note; set checkpoint_sha and sync tracks.json.",
+          "status": "done",
+          "commit_sha": "3a85385"
+        }
+      ]
+    }
+  ]
+}

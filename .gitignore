@@ -3,3 +3,8 @@ frontend/dist/
 /.idea/
 /.ai/sebenza.yaml
 /target/
+# Sebenza inbox copies written into converted worktrees (data, not source)
+.ai/sebenza/inbox-origin.json
+.ai/sebenza/inbox-notes.json
+.ai/sebenza/inbox-note.md
+__pycache__/

@@ -69,6 +69,133 @@
       },
       "spec_path": "./tracks/system_agent_20260930/spec.md",
       "plan_path": "./tracks/system_agent_20260930/plan.json"
+    },
+    {
+      "track_id": "software_factory_20261111",
+      "type": "feature",
+      "description": "Sebenza Software Factory: two-phase solution-level (inbox coordinator, analyst, architect, reviewer, approvals) and project-level (ordered architects, independent reviewer, code-review rounds) workflow, plus migration of the sebenza skills into skills/",
+      "status": "doing",
+      "created_at": "2026-11-11T00:00:00Z",
+      "updated_at": "2026-11-11T23:12:46Z",
+      "design_path": "./tracks/software_factory_20261111/design.md",
+      "test_plan_path": "./tracks/software_factory_20261111/test-plan.md",
+      "phases_summary": [
+        {
+          "id": "phase-1",
+          "name": "Skills migration (behaviour-neutral)",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-2",
+          "name": "Factory domain, store and config",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-3",
+          "name": "Operator credential and audit",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-4",
+          "name": "Role runner on Claude, Codex and Grok",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-5",
+          "name": "Coordinator chat and solution pipeline",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-6",
+          "name": "Design approval and per-project handover",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-7",
+          "name": "Inbox UI: Coordinator, Design and Graph tabs",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-8",
+          "name": "Final verification",
+          "status": "backlog",
+          "blocked_reason": null
+        }
+      ],
+      "progress": {
+        "total_tasks": 43,
+        "completed_tasks": 6,
+        "percentage": 14
+      },
+      "origin": {
+        "inbox_item_id": "01M75PKDJNMCNTD4EM28NX4H0P",
+        "worktree": "sebenza-factory",
+        "branch": "sebenza-factory"
+      },
+      "request": {
+        "request_id": "01M76DJWY526GGWFQDCN8WW39Y",
+        "status": "open",
+        "raised_at": "2026-11-11T23:02:45Z"
+      },
+      "spec_path": "./tracks/software_factory_20261111/spec.md",
+      "plan_path": "./tracks/software_factory_20261111/plan.json",
+      "current_phase_id": "phase-2"
+    },
+    {
+      "track_id": "factory_project_level_20261111",
+      "type": "feature",
+      "description": "Sebenza Software Factory project level: ordered architects, independent daemon-run reviewer with 3-round cap, approval gate before implementation, code-review rounds and final verification",
+      "status": "backlog",
+      "created_at": "2026-11-11T23:02:32Z",
+      "updated_at": "2026-11-11T23:02:32Z",
+      "design_path": "./tracks/software_factory_20261111/design.md",
+      "test_plan_path": "./tracks/software_factory_20261111/test-plan.md",
+      "origin": {
+        "inbox_item_id": "01M75PKDJNMCNTD4EM28NX4H0P",
+        "worktree": "sebenza-factory",
+        "branch": "sebenza-factory"
+      },
+      "phases_summary": [
+        {
+          "id": "phase-1",
+          "name": "Independent project review channel",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-2",
+          "name": "Ordered architecture and approval gate in the skills",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-3",
+          "name": "Code review rounds and final verification",
+          "status": "backlog",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-4",
+          "name": "Final verification",
+          "status": "backlog",
+          "blocked_reason": null
+        }
+      ],
+      "progress": {
+        "total_tasks": 18,
+        "completed_tasks": 0,
+        "percentage": 0
+      },
+      "spec_path": "./tracks/factory_project_level_20261111/spec.md",
+      "plan_path": "./tracks/factory_project_level_20261111/plan.json",
+      "current_phase_id": "phase-1"
     }
   ]
 }

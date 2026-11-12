@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sebenza Tracks Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid #30363d;
+        }
+
+        h1 {
+            color: #58a6ff;
+            font-size: 1.5rem;
+        }
+
+        .load-section {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .load-section h2 {
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            color: #8b949e;
+        }
+
+        .file-input-wrapper {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .file-input-wrapper input[type="file"] {
+            display: none;
+        }
+
+        .btn {
+            background: #238636;
+            color: #fff;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #2ea043;
+        }
+
+        .btn-secondary {
+            background: #21262d;
+            border: 1px solid #30363d;
+        }
+
+        .btn-secondary:hover {
+            background: #30363d;
+        }
+
+        .tracks-list {
+            display: grid;
+            gap: 1rem;
+        }
+
+        .track-card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 1rem;
+            cursor: pointer;
+            transition: border-color 0.2s, transform 0.2s;
+        }
+
+        .track-card:hover {
+            border-color: #58a6ff;
+            transform: translateY(-2px);
+        }
+
+        .track-card.selected {
+            border-color: #58a6ff;
+            background: #1c2128;
+        }
+
+        .track-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 0.5rem;
+        }
+
+        .track-id {
+            font-family: monospace;
+            color: #58a6ff;
+            font-size: 0.875rem;
+        }
+
+        .track-status {
+            padding: 0.25rem 0.5rem;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            text-transform: uppercase;
+        }
+
+        .status-new { background: #388bfd33; color: #58a6ff; }
+        .status-in_progress { background: #bb800926; color: #d29922; }
+        .status-completed { background: #23863633; color: #3fb950; }
+        .status-cancelled { background: #f8514926; color: #f85149; }
+
+        .track-type {
+            font-size: 0.75rem;
+            color: #8b949e;
+            margin-bottom: 0.5rem;
+        }
+
+        .track-description {
+            color: #c9d1d9;
+            line-height: 1.5;
+        }
+
+        .track-dates {
+            margin-top: 0.75rem;
+            font-size: 0.75rem;
+            color: #8b949e;
+        }
+
+        .detail-panel {
+            position: fixed;
+            top: 0;
+            right: -500px;
+            width: 500px;
+            height: 100vh;
+            background: #161b22;
+            border-left: 1px solid #30363d;
+            padding: 2rem;
+            overflow-y: auto;
+            transition: right 0.3s ease;
+            z-index: 100;
+        }
+
+        .detail-panel.open {
+            right: 0;
+        }
+
+        .detail-panel h2 {
+            color: #58a6ff;
+            margin-bottom: 1rem;
+            font-size: 1.25rem;
+        }
+
+        .detail-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .detail-section h3 {
+            color: #8b949e;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            margin-bottom: 0.5rem;
+        }
+
+        .detail-content {
+            background: #0d1117;
+            padding: 1rem;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 0.875rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            background: none;
+            border: none;
+            color: #8b949e;
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+
+        .close-btn:hover {
+            color: #c9d1d9;
+        }
+
+        .overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.3s, visibility 0.3s;
+            z-index: 50;
+        }
+
+        .overlay.open {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 4rem 2rem;
+            color: #8b949e;
+        }
+
+        .empty-state h2 {
+            margin-bottom: 1rem;
+        }
+
+        .stats {
+            display: flex;
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .stat {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+            padding: 1rem 1.5rem;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: bold;
+            color: #58a6ff;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: #8b949e;
+            text-transform: uppercase;
+        }
+
+        .task-list {
+            list-style: none;
+        }
+
+        .task-item {
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #21262d;
+            display: flex;
+            align-items: flex-start;
+            gap: 0.5rem;
+        }
+
+        .task-marker {
+            font-family: monospace;
+            color: #8b949e;
+        }
+
+        .task-marker.pending { color: #8b949e; }
+        .task-marker.in-progress { color: #d29922; }
+        .task-marker.completed { color: #3fb950; }
+
+        .phase-title {
+            color: #58a6ff;
+            font-weight: bold;
+            margin: 1rem 0 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Sebenza Tracks Viewer</h1>
+        </header>
+
+        <div class="load-section">
+            <h2>Load Tracks Data</h2>
+            <div class="file-input-wrapper">
+                <input type="file" id="tracksFile" accept=".json" multiple>
+                <button class="btn" onclick="document.getElementById('tracksFile').click()">
+                    Load metadata.json files
+                </button>
+                <button class="btn btn-secondary" onclick="loadSampleData()">
+                    Load Sample Data
+                </button>
+            </div>
+            <p style="margin-top: 0.75rem; font-size: 0.875rem; color: #8b949e;">
+                Select one or more metadata.json files from your .ai/sebenza/tracks/ directories
+            </p>
+        </div>
+
+        <div class="stats" id="stats" style="display: none;">
+            <div class="stat">
+                <div class="stat-value" id="totalTracks">0</div>
+                <div class="stat-label">Total Tracks</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="inProgressTracks">0</div>
+                <div class="stat-label">In Progress</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value" id="completedTracks">0</div>
+                <div class="stat-label">Completed</div>
+            </div>
+        </div>
+
+        <div class="tracks-list" id="tracksList">
+            <div class="empty-state">
+                <h2>No Tracks Loaded</h2>
+                <p>Load your track metadata.json files to view your project tracks</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="overlay" id="overlay" onclick="closeDetail()"></div>
+
+    <div class="detail-panel" id="detailPanel">
+        <button class="close-btn" onclick="closeDetail()">&times;</button>
+        <h2 id="detailTitle">Track Details</h2>
+        <div id="detailContent"></div>
+    </div>
+
+    <script>
+        let tracks = [];
+        let selectedTrack = null;
+
+        document.getElementById('tracksFile').addEventListener('change', handleFileSelect);
+
+        function handleFileSelect(event) {
+            const files = event.target.files;
+            tracks = [];
+
+            const readPromises = Array.from(files).map(file => {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        try {
+                            const data = JSON.parse(e.target.result);
+                            resolve(data);
+                        } catch (err) {
+                            console.error(`Error parsing ${file.name}:`, err);
+                            resolve(null);
+                        }
+                    };
+                    reader.onerror = reject;
+                    reader.readAsText(file);
+                });
+            });
+
+            Promise.all(readPromises).then(results => {
+                tracks = results.filter(t => t !== null);
+                renderTracks();
+            });
+        }
+
+        function loadSampleData() {
+            tracks = [
+                {
+                    track_id: "user_auth_20250118",
+                    type: "feature",
+                    status: "in_progress",
+                    created_at: "2025-01-18T10:00:00Z",
+                    updated_at: "2025-01-18T14:30:00Z",
+                    description: "Implement user authentication with OAuth2 support"
+                },
+                {
+                    track_id: "api_refactor_20250115",
+                    type: "feature",
+                    status: "completed",
+                    created_at: "2025-01-15T09:00:00Z",
+                    updated_at: "2025-01-17T16:00:00Z",
+                    description: "Refactor REST API to follow OpenAPI 3.0 specification"
+                },
+                {
+                    track_id: "login_bug_20250117",
+                    type: "bug",
+                    status: "new",
+                    created_at: "2025-01-17T11:00:00Z",
+                    updated_at: "2025-01-17T11:00:00Z",
+                    description: "Fix session timeout not redirecting to login page"
+                },
+                {
+                    track_id: "dashboard_mvp_20250110",
+                    type: "feature",
+                    status: "cancelled",
+                    created_at: "2025-01-10T08:00:00Z",
+                    updated_at: "2025-01-12T10:00:00Z",
+                    description: "Build initial dashboard MVP with analytics widgets"
+                }
+            ];
+            renderTracks();
+        }
+
+        function renderTracks() {
+            const container = document.getElementById('tracksList');
+            const stats = document.getElementById('stats');
+
+            if (tracks.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <h2>No Tracks Loaded</h2>
+                        <p>Load your track metadata.json files to view your project tracks</p>
+                    </div>
+                `;
+                stats.style.display = 'none';
+                return;
+            }
+
+            // Update stats
+            stats.style.display = 'flex';
+            document.getElementById('totalTracks').textContent = tracks.length;
+            document.getElementById('inProgressTracks').textContent =
+                tracks.filter(t => t.status === 'in_progress').length;
+            document.getElementById('completedTracks').textContent =
+                tracks.filter(t => t.status === 'completed').length;
+
+            // Sort tracks: in_progress first, then new, then completed, then cancelled
+            const statusOrder = { in_progress: 0, new: 1, completed: 2, cancelled: 3 };
+            const sortedTracks = [...tracks].sort((a, b) =>
+                (statusOrder[a.status] || 4) - (statusOrder[b.status] || 4)
+            );
+
+            container.innerHTML = sortedTracks.map((track, index) => `
+                <div class="track-card" onclick="selectTrack(${index})" data-index="${index}">
+                    <div class="track-header">
+                        <span class="track-id">${track.track_id}</span>
+                        <span class="track-status status-${track.status}">${track.status.replace('_', ' ')}</span>
+                    </div>
+                    <div class="track-type">${track.type}</div>
+                    <div class="track-description">${track.description}</div>
+                    <div class="track-dates">
+                        Created: ${formatDate(track.created_at)} | Updated: ${formatDate(track.updated_at)}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function formatDate(dateStr) {
+            if (!dateStr) return 'N/A';
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('en-US', {
+                month: 'short',
+                day: 'numeric',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+        }
+
+        function selectTrack(index) {
+            const statusOrder = { in_progress: 0, new: 1, completed: 2, cancelled: 3 };
+            const sortedTracks = [...tracks].sort((a, b) =>
+                (statusOrder[a.status] || 4) - (statusOrder[b.status] || 4)
+            );
+            selectedTrack = sortedTracks[index];
+
+            // Update selected state
+            document.querySelectorAll('.track-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+            document.querySelector(`[data-index="${index}"]`).classList.add('selected');
+
+            // Show detail panel
+            const panel = document.getElementById('detailPanel');
+            const overlay = document.getElementById('overlay');
+            const content = document.getElementById('detailContent');
+            const title = document.getElementById('detailTitle');
+
+            title.textContent = selectedTrack.track_id;
+
+            content.innerHTML = `
+                <div class="detail-section">
+                    <h3>Status</h3>
+                    <span class="track-status status-${selectedTrack.status}">${selectedTrack.status.replace('_', ' ')}</span>
+                </div>
+                <div class="detail-section">
+                    <h3>Type</h3>
+                    <div class="detail-content">${selectedTrack.type}</div>
+                </div>
+                <div class="detail-section">
+                    <h3>Description</h3>
+                    <div class="detail-content">${selectedTrack.description}</div>
+                </div>
+                <div class="detail-section">
+                    <h3>Timeline</h3>
+                    <div class="detail-content">Created: ${formatDate(selectedTrack.created_at)}
+Updated: ${formatDate(selectedTrack.updated_at)}</div>
+                </div>
+                <div class="detail-section">
+                    <h3>Raw Metadata</h3>
+                    <div class="detail-content">${JSON.stringify(selectedTrack, null, 2)}</div>
+                </div>
+            `;
+
+            panel.classList.add('open');
+            overlay.classList.add('open');
+        }
+
+        function closeDetail() {
+            document.getElementById('detailPanel').classList.remove('open');
+            document.getElementById('overlay').classList.remove('open');
+            document.querySelectorAll('.track-card').forEach(card => {
+                card.classList.remove('selected');
+            });
+        }
+
+        // Close on escape
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') closeDetail();
+        });
+    </script>
+</body>
+</html>

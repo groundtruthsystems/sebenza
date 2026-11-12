@@ -1,0 +1,41 @@
+{
+  "$schema": "sebenza-plan-v1",
+  "track_id": "notes_contract_20261105",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Contract",
+      "status": "doing",
+      "blocked_reason": null,
+      "tasks": [
+        { "id": "phase-1-task-1", "name": "No dependencies (legacy shape)", "status": "done" },
+        {
+          "id": "phase-1-task-2",
+          "name": "Same-track dependency",
+          "status": "doing",
+          "depends_on": ["phase-1-task-1"]
+        },
+        {
+          "id": "phase-1-task-3",
+          "name": "Same-worktree, other-track dependency",
+          "status": "backlog",
+          "depends_on": ["other_track_20261105/phase-2-task-1"]
+        },
+        {
+          "id": "phase-1-task-4",
+          "name": "Sibling-worktree dependency",
+          "status": "blocked",
+          "blocked_reason": "waiting on the daemon notes API",
+          "depends_on": ["@sebenza-improvements:inbox_graph_notes_20261105/phase-2-task-2"],
+          "request": { "request_id": "01RQ0000000000000000000000", "status": "open", "raised_at": "2026-11-05T00:00:00Z" }
+        },
+        {
+          "id": "phase-1-task-5",
+          "name": "Dangling dependency",
+          "status": "backlog",
+          "depends_on": ["no-such-task"]
+        }
+      ]
+    }
+  ]
+}

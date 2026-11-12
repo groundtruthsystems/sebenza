@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "sebenza-plan-v1",
+  "title": "Sebenza Plan Schema",
+  "description": "JSON schema for track implementation plans with kanban-compatible status tracking",
+  "type": "object",
+  "required": ["$schema", "track_id", "phases"],
+  "properties": {
+    "$schema": {
+      "const": "sebenza-plan-v1"
+    },
+    "track_id": {
+      "type": "string",
+      "description": "Unique track identifier (format: shortname_YYYYMMDD)",
+      "pattern": "^[a-z0-9_]+_[0-9]{8}$"
+    },
+    "phases": {
+      "type": "array",
+      "description": "Implementation phases, each representing a kanban card",
+      "items": {
+        "$ref": "#/$defs/phase"
+      },
+      "minItems": 1
+    }
+  },
+  "$defs": {
+    "status": {
+      "type": "string",
+      "enum": ["backlog", "doing", "blocked", "unblocked", "done"],
+      "description": "Kanban column status"
+    },
+    "phase": {
+      "type": "object",
+      "required": ["id", "name", "status", "tasks"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Phase identifier (e.g., phase-1)"
+        },
+        "name": {
+          "type": "string",
+          "description": "Phase name/title"
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "blocked_reason": {
+          "type": ["string", "null"],
+          "description": "Reason for blocked status (required when status is 'blocked')"
+        },
+        "checkpoint_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,40}$",
+          "description": "Short commit SHA of the phase checkpoint, recorded when the phase is completed"
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/task"
+          }
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "required": ["id", "name", "status"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Task identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Task name/title"
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed task description"
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "blocked_reason": {
+          "type": ["string", "null"],
+          "description": "Reason for blocked status"
+        },
+        "commit_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{7,40}$",
+          "description": "Short commit SHA recorded when the task is completed"
+        },
+        "depends_on": {
+          "type": "array",
+          "description": "Tasks that must be done before this one starts. sebenza-implement never starts a task with an unfinished dependency; scripts/validate_plan.py rejects self, cyclic and dangling same-plan references.",
+          "items": {
+            "$ref": "#/$defs/depends_on_ref"
+          },
+          "uniqueItems": true
+        },
+        "request": {
+          "$ref": "#/$defs/request"
+        },
+        "test_scenarios": {
+          "type": "array",
+          "description": "Test-plan scenario IDs this task executes, e.g. [\"TS-01\",\"TS-02\"], defined in the track's test-plan.md. Its presence is what marks the task as a test task.",
+          "items": {
+            "type": "string",
+            "pattern": "^TS-[0-9]{2,3}$"
+          },
+          "uniqueItems": true,
+          "minItems": 1
+        },
+        "subtasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/subtask"
+          }
+        }
+      }
+    },
+    "subtask": {
+      "type": "object",
+      "required": ["id", "name", "status"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Subtask identifier"
+        },
+        "name": {
+          "type": "string",
+          "description": "Subtask name"
+        },
+        "status": {
+          "$ref": "#/$defs/status"
+        },
+        "blocked_reason": {
+          "type": ["string", "null"],
+          "description": "Reason for blocked status"
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["request_id", "status"],
+      "description": "The Sebenza inbox request raised for this item while it is blocked, written only by scripts/inbox.py. The graph view reads it.",
+      "properties": {
+        "request_id": {
+          "type": ["string", "null"],
+          "description": "The daemon's requestId, or null when it could not be looked up or the request is unsent"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "unsent", "resolved"],
+          "description": "open: waiting on the operator; unsent: kept locally because the daemon was unreachable or refused it; resolved: the operator answered"
+        },
+        "raised_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$"
+        }
+      }
+    },
+    "depends_on_ref": {
+      "type": "string",
+      "pattern": "^(@[^\\s:]+:)?((?!\\.{1,2}/)[A-Za-z0-9_.-]{1,64}/)?(?!\\.{1,2}$)[A-Za-z0-9_.-]{1,64}$",
+      "description": "A dependency: [\"@\" branch \":\"] [track_id \"/\"] task_id. No @ means this worktree; no / means this track. @branch: names a sibling worktree of the same inbox item (the first ':' ends the branch). Ids match [A-Za-z0-9_.-]{1,64} and are never '.' or '..'."
+    }
+  }
+}

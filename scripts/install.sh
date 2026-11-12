@@ -10,6 +10,8 @@
 #   --version <tag>   SEBENZA_VERSION      release tag to install (default: latest)
 #   --dir <path>      SEBENZA_INSTALL_DIR  install directory (default: ~/.local/bin)
 #   --repo <o/r>      SEBENZA_REPO         source repo (default: groundtruthsystems/sebenza)
+#   --with-plugin                          also add the `sebenza` Claude Code marketplace
+#                                          (this repo) and install plugin sebenza@sebenza
 #   --uninstall                            remove installed binaries and exit
 #   --help
 #
@@ -22,6 +24,7 @@ VERSION="${SEBENZA_VERSION:-latest}"
 INSTALL_DIR="${SEBENZA_INSTALL_DIR:-$HOME/.local/bin}"
 BINARIES=(sebenza-server sebenza-cli)
 UNINSTALL=0
+WITH_PLUGIN=0
 
 # --- output -----------------------------------------------------------------
 
@@ -59,6 +62,7 @@ while [ $# -gt 0 ]; do
     --repo) REPO="${2:-}"; [ -n "$REPO" ] || die "--repo needs a value"; shift 2 ;;
     --repo=*) REPO="${1#*=}"; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
+    --with-plugin) WITH_PLUGIN=1; shift ;;
     -h|--help) usage ;;
     *) die "unknown option: $1 (try --help)" ;;
   esac
@@ -249,4 +253,26 @@ esac
 
 if [ -x "$INSTALL_DIR/sebenza-cli" ] && [ -z "$SUDO" ]; then
   "$INSTALL_DIR/sebenza-cli" --version 2>/dev/null || true
+fi
+
+# --- Sebenza skills plugin (opt-in) ------------------------------------------
+#
+# The skills live in this repository under skills/, published as the `sebenza`
+# marketplace with one plugin, `sebenza`. Installing them changes the user's
+# Claude Code configuration, so it only happens on an explicit --with-plugin.
+
+PLUGIN_ID="sebenza@sebenza"
+if [ "$WITH_PLUGIN" -eq 1 ]; then
+  if command -v claude >/dev/null 2>&1; then
+    info "adding the sebenza marketplace ($REPO) and installing $PLUGIN_ID"
+    claude plugin marketplace add "$REPO" || die "could not add marketplace $REPO"
+    claude plugin install "$PLUGIN_ID" || die "could not install $PLUGIN_ID"
+    ok "installed Claude Code plugin $PLUGIN_ID"
+  else
+    warn "--with-plugin: claude is not on PATH; install Claude Code, then run:"
+    printf '\n    claude plugin marketplace add %s\n    claude plugin install %s\n\n' "$REPO" "$PLUGIN_ID" >&2
+  fi
+else
+  info "Sebenza skills for Claude Code: re-run with --with-plugin, or run"
+  printf '\n    claude plugin marketplace add %s\n    claude plugin install %s\n\n' "$REPO" "$PLUGIN_ID" >&2
 fi

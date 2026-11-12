@@ -1,0 +1,68 @@
+{
+  "$schema": "sebenza-tracks-v1",
+  "version": "1.0",
+  "project": {
+    "name": "gts-agent-extensions",
+    "path": "/repo/project",
+    "worktree": "gts-agent-extensions-tracks-path",
+    "repo_path": "/repo/project",
+    "registered_at": "2026-07-27T12:14:04Z"
+  },
+  "tracks": [
+    {
+      "track_id": "kaituhi_20260810",
+      "type": "feature",
+      "description": "Add the kaituhi technical-writer plugin: a skill, agents and commands that analyse a product and author public-facing Docusaurus documentation.",
+      "status": "done",
+      "blocked_reason": null,
+      "created_at": "2026-08-11T02:35:42Z",
+      "updated_at": "2026-08-20T02:14:47Z",
+      "design_path": "./tracks/kaituhi_20260810/design.md",
+      "spec_path": "./tracks/kaituhi_20260810/spec.md",
+      "plan_path": "./tracks/kaituhi_20260810/plan.json",
+      "phases_summary": [
+        {
+          "id": "phase-1",
+          "name": "Plugin scaffold and the security gate",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-2",
+          "name": "Analysis and information architecture",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-3",
+          "name": "Authoring and review",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-4",
+          "name": "Site bootstrap, build verification and drift",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-5",
+          "name": "Versioning and i18n",
+          "status": "done",
+          "blocked_reason": null
+        },
+        {
+          "id": "phase-6",
+          "name": "Remediation, auditability and repository integration",
+          "status": "done",
+          "blocked_reason": null
+        }
+      ],
+      "progress": {
+        "total_tasks": 37,
+        "completed_tasks": 37,
+        "percentage": 100.0
+      }
+    }
+  ]
+}
