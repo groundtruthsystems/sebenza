@@ -74,9 +74,9 @@
       "track_id": "software_factory_20261111",
       "type": "feature",
       "description": "Sebenza Software Factory: two-phase solution-level (inbox coordinator, analyst, architect, reviewer, approvals) and project-level (ordered architects, independent reviewer, code-review rounds) workflow, plus migration of the sebenza skills into skills/",
-      "status": "doing",
+      "status": "done",
       "created_at": "2026-11-11T00:00:00Z",
-      "updated_at": "2026-11-12T04:45:28Z",
+      "updated_at": "2026-11-12T13:57:21Z",
       "design_path": "./tracks/software_factory_20261111/design.md",
       "test_plan_path": "./tracks/software_factory_20261111/test-plan.md",
       "phases_summary": [
@@ -125,14 +125,14 @@
         {
           "id": "phase-8",
           "name": "Final verification",
-          "status": "doing",
+          "status": "done",
           "blocked_reason": null
         }
       ],
       "progress": {
         "total_tasks": 43,
-        "completed_tasks": 42,
-        "percentage": 98
+        "completed_tasks": 43,
+        "percentage": 100
       },
       "origin": {
         "inbox_item_id": "01M75PKDJNMCNTD4EM28NX4H0P",
@@ -152,9 +152,9 @@
       "track_id": "factory_project_level_20261111",
       "type": "feature",
       "description": "Sebenza Software Factory project level: ordered architects, independent daemon-run reviewer with 3-round cap, approval gate before implementation, code-review rounds and final verification",
-      "status": "doing",
+      "status": "done",
       "created_at": "2026-11-11T23:02:32Z",
-      "updated_at": "2026-11-12T05:03:57Z",
+      "updated_at": "2026-11-12T13:57:21Z",
       "design_path": "./tracks/software_factory_20261111/design.md",
       "test_plan_path": "./tracks/software_factory_20261111/test-plan.md",
       "origin": {
@@ -184,14 +184,14 @@
         {
           "id": "phase-4",
           "name": "Final verification",
-          "status": "backlog",
+          "status": "done",
           "blocked_reason": null
         }
       ],
       "progress": {
         "total_tasks": 18,
-        "completed_tasks": 17,
-        "percentage": 94
+        "completed_tasks": 18,
+        "percentage": 100
       },
       "spec_path": "./tracks/factory_project_level_20261111/spec.md",
       "plan_path": "./tracks/factory_project_level_20261111/plan.json",

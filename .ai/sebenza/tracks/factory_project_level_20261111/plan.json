@@ -196,7 +196,7 @@
     {
       "id": "phase-4",
       "name": "Final verification",
-      "status": "backlog",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -230,15 +230,18 @@
           "id": "phase-4-task-2",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "blocked",
-          "blocked_reason": "Waiting for the operator's own final verification and sign-off.",
+          "status": "done",
+          "blocked_reason": null,
           "request": {
             "request_id": "01M77289FZCJTAJBEBRF8QTW2S",
             "status": "open",
             "raised_at": "2026-11-12T05:03:57Z"
-          }
+          },
+          "commit_sha": "c1d4bfe",
+          "signed_off": "Operator in chat 2026-11-12: 'ok close out the track'"
         }
-      ]
+      ],
+      "checkpoint_sha": "c1d4bfe"
     }
   ]
 }
