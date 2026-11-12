@@ -145,7 +145,7 @@
     {
       "id": "phase-3",
       "name": "Operator credential and audit",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -209,9 +209,16 @@
           "id": "phase-3-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "request": {
+            "request_id": "01M76XB50DF31MWBKHZNT3XM9C",
+            "status": "resolved",
+            "raised_at": "2026-11-12T03:38:08Z"
+          },
+          "commit_sha": "b07b9ff"
         }
-      ]
+      ],
+      "checkpoint_sha": "b07b9ff"
     },
     {
       "id": "phase-4",
