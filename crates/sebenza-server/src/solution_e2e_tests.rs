@@ -842,3 +842,472 @@ async fn solution_actions_refuse_the_shared_token() {
     assert_eq!(grok["enforcement"], "unverified");
     assert_eq!(grok["canReview"], false);
 }
+
+// --- Phase 6: approvals and handover ---------------------------------------
+
+use common::services::inbox_convert::{
+    ConversionOutcome, ConversionRunner, ConversionTarget, NOTES_MANIFEST_REL_PATH,
+    SOLUTION_HANDOVER_REL_PATH, SolutionHandover,
+};
+use std::sync::Arc;
+
+/// Creates "worktrees" as directories under `<base>/wt/<branch>`; never git.
+struct FileRunner {
+    root: PathBuf,
+}
+impl ConversionRunner for FileRunner {
+    fn create_worktree(&self, t: &ConversionTarget) -> Result<String, String> {
+        let dir = self.root.join(&t.branch);
+        if dir.exists() {
+            return Err(format!("{} already exists", t.branch));
+        }
+        std::fs::create_dir_all(dir.join(".ai/sebenza")).map_err(|e| e.to_string())?;
+        Ok(dir.to_string_lossy().to_string())
+    }
+    fn write_note(&self, p: &str, b: &str) -> Result<(), String> {
+        std::fs::write(PathBuf::from(p).join(".ai/sebenza/inbox-note.md"), b)
+            .map_err(|e| e.to_string())
+    }
+    fn write_notes_manifest(&self, p: &str, j: &str) -> Result<(), String> {
+        std::fs::write(PathBuf::from(p).join(NOTES_MANIFEST_REL_PATH), j).map_err(|e| e.to_string())
+    }
+    fn write_handover(&self, p: &str, b: &str) -> Result<(), String> {
+        std::fs::write(PathBuf::from(p).join(SOLUTION_HANDOVER_REL_PATH), b)
+            .map_err(|e| e.to_string())
+    }
+    fn exclude_note(&self, _p: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn record_origin(&self, _p: &str, _d: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn send_prompt(&self, _t: &ConversionTarget, _p: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn has_sebenza_workspace(&self, _t: &ConversionTarget) -> bool {
+        false
+    }
+    fn now(&self) -> String {
+        "t".into()
+    }
+}
+
+struct FileConverter {
+    inbox: Arc<crate::services::inbox_service::InboxService>,
+    root: PathBuf,
+}
+impl crate::services::solution::HandoverConverter for FileConverter {
+    fn convert(
+        &self,
+        item: &str,
+        t: &ConversionTarget,
+        h: &SolutionHandover,
+    ) -> Result<ConversionOutcome, String> {
+        self.inbox
+            .convert_handover(
+                item,
+                t,
+                h,
+                &FileRunner {
+                    root: self.root.clone(),
+                },
+            )
+            .map_err(|e| e.to_string())
+    }
+}
+
+fn handover_doc(slug: &str, text: &str) -> String {
+    serde_json::json!({
+        "role": "solutions-architect", "schema_version": 1,
+        "documents": [{"name": format!("handover/{slug}.md"), "content": text}]
+    })
+    .to_string()
+}
+
+/// An item reviewed to `agreed` that names two registered projects.
+async fn agreed_item(d: &Daemon) -> Item {
+    register(d, "portal");
+    d.state.solution.set_converter(Arc::new(FileConverter {
+        inbox: d.state.inbox.clone(),
+        root: d.base.join("wt"),
+    }));
+    let it = Item::new(
+        d,
+        &[
+            ("system-analyst", ANALYST.into()),
+            (
+                "solutions-architect",
+                architect(&["acme-billing", "portal"]),
+            ),
+            ("solution-reviewer", reviewer("agreed", &[])),
+            ("solution-coordinator", COORD.into()),
+            (
+                "solutions-architect-handover-acme-billing",
+                handover_doc("acme-billing", "# Billing\nBuild invoices."),
+            ),
+            (
+                "solutions-architect-handover-portal",
+                handover_doc("portal", "# Portal\nShow invoices."),
+            ),
+        ],
+        "reply",
+    )
+    .await;
+    it.post(d, "solution/start-design", serde_json::json!({}))
+        .await;
+    assert_eq!(it.settle(d).await["state"]["phase"], "agreed");
+    it
+}
+
+fn worktree(d: &Daemon, slug: &str) -> PathBuf {
+    d.base.join("wt").join("factory").join(slug)
+}
+
+// TS-21 + TS-60 + TS-23 (double approve) + TS-54 (stale copy): one project is
+// edited and approved (one worktree whose solution-handover.md is the edited
+// bytes), the other deferred (none); a repeat approve creates nothing; a
+// later edit marks the copy stale.
+#[tokio::test]
+async fn ts21_ts60_ts23_ts54_approve_one_defer_the_other() {
+    let d = daemon().await;
+    let it = agreed_item(&d).await;
+    // Drafting needs the design approved first.
+    assert_eq!(
+        it.post(&d, "handover/draft", serde_json::json!({})).await.1["code"],
+        "approval_required"
+    );
+    let (code, v) = it
+        .post(&d, "solution/approve-design", serde_json::json!({}))
+        .await;
+    assert_eq!(code, 200, "{v}");
+    assert_eq!(v["recorded"], true);
+    assert_eq!(
+        it.post(&d, "solution/approve-design", serde_json::json!({}))
+            .await
+            .1["recorded"],
+        false,
+        "idempotent"
+    );
+    let (code, v) = it.post(&d, "handover/draft", serde_json::json!({})).await;
+    assert_eq!(code, 202, "{v}");
+    let v = it.settle(&d).await;
+    assert_eq!(v["state"]["phase"], "handover");
+    let hs = v["handovers"].as_array().unwrap();
+    assert_eq!(hs.len(), 2);
+
+    // TS-60: edit the acme instruction, then approve the edited bytes.
+    let (_, doc) = d
+        .send(d.spa(
+            "GET",
+            &format!(
+                "/api/inbox/{}/solution/docs/handover/acme-billing.md",
+                it.id
+            ),
+            TOKEN,
+        ))
+        .await;
+    let edited = "# Billing\nBuild invoices in EUR.\n";
+    let mut c = d.spa(
+        "PUT",
+        &format!("/api/inbox/{}/handover/acme-billing", it.id),
+        &it.op,
+    );
+    c.body = Some(serde_json::json!({"content": edited, "expectedHash": doc["hash"]}));
+    let (code, v) = d.send(c).await;
+    assert_eq!(code, 200, "{v}");
+    let hash = v["instructionHash"].as_str().unwrap().to_string();
+    // Approving the hash shown before the edit is refused.
+    let (code, v) = it
+        .post(
+            &d,
+            "handover/acme-billing/approve",
+            serde_json::json!({"instructionHash": doc["hash"]}),
+        )
+        .await;
+    assert_eq!((code, v["code"].as_str()), (409, Some("approval_required")));
+    let (code, v) = it
+        .post(
+            &d,
+            "handover/acme-billing/approve",
+            serde_json::json!({"instructionHash": hash}),
+        )
+        .await;
+    assert_eq!(code, 200, "{v}");
+    assert_eq!(v["outcome"]["outcome"], "created");
+    let wt = worktree(&d, "acme-billing");
+    assert_eq!(
+        std::fs::read_to_string(wt.join(SOLUTION_HANDOVER_REL_PATH)).unwrap(),
+        edited
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(wt.join(NOTES_MANIFEST_REL_PATH)).unwrap())
+            .unwrap();
+    assert_eq!(manifest["solution"]["handover_hash"], hash.as_str());
+    assert_eq!(manifest["solution"]["project"], "/code/acme-billing");
+
+    // TS-23: a second approve records nothing and creates no second worktree.
+    let (code, v) = it
+        .post(
+            &d,
+            "handover/acme-billing/approve",
+            serde_json::json!({"instructionHash": hash}),
+        )
+        .await;
+    assert!(
+        code == 200 && v["recorded"] == false || v["code"] == "already_converted",
+        "{code} {v}"
+    );
+
+    // TS-21: defer the portal; no worktree for it.
+    assert_eq!(
+        it.post(&d, "handover/portal/defer", serde_json::json!({}))
+            .await
+            .0,
+        200
+    );
+    assert!(!worktree(&d, "portal").exists());
+    let v = it.settle(&d).await;
+    let statuses: Vec<(String, String)> = v["handovers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| {
+            (
+                h["slug"].as_str().unwrap().to_string(),
+                h["status"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        statuses.contains(&("acme-billing".into(), "converted".into())),
+        "{statuses:?}"
+    );
+    assert!(
+        statuses.contains(&("portal".into(), "deferred".into())),
+        "{statuses:?}"
+    );
+    assert_eq!(
+        std::fs::read_dir(d.base.join("wt/factory"))
+            .unwrap()
+            .count(),
+        1,
+        "exactly one worktree"
+    );
+    let comments = d.comments(&it.id);
+    assert!(
+        comments
+            .iter()
+            .any(|(_, b)| b.contains("solution.handover.approved") && b.contains(&hash))
+    );
+
+    // TS-54: an inbox edit after the copy marks it stale.
+    let (_, doc) = d
+        .send(d.spa(
+            "GET",
+            &format!(
+                "/api/inbox/{}/solution/docs/handover/acme-billing.md",
+                it.id
+            ),
+            TOKEN,
+        ))
+        .await;
+    let mut c = d.spa(
+        "PUT",
+        &format!("/api/inbox/{}/handover/acme-billing", it.id),
+        &it.op,
+    );
+    c.body = Some(serde_json::json!({"content": "# Billing v3", "expectedHash": doc["hash"]}));
+    assert_eq!(d.send(c).await.0, 200);
+    let v = it.settle(&d).await;
+    let acme = v["handovers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["slug"] == "acme-billing")
+        .unwrap()
+        .clone();
+    assert_eq!(acme["copyStale"], true, "{acme}");
+    let (code, v) = it
+        .post(
+            &d,
+            "handover/acme-billing/approve",
+            serde_json::json!({"instructionHash": acme["instructionHash"]}),
+        )
+        .await;
+    assert_eq!(
+        (code, v["code"].as_str()),
+        (409, Some("already_converted")),
+        "{v}"
+    );
+}
+
+// TS-22: a document edit after approval voids it; drafting and approving
+// need a fresh approval, and convert stays refused.
+#[tokio::test]
+async fn ts22_an_edit_voids_the_design_approval() {
+    let d = daemon().await;
+    let it = agreed_item(&d).await;
+    it.post(&d, "solution/approve-design", serde_json::json!({}))
+        .await;
+    it.post(&d, "handover/draft", serde_json::json!({})).await;
+    it.settle(&d).await;
+    let v = it.settle(&d).await;
+    assert_eq!(v["designApprovalValid"], true);
+    let (_, doc) = d
+        .send(d.spa(
+            "GET",
+            &format!("/api/inbox/{}/solution/docs/solution-design.md", it.id),
+            TOKEN,
+        ))
+        .await;
+    let mut c = d.spa(
+        "PUT",
+        &format!("/api/inbox/{}/solution/docs/solution-design.md", it.id),
+        &it.op,
+    );
+    c.body = Some(
+        serde_json::json!({"content": format!("{}\nOne more line.", doc["content"].as_str().unwrap()), "expectedHash": doc["hash"]}),
+    );
+    assert_eq!(d.send(c).await.0, 200);
+    let v = it.settle(&d).await;
+    assert_eq!(v["designApprovalValid"], false);
+    let h = v["handovers"][0]["instructionHash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let slug = v["handovers"][0]["slug"].as_str().unwrap().to_string();
+    let (code, v) = it
+        .post(
+            &d,
+            &format!("handover/{slug}/approve"),
+            serde_json::json!({"instructionHash": h}),
+        )
+        .await;
+    assert_eq!(
+        (code, v["code"].as_str()),
+        (409, Some("approval_required")),
+        "{v}"
+    );
+    assert_eq!(
+        it.post(&d, "handover/draft", serde_json::json!({})).await.1["code"],
+        "approval_required"
+    );
+    let mut c = d.spa("POST", &format!("/api/inbox/{}/convert", it.id), TOKEN);
+    c.body = Some(
+        serde_json::json!({"targets": [{"projectPath": "/code/acme-billing", "branch": "x", "prompt": "go"}]}),
+    );
+    assert_eq!(d.send(c).await.1["code"], "approval_required");
+    assert!(!d.base.join("wt").exists(), "no worktree was created");
+    // Re-approving binds the new hashes, and the handover can proceed.
+    assert_eq!(
+        it.post(&d, "solution/approve-design", serde_json::json!({}))
+            .await
+            .1["recorded"],
+        true
+    );
+    let (code, v) = it
+        .post(
+            &d,
+            &format!("handover/{slug}/approve"),
+            serde_json::json!({"instructionHash": h}),
+        )
+        .await;
+    assert_eq!(code, 200, "{v}");
+}
+
+// TS-24: an instruction edit racing its approval is serialised under the item
+// lock: whenever an approval lands, the worktree holds exactly the approved bytes.
+#[tokio::test]
+async fn ts24_an_edit_racing_an_approval_never_mixes_bytes() {
+    let d = daemon().await;
+    let it = agreed_item(&d).await;
+    it.post(&d, "solution/approve-design", serde_json::json!({}))
+        .await;
+    it.post(&d, "handover/draft", serde_json::json!({})).await;
+    it.settle(&d).await;
+    let svc = d.state.solution.clone();
+    let id = it.id.clone();
+    let editor = {
+        let svc = svc.clone();
+        let id = id.clone();
+        std::thread::spawn(move || {
+            for i in 0..60 {
+                let cur = svc
+                    .inbox()
+                    .store()
+                    .read_solution_doc(&id, "handover/acme-billing.md")
+                    .unwrap()
+                    .unwrap();
+                let _ = svc.edit_handover(
+                    &id,
+                    "acme-billing",
+                    Some(&format!("# Billing edit {i}\n")),
+                    &cur.1,
+                    None,
+                    None,
+                    common::domain::solution::CredentialClass::OperatorSession,
+                );
+            }
+        })
+    };
+    let mut approved = None;
+    for _ in 0..200 {
+        let cur = svc
+            .inbox()
+            .store()
+            .read_solution_doc(&id, "handover/acme-billing.md")
+            .unwrap()
+            .unwrap();
+        if let Ok(v) = svc.approve_handover(
+            &id,
+            "acme-billing",
+            &cur.1,
+            common::domain::solution::CredentialClass::OperatorSession,
+        ) {
+            approved = Some(v["instructionHash"].as_str().unwrap().to_string());
+            break;
+        }
+    }
+    editor.join().unwrap();
+    let approved = approved.expect("an approval landed between edits");
+    let bytes =
+        std::fs::read_to_string(worktree(&d, "acme-billing").join(SOLUTION_HANDOVER_REL_PATH))
+            .unwrap();
+    assert_eq!(
+        common::domain::solution::sha256_hex(&bytes),
+        approved,
+        "the worktree holds exactly the approved bytes"
+    );
+}
+
+// TS-23 (table rows for this phase): the shared token opens none of the
+// approval and handover routes.
+#[tokio::test]
+async fn ts23_approval_routes_refuse_the_shared_token() {
+    let d = daemon().await;
+    let it = Item::new(&d, &[], "reply").await;
+    for (method, path, body) in [
+        ("POST", "solution/approve-design", serde_json::json!({})),
+        ("POST", "handover/draft", serde_json::json!({})),
+        (
+            "PUT",
+            "handover/acme-billing",
+            serde_json::json!({"content": "x"}),
+        ),
+        (
+            "POST",
+            "handover/acme-billing/approve",
+            serde_json::json!({"instructionHash": "h"}),
+        ),
+        ("POST", "handover/acme-billing/defer", serde_json::json!({})),
+    ] {
+        let mut c = d.spa(method, &format!("/api/inbox/{}/{path}", it.id), TOKEN);
+        c.body = Some(body);
+        let (code, v) = d.send(c).await;
+        assert_eq!(
+            (code, v["code"].as_str()),
+            (403, Some("operator_required")),
+            "{path}"
+        );
+    }
+}

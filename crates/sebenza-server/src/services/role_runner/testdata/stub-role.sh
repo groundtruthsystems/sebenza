@@ -27,7 +27,10 @@ mode=$(field STUB-MODE)
 role=$(field ROLE)
 round=$(field ROUND)
 # Most specific first: per role and round, per role, then the default.
-reply=$(field "STUB-REPLY-$role-$round")
+mode_line=$(field MODE)
+reply=""
+[ -n "$mode_line" ] && reply=$(field "STUB-REPLY-$role-$mode_line")
+[ -z "$reply" ] && reply=$(field "STUB-REPLY-$role-$round")
 [ -z "$reply" ] && reply=$(field "STUB-REPLY-$role")
 [ -z "$reply" ] && reply=$(field STUB-REPLY)
 # A repair retry (the runner's second attempt) answers from STUB-REPAIR.
@@ -41,7 +44,7 @@ if [ -n "$log" ]; then
   pwd > "$log/cwd.$$"
   touch "$log/running.$$"
   ls "$log" | grep -c '^running\.' >> "$log/peaks"
-  echo "$role $round" >> "$log/order"
+  echo "$role $round$mode_line" >> "$log/order"
 fi
 finish() { if [ -n "$log" ]; then rm -f "$log/running.$$"; fi; }
 case "$mode" in

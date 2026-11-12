@@ -86,6 +86,14 @@ impl ConversionRunner for ServerConversionRunner {
         write_private(worktree_path, NOTES_MANIFEST_REL_PATH, json)
     }
 
+    fn write_handover(&self, worktree_path: &str, body: &str) -> Result<(), String> {
+        write_private(
+            worktree_path,
+            common::services::inbox_convert::SOLUTION_HANDOVER_REL_PATH,
+            body,
+        )
+    }
+
     fn exclude_note(&self, worktree_path: &str) -> Result<(), String> {
         // `info/exclude`, not `.gitignore`: .gitignore is tracked, so writing
         // to it would dirty every converted worktree and invite a conflict on
@@ -219,5 +227,32 @@ mod tests {
             std::fs::read_to_string(dir.join(NOTE_REL_PATH)).unwrap(),
             "# notes"
         );
+    }
+}
+
+/// Creates an approved project's worktree with the real runner (git, tmux),
+/// recording the outcome in the item's `conversions[]`.
+pub struct ServerHandoverConverter {
+    state: AppState,
+}
+
+impl ServerHandoverConverter {
+    pub fn new(state: AppState) -> Self {
+        Self { state }
+    }
+}
+
+impl crate::services::solution::HandoverConverter for ServerHandoverConverter {
+    fn convert(
+        &self,
+        item_id: &str,
+        target: &common::services::inbox_convert::ConversionTarget,
+        handover: &common::services::inbox_convert::SolutionHandover,
+    ) -> Result<common::services::inbox_convert::ConversionOutcome, String> {
+        let runner = ServerConversionRunner::new(self.state.clone());
+        self.state
+            .inbox
+            .convert_handover(item_id, target, handover, &runner)
+            .map_err(|e| e.to_string())
     }
 }

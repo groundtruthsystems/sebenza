@@ -744,6 +744,57 @@ impl InboxService {
         Ok(outcomes)
     }
 
+    /// Convert one project of a solution item with its approved handover,
+    /// recording the outcome in `conversions[]` like any other wave.
+    pub fn convert_handover<R: ConversionRunner>(
+        &self,
+        id: &str,
+        target: &ConversionTarget,
+        handover: &crate::services::inbox_convert::SolutionHandover,
+        runner: &R,
+    ) -> Result<ConversionOutcome, InboxServiceError> {
+        let draft = match self.store.get(id)? {
+            InboxDraftView::Parsed(d) => d,
+            InboxDraftView::Raw { id, error, .. } => {
+                return Err(InboxServiceError::Store(InboxStoreError::Unparsed {
+                    id,
+                    error,
+                }));
+            }
+        };
+        let known: Vec<String> = self.projects.list().into_iter().map(|p| p.path).collect();
+        let errors = validate_targets(std::slice::from_ref(target), &known);
+        if !errors.is_empty() {
+            return Err(InboxServiceError::InvalidTargets(errors));
+        }
+        let notes =
+            crate::domain::note_codec::parse_notes(&draft.body, draft.frontmatter.schema_version);
+        let item = ConversionItem {
+            draft_id: id,
+            title: &draft.frontmatter.title,
+            notes: &notes,
+        };
+        let outcome = crate::services::inbox_convert::run_handover_conversion(
+            runner, &item, target, handover,
+        );
+        let mut recorded = match self.store.get(id)? {
+            InboxDraftView::Parsed(d) => d.frontmatter.conversions,
+            InboxDraftView::Raw { .. } => draft.frontmatter.conversions.clone(),
+        };
+        if let Ok(value) = serde_yaml::to_value(&outcome) {
+            recorded.push(value);
+            self.store.merge_frontmatter(
+                id,
+                FrontmatterAuthor::Job,
+                FrontmatterPatch {
+                    conversions: Some(recorded),
+                    ..Default::default()
+                },
+            )?;
+        }
+        Ok(outcome)
+    }
+
     /// A draft's conversion history, as recorded in its own frontmatter.
     ///
     /// This is the durable record. The in-memory job manager is a cache that

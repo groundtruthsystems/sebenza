@@ -813,6 +813,19 @@ impl InboxStore {
         Ok(())
     }
 
+    /// Run `f` holding the item's lock, the one every draft and solution
+    /// document write takes. `f` must not write through the store's locked
+    /// methods (the lock is not re-entrant); reads and event appends are fine.
+    pub fn with_item_lock<T, E: From<InboxStoreError>>(
+        &self,
+        id: &str,
+        f: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, E> {
+        let lock = path_lock(&self.path_for(id)?);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        f()
+    }
+
     /// `<dir>/<id>/solution`, created 0700 on demand.
     fn solution_dir(&self, id: &str) -> Result<PathBuf, InboxStoreError> {
         self.path_for(id)?;

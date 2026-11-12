@@ -390,6 +390,26 @@ pub fn build_router(state: AppState) -> Router {
             get(crate::solution_routes::get_doc).put(crate::solution_routes::put_doc),
         )
         .route(
+            "/api/inbox/{id}/solution/approve-design",
+            post(crate::solution_routes::approve_design),
+        )
+        .route(
+            "/api/inbox/{id}/handover/draft",
+            post(crate::solution_routes::draft_handovers),
+        )
+        .route(
+            "/api/inbox/{id}/handover/{project}",
+            put(crate::solution_routes::edit_handover),
+        )
+        .route(
+            "/api/inbox/{id}/handover/{project}/approve",
+            post(crate::solution_routes::approve_handover),
+        )
+        .route(
+            "/api/inbox/{id}/handover/{project}/defer",
+            post(crate::solution_routes::defer_handover),
+        )
+        .route(
             "/api/inbox/{id}/solution/problems/{pid}/resolve",
             post(crate::solution_routes::resolve_problem),
         )

@@ -34,6 +34,7 @@ use common::domain::solution::{
     ReviewVerdict, SolutionPhase, SolutionState, fold_solution, next_round,
 };
 use common::services::content_scan::scan_hits;
+use common::services::inbox_convert::{ConversionOutcome, ConversionTarget, SolutionHandover};
 use common::services::inbox_service::InboxServiceError;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -68,6 +69,12 @@ pub enum SolutionError {
     TooLarge,
     #[error("{0}")]
     NotFound(String),
+    /// The design (or this project's instruction) is not approved as it now
+    /// stands: 409 `approval_required`.
+    #[error("{0}")]
+    ApprovalRequired(String),
+    #[error("{0} already has its worktree; its copy of the handover is now stale")]
+    AlreadyConverted(String),
     #[error(transparent)]
     Agent(#[from] RoleJobError),
     #[error(transparent)]
@@ -92,11 +99,40 @@ pub struct JobState {
     pub error: Option<String>,
 }
 
+/// Creates one project's worktree from its approved handover. The server
+/// wires the real git/tmux runner; tests wire one that writes files.
+pub trait HandoverConverter: Send + Sync {
+    fn convert(
+        &self,
+        item_id: &str,
+        target: &ConversionTarget,
+        handover: &SolutionHandover,
+    ) -> Result<ConversionOutcome, String>;
+}
+
 pub struct SolutionService {
     inbox: Arc<InboxService>,
     roles: Arc<RoleRunner>,
     factory: Arc<FactorySettings>,
     jobs: Mutex<HashMap<String, JobState>>,
+    converter: Mutex<Option<Arc<dyn HandoverConverter>>>,
+}
+
+/// The slug a project's handover document and route use: its registered
+/// name, lowercased, with anything but letters and digits as `-`.
+pub fn project_slug(name: &str) -> String {
+    let s: String = name
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    s.trim_matches('-').chars().take(64).collect()
+}
+
+/// One hash over the design document set: what a handover was drafted from.
+pub fn design_hash(docs: &BTreeMap<String, String>) -> String {
+    let joined: String = docs.iter().map(|(n, h)| format!("{n}={h}\n")).collect();
+    common::domain::solution::sha256_hex(&joined)
 }
 
 fn now() -> String {
@@ -145,7 +181,12 @@ impl SolutionService {
             roles,
             factory,
             jobs: Mutex::new(HashMap::new()),
+            converter: Mutex::new(None),
         }
+    }
+
+    pub fn set_converter(&self, converter: Arc<dyn HandoverConverter>) {
+        *self.converter.lock().unwrap_or_else(|e| e.into_inner()) = Some(converter);
     }
 
     pub fn inbox(&self) -> &Arc<InboxService> {
@@ -1086,19 +1127,456 @@ impl SolutionService {
         Ok(serde_json::to_value(request).unwrap_or_default())
     }
 
-    /// The solution view: folded state, document hashes, job and profiles.
+    /// The solution view: folded state (approvals voided by later edits
+    /// shown as such), document hashes, job and profiles.
     pub fn view(&self, id: &str) -> Result<serde_json::Value, SolutionError> {
         let d = self.draft(id)?;
-        let state = self.fold(id)?;
+        let state = self.state_now(id)?;
         let docs = self.inbox.store().solution_docs(id)?;
+        let design = self.design_docs(id)?;
+        let converted = Self::converted_projects(&d);
+        let handovers: Vec<serde_json::Value> = state
+            .handovers
+            .iter()
+            .map(|h| {
+                let was_converted = converted.contains(&h.project);
+                serde_json::json!({
+                    "project": h.project,
+                    "slug": self.slug_for(&h.project),
+                    "status": h.status,
+                    "instructionHash": h.instruction_hash,
+                    "approvalValid": state.handover_approval_valid(&h.project, &h.instruction_hash),
+                    // R-D4: the worktree's copy no longer matches the inbox.
+                    "copyStale": was_converted && h.approved_hash.as_deref() != Some(h.instruction_hash.as_str()),
+                })
+            })
+            .collect();
         Ok(serde_json::json!({
             "kind": d.frontmatter.kind(),
             "state": state,
             "roundOf": MAX_REVIEW_ROUNDS,
             "documents": docs,
+            "designHash": design_hash(&design),
+            "designApprovalValid": state.design_approval_valid(&design),
+            "handovers": handovers,
             "job": self.job(id),
             "profiles": self.profiles(id).ok(),
         }))
+    }
+
+    // --- approval and handover (UC-06, FR-19..FR-21) ---------------------
+
+    /// The folded state with conversions applied.
+    fn state_now(&self, id: &str) -> Result<SolutionState, SolutionError> {
+        let d = self.draft(id)?;
+        let mut state = self.fold(id)?;
+        common::domain::solution::mark_converted(&mut state, &Self::converted_projects(&d));
+        Ok(state)
+    }
+
+    fn converted_projects(d: &common::domain::model::InboxDraft) -> Vec<String> {
+        d.frontmatter
+            .conversions
+            .iter()
+            .filter(|c| c.get("outcome").and_then(|o| o.as_str()) == Some("created"))
+            .filter_map(|c| {
+                c.get("projectPath")
+                    .and_then(|p| p.as_str())
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    /// The design documents an approval binds to (everything but handovers).
+    fn design_docs(&self, id: &str) -> Result<BTreeMap<String, String>, SolutionError> {
+        Ok(self
+            .inbox
+            .store()
+            .solution_docs(id)?
+            .into_iter()
+            .filter(|(n, _)| !n.starts_with("handover/"))
+            .collect())
+    }
+
+    fn slug_for(&self, project_path: &str) -> String {
+        self.inbox
+            .registered_projects()
+            .iter()
+            .find(|p| p.path == project_path)
+            .map(|p| project_slug(&p.name))
+            .unwrap_or_else(|| project_slug(project_path.rsplit('/').next().unwrap_or("")))
+    }
+
+    fn project_for_slug(
+        &self,
+        slug: &str,
+    ) -> Result<crate::adapters::projects_registry::ProjectEntry, SolutionError> {
+        self.inbox
+            .registered_projects()
+            .into_iter()
+            .find(|p| project_slug(&p.name) == slug)
+            .ok_or_else(|| SolutionError::NotFound(format!("no registered project {slug}")))
+    }
+
+    /// Approve the design as it stands: bound to every document's SHA-256,
+    /// recorded once per document set, under the item lock so no edit can
+    /// land between hashing and recording (FT-07, TS-24).
+    pub fn approve_design(
+        &self,
+        id: &str,
+        credential: CredentialClass,
+    ) -> Result<serde_json::Value, SolutionError> {
+        self.require_solution(id)?;
+        if self.job(id).running {
+            return Err(SolutionError::Busy);
+        }
+        let store = self.inbox.store();
+        let (hashes, appended) = store.with_item_lock(id, || -> Result<_, SolutionError> {
+            let state = self.fold(id)?;
+            if !matches!(
+                state.phase,
+                SolutionPhase::Agreed
+                    | SolutionPhase::Escalated
+                    | SolutionPhase::Approved
+                    | SolutionPhase::Handover
+            ) {
+                return Err(SolutionError::WrongPhase {
+                    phase: state.phase,
+                    what: "the design is approved after review ends",
+                });
+            }
+            if state.open_problems() > 0 {
+                return Err(SolutionError::WrongPhase {
+                    phase: state.phase,
+                    what: "resolve every escalated problem first",
+                });
+            }
+            let hashes = self.design_docs(id)?;
+            if hashes.is_empty() {
+                return Err(SolutionError::NotFound(
+                    "there is no design to approve".into(),
+                ));
+            }
+            let (_, appended) = store.append_event_once(
+                id,
+                EventAuthor {
+                    caller: Some(credential.as_str().to_string()),
+                    ..EventAuthor::operator()
+                },
+                None,
+                InboxEventKind::DesignApproved {
+                    doc_hashes: hashes.clone(),
+                    credential,
+                },
+            )?;
+            Ok((hashes, appended))
+        })?;
+        if self.fold(id)?.phase != SolutionPhase::Handover {
+            let _ = self.phase_to(id, SolutionPhase::Approved);
+        }
+        let h = design_hash(&hashes);
+        if appended {
+            self.inbox
+                .record_gated_action(id, "solution.design.approved", credential, Some(&h))?;
+        }
+        Ok(serde_json::json!({ "designHash": h, "docHashes": hashes, "recorded": appended }))
+    }
+
+    fn require_design_approved(&self, id: &str) -> Result<BTreeMap<String, String>, SolutionError> {
+        let current = self.design_docs(id)?;
+        if !self.fold(id)?.design_approval_valid(&current) {
+            return Err(SolutionError::ApprovalRequired(
+                "the design is not approved as it now stands; approve it again".into(),
+            ));
+        }
+        Ok(current)
+    }
+
+    /// Draft one instruction per affected registered project (the architect
+    /// in handover mode), each recorded with its SHA-256 (UC-06).
+    pub fn draft_handovers(
+        self: &Arc<Self>,
+        id: &str,
+        credential: CredentialClass,
+    ) -> Result<(), SolutionError> {
+        self.require_solution(id)?;
+        let docs = self.require_design_approved(id)?;
+        let design = self
+            .inbox
+            .store()
+            .read_solution_doc(id, "solution-design.md")?
+            .map(|(t, _)| t)
+            .unwrap_or_default();
+        let registered = self.inbox.registered_projects();
+        let projects: Vec<_> = affected_projects(&design)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|n| {
+                registered
+                    .iter()
+                    .find(|p| p.name.eq_ignore_ascii_case(&n))
+                    .cloned()
+            })
+            .collect();
+        if projects.is_empty() {
+            return Err(SolutionError::NotFound(
+                "the design names no registered affected project".into(),
+            ));
+        }
+        let designer = self.profiles(id)?.designer;
+        self.begin(id, "handover")?;
+        self.inbox.record_gated_action(
+            id,
+            "solution.handover.drafted",
+            credential,
+            Some(&design_hash(&docs)),
+        )?;
+        let this = self.clone();
+        let id = id.to_string();
+        tokio::spawn(async move {
+            let mut failure = None;
+            for p in projects {
+                if let Err(e) = this.draft_one(&id, &p, designer.clone(), &docs).await {
+                    failure = Some(e);
+                    break;
+                }
+            }
+            if failure.is_none() {
+                let _ = this.phase_to(&id, SolutionPhase::Handover);
+            }
+            this.end(&id, failure.as_ref());
+        });
+        Ok(())
+    }
+
+    async fn draft_one(
+        &self,
+        id: &str,
+        project: &crate::adapters::projects_registry::ProjectEntry,
+        designer: AgentProfile,
+        docs: &BTreeMap<String, String>,
+    ) -> Result<(), RoleJobError> {
+        let slug = project_slug(&project.name);
+        let name = format!("handover/{slug}.md");
+        let prompt = format!(
+            "{}MODE: handover-{slug}\n{}{}\nHandover mode: write {name} for project {} ({}).",
+            Self::header(Role::SolutionsArchitect, None),
+            self.notes_block(id).unwrap_or_default(),
+            self.docs_block(id).unwrap_or_default(),
+            project.name,
+            project.path,
+        );
+        let out = self
+            .roles
+            .run(self.job_for(id, Role::SolutionsArchitect, designer, prompt))
+            .await?;
+        let doc = out
+            .documents
+            .iter()
+            .flatten()
+            .find(|d| d.name == name)
+            .ok_or_else(|| {
+                RoleJobError::AgentFailed(format!("the architect did not write {name}"))
+            })?;
+        let hash = self
+            .inbox
+            .store()
+            .write_solution_doc(id, &name, &doc.content, Some("*"))
+            .map_err(|e| RoleJobError::AgentFailed(e.to_string()))?;
+        self.record_draft(
+            id,
+            &project.path,
+            &hash,
+            &design_hash(docs),
+            &format!("factory/{slug}"),
+            None,
+        )
+        .map_err(|e| RoleJobError::AgentFailed(e.to_string()))
+    }
+
+    fn record_draft(
+        &self,
+        id: &str,
+        project: &str,
+        instruction_hash: &str,
+        design: &str,
+        branch: &str,
+        base: Option<String>,
+    ) -> Result<(), SolutionError> {
+        self.inbox.store().append_event(
+            id,
+            EventAuthor::system_agent(),
+            None,
+            InboxEventKind::HandoverDrafted {
+                project: project.to_string(),
+                instruction_hash: instruction_hash.to_string(),
+                design_hash: design.to_string(),
+                branch: branch.to_string(),
+                base,
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Edit a project's instruction (and its branch or base). Changed text
+    /// voids an approval of the old text.
+    #[allow(clippy::too_many_arguments)]
+    pub fn edit_handover(
+        &self,
+        id: &str,
+        slug: &str,
+        content: Option<&str>,
+        expected: &str,
+        branch: Option<&str>,
+        base: Option<&str>,
+        credential: CredentialClass,
+    ) -> Result<serde_json::Value, SolutionError> {
+        self.require_solution(id)?;
+        let project = self.project_for_slug(slug)?;
+        let state = self.state_now(id)?;
+        let h = state
+            .handovers
+            .iter()
+            .find(|h| h.project == project.path)
+            .cloned()
+            .ok_or_else(|| SolutionError::NotFound(format!("no handover drafted for {slug}")))?;
+        let name = format!("handover/{slug}.md");
+        let hash = match content {
+            Some(text) => self
+                .inbox
+                .store()
+                .write_solution_doc(id, &name, text, Some(expected))?,
+            None => h.instruction_hash.clone(),
+        };
+        let branch = branch.map(str::to_string).unwrap_or(h.branch.clone());
+        let base = base.map(str::to_string).or(h.base.clone());
+        self.record_draft(id, &project.path, &hash, &h.design_hash, &branch, base)?;
+        self.inbox
+            .record_gated_action(id, "solution.handover.edited", credential, Some(&hash))?;
+        Ok(serde_json::json!({ "instructionHash": hash, "branch": branch }))
+    }
+
+    /// Approve one project's instruction exactly as shown (`expected` is the
+    /// hash the operator saw) and create its one worktree with those bytes as
+    /// `solution-handover.md`. Recorded once per (item, project, hash): a
+    /// repeat creates nothing (FT-08).
+    pub fn approve_handover(
+        &self,
+        id: &str,
+        slug: &str,
+        expected: &str,
+        credential: CredentialClass,
+    ) -> Result<serde_json::Value, SolutionError> {
+        self.require_solution(id)?;
+        let project = self.project_for_slug(slug)?;
+        let name = format!("handover/{slug}.md");
+        let store = self.inbox.store();
+        let (target, handover, appended) = store.with_item_lock(id, || -> Result<_, SolutionError> {
+            let docs = self.require_design_approved(id)?;
+            let state = self.state_now(id)?;
+            let h = state
+                .handovers
+                .iter()
+                .find(|h| h.project == project.path)
+                .cloned()
+                .ok_or_else(|| SolutionError::NotFound(format!("no handover drafted for {slug}")))?;
+            // One worktree per project: once converted, a later edit only
+            // makes its copy stale (shown in the view), never a second one.
+            if Self::converted_projects(&self.draft(id)?).contains(&project.path) {
+                return Err(SolutionError::AlreadyConverted(project.name.clone()));
+            }
+            let (text, current) = store
+                .read_solution_doc(id, &name)?
+                .ok_or_else(|| SolutionError::NotFound(format!("no document {name}")))?;
+            if current != h.instruction_hash || current != expected {
+                return Err(SolutionError::ApprovalRequired(
+                    "the instruction changed since it was shown; reload and approve again".into(),
+                ));
+            }
+            let design = design_hash(&docs);
+            let (_, appended) = store.append_event_once(
+                id,
+                EventAuthor {
+                    caller: Some(credential.as_str().to_string()),
+                    ..EventAuthor::operator()
+                },
+                None,
+                InboxEventKind::HandoverApproved {
+                    project: project.path.clone(),
+                    instruction_hash: current.clone(),
+                    design_hash: design.clone(),
+                    branch: h.branch.clone(),
+                    base: h.base.clone(),
+                    credential,
+                },
+            )?;
+            let target = ConversionTarget {
+                project_path: project.path.clone(),
+                branch: h.branch.clone(),
+                base_branch: h.base.clone(),
+                agent_id: None,
+                prompt: "Implement the approved solution handover in .ai/sebenza/solution-handover.md. It is the operator-approved instruction for this project.".into(),
+                system_instruction: None,
+                architect_first: None,
+            };
+            let handover = SolutionHandover {
+                project: project.path.clone(),
+                design_hash: design,
+                instruction_hash: current,
+                text,
+            };
+            Ok((target, handover, appended))
+        })?;
+        if !appended {
+            return Ok(
+                serde_json::json!({ "recorded": false, "instructionHash": handover.instruction_hash }),
+            );
+        }
+        self.inbox.record_gated_action(
+            id,
+            "solution.handover.approved",
+            credential,
+            Some(&handover.instruction_hash),
+        )?;
+        let converter = self
+            .converter
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| SolutionError::NotFound("no worktree runner is configured".into()))?;
+        let outcome = converter
+            .convert(id, &target, &handover)
+            .map_err(|e| SolutionError::Agent(RoleJobError::AgentFailed(e)))?;
+        Ok(serde_json::json!({
+            "recorded": true,
+            "instructionHash": handover.instruction_hash,
+            "outcome": outcome,
+        }))
+    }
+
+    pub fn defer_handover(
+        &self,
+        id: &str,
+        slug: &str,
+        credential: CredentialClass,
+    ) -> Result<(), SolutionError> {
+        self.require_solution(id)?;
+        let project = self.project_for_slug(slug)?;
+        self.inbox.store().append_event(
+            id,
+            EventAuthor {
+                caller: Some(credential.as_str().to_string()),
+                ..EventAuthor::operator()
+            },
+            None,
+            InboxEventKind::HandoverDeferred {
+                project: project.path.clone(),
+                credential,
+            },
+        )?;
+        self.inbox
+            .record_gated_action(id, "solution.handover.deferred", credential, None)?;
+        Ok(())
     }
 }
 

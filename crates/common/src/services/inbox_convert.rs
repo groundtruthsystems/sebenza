@@ -312,6 +312,13 @@ pub trait ConversionRunner {
         Ok(())
     }
 
+    /// Write an approved solution handover at [`SOLUTION_HANDOVER_REL_PATH`],
+    /// byte for byte. A runner that cannot must say so: a handover conversion
+    /// without its handover is a failure, never a silent skip.
+    fn write_handover(&self, _worktree_path: &str, _body: &str) -> Result<(), String> {
+        Err("this runner cannot write a solution handover".to_string())
+    }
+
     /// Keep the note out of `git status`, for this worktree only.
     fn exclude_note(&self, worktree_path: &str) -> Result<(), String>;
 
@@ -353,7 +360,25 @@ pub const NOTES_MANIFEST_SCHEMA: &str = "sebenza-inbox-notes-v1";
 ///
 /// Excluding only the note is not enough: git reports an untracked *directory*
 /// whole, so one un-excluded sibling puts `.ai/` back in `git status`.
-pub const WRITTEN_REL_PATHS: [&str; 3] = [NOTE_REL_PATH, ORIGIN_REL_PATH, NOTES_MANIFEST_REL_PATH];
+pub const WRITTEN_REL_PATHS: [&str; 4] = [
+    NOTE_REL_PATH,
+    ORIGIN_REL_PATH,
+    NOTES_MANIFEST_REL_PATH,
+    SOLUTION_HANDOVER_REL_PATH,
+];
+
+/// Where an approved solution handover lands in its worktree (FR-20).
+pub const SOLUTION_HANDOVER_REL_PATH: &str = ".ai/sebenza/solution-handover.md";
+
+/// One approved project handover: the exact approved bytes and the hashes
+/// they were approved under, stamped into `inbox-notes.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SolutionHandover {
+    pub project: String,
+    pub design_hash: String,
+    pub instruction_hash: String,
+    pub text: String,
+}
 
 /// Run one wave of conversions.
 ///
@@ -396,6 +421,7 @@ fn run_one<R: ConversionRunner>(
     item: &ConversionItem<'_>,
     target: &ConversionTarget,
     wave: &[ConversionTarget],
+    handover: Option<&SolutionHandover>,
 ) -> ConversionOutcome {
     let draft_id = item.draft_id;
     let body = render_concatenated(item.notes);
@@ -404,7 +430,20 @@ fn run_one<R: ConversionRunner>(
         .filter(|t| !(t.project_path == target.project_path && t.branch == target.branch))
         .cloned()
         .collect();
-    let manifest = notes_manifest_json(item, &siblings);
+    let manifest = match handover {
+        None => notes_manifest_json(item, &siblings),
+        Some(h) => {
+            let mut v: serde_json::Value =
+                serde_json::from_str(&notes_manifest_json(item, &siblings)).unwrap_or_default();
+            v["solution"] = serde_json::json!({
+                "project": h.project,
+                "design_hash": h.design_hash,
+                "handover_hash": h.instruction_hash,
+                "handover_path": SOLUTION_HANDOVER_REL_PATH,
+            });
+            serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".to_string())
+        }
+    };
     let notes_list_hash = list_hash(item.notes);
     let note_types: Vec<String> = item.notes.iter().map(|n| n.note_type.clone()).collect();
     let system_instruction = target
@@ -447,6 +486,11 @@ fn run_one<R: ConversionRunner>(
     }
     if let Err(e) = runner.write_notes_manifest(&worktree_path, &manifest) {
         // Same rule as the note: an agent must not start without its notes.
+        return fail(e);
+    }
+    if let Some(h) = handover
+        && let Err(e) = runner.write_handover(&worktree_path, &h.text)
+    {
         return fail(e);
     }
     if let Err(e) = runner.exclude_note(&worktree_path) {
@@ -701,6 +745,45 @@ mod tests {
         assert_eq!(out.error.as_deref(), Some("worktree exists"));
         assert_eq!(out.prompt, "do the thing");
         assert_eq!(out.worktree_path, None);
+    }
+
+    // FR-20: a handover conversion whose runner cannot write the handover
+    // fails; the agent is never prompted without it.
+    #[test]
+    fn a_handover_conversion_needs_its_handover_written() {
+        let runner = FakeRunner::default();
+        let notes = [InboxNote::default_with("brief")];
+        let item = ConversionItem {
+            draft_id: "01ITEM",
+            title: "t",
+            notes: &notes,
+        };
+        let h = SolutionHandover {
+            project: "/code/acme".into(),
+            design_hash: "d".into(),
+            instruction_hash: "i".into(),
+            text: "do x".into(),
+        };
+        let out = run_handover_conversion(&runner, &item, &target("/code/acme", "x"), &h);
+        assert!(!out.is_created());
+        assert!(
+            out.error
+                .unwrap()
+                .contains("cannot write a solution handover")
+        );
+        assert!(
+            !runner
+                .calls
+                .borrow()
+                .iter()
+                .any(|c| c.starts_with("prompt")),
+            "never prompted: {:?}",
+            runner.calls.borrow()
+        );
+        assert!(
+            WRITTEN_REL_PATHS.contains(&SOLUTION_HANDOVER_REL_PATH),
+            "git-excluded"
+        );
     }
 
     // --- run_conversion ---------------------------------------------------
@@ -1386,6 +1469,22 @@ pub fn notes_manifest_json(item: &ConversionItem<'_>, siblings: &[ConversionTarg
     serde_json::to_string_pretty(&manifest).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// Convert one project of a solution item with its approved handover.
+pub fn run_handover_conversion<R: ConversionRunner>(
+    runner: &R,
+    item: &ConversionItem<'_>,
+    target: &ConversionTarget,
+    handover: &SolutionHandover,
+) -> ConversionOutcome {
+    run_one(
+        runner,
+        item,
+        target,
+        std::slice::from_ref(target),
+        Some(handover),
+    )
+}
+
 /// [`run_conversion`], with the item's title available to the launch prompt.
 pub fn run_conversion_item<R, F>(
     runner: &R,
@@ -1401,7 +1500,7 @@ where
     targets
         .iter()
         .map(|target| {
-            let outcome = run_one(runner, item, target, targets);
+            let outcome = run_one(runner, item, target, targets, None);
             on_outcome(&outcome);
             outcome
         })

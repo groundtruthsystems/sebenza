@@ -214,6 +214,11 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         frontend_dist,
     };
 
+    state
+        .solution
+        .set_converter(Arc::new(inbox_runner::ServerHandoverConverter::new(
+            state.clone(),
+        )));
     server::spawn_background_loops(state.clone());
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;

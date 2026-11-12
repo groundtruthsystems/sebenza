@@ -25,6 +25,12 @@ impl From<SolutionError> for ApiError {
             SolutionError::ScanWarning(_) => ApiError::coded(422, "scan_warning", e.to_string()),
             SolutionError::TooLarge => ApiError::coded(413, "too_large", e.to_string()),
             SolutionError::NotFound(_) => ApiError::new(404, e.to_string()),
+            SolutionError::ApprovalRequired(_) => {
+                ApiError::coded(409, "approval_required", e.to_string())
+            }
+            SolutionError::AlreadyConverted(_) => {
+                ApiError::coded(409, "already_converted", e.to_string())
+            }
             SolutionError::Agent(RoleJobError::Refused(_)) => {
                 ApiError::coded(422, "agent_refused", e.to_string())
             }
@@ -195,6 +201,101 @@ pub async fn resolve_problem(
     Ok(Json(serde_json::json!({
         "request": state.solution.resolve_problem(&id, &pid, &note, class)?
     })))
+}
+
+/// `POST /api/inbox/{id}/solution/approve-design` — operator only.
+pub async fn approve_design(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let class = require_operator(&state, &headers, "solution.design.approved", Some(&id))?;
+    let svc = state.solution.clone();
+    Ok(Json(
+        tokio::task::spawn_blocking(move || svc.approve_design(&id, class))
+            .await
+            .map_err(|_| ApiError::new(500, "task panicked".into()))??,
+    ))
+}
+
+/// `POST /api/inbox/{id}/handover/draft` — operator only.
+pub async fn draft_handovers(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let class = require_operator(&state, &headers, "solution.handover.drafted", Some(&id))?;
+    state.solution.draft_handovers(&id, class)?;
+    Ok((StatusCode::ACCEPTED, Json(state.solution.view(&id)?)))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoverEditBody {
+    #[serde(default)]
+    pub content: Option<String>,
+    #[serde(default)]
+    pub expected_hash: String,
+    #[serde(default)]
+    pub branch: Option<String>,
+    #[serde(default)]
+    pub base: Option<String>,
+}
+
+/// `PUT /api/inbox/{id}/handover/{project}` — operator only.
+pub async fn edit_handover(
+    State(state): State<AppState>,
+    Path((id, project)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<HandoverEditBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let class = require_operator(&state, &headers, "solution.handover.edited", Some(&id))?;
+    Ok(Json(state.solution.edit_handover(
+        &id,
+        &project,
+        body.content.as_deref(),
+        &body.expected_hash,
+        body.branch.as_deref(),
+        body.base.as_deref(),
+        class,
+    )?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApproveBody {
+    /// The instruction hash the operator was shown.
+    pub instruction_hash: String,
+}
+
+/// `POST /api/inbox/{id}/handover/{project}/approve` — operator only;
+/// creates that project's one worktree.
+pub async fn approve_handover(
+    State(state): State<AppState>,
+    Path((id, project)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<ApproveBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let class = require_operator(&state, &headers, "solution.handover.approved", Some(&id))?;
+    let svc = state.solution.clone();
+    Ok(Json(
+        tokio::task::spawn_blocking(move || {
+            svc.approve_handover(&id, &project, &body.instruction_hash, class)
+        })
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".into()))??,
+    ))
+}
+
+/// `POST /api/inbox/{id}/handover/{project}/defer` — operator only.
+pub async fn defer_handover(
+    State(state): State<AppState>,
+    Path((id, project)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let class = require_operator(&state, &headers, "solution.handover.deferred", Some(&id))?;
+    state.solution.defer_handover(&id, &project, class)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// `GET /api/factory/agents` — agents for the pickers: installed, and how
