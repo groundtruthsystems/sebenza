@@ -72,26 +72,28 @@
     {
       "id": "phase-2",
       "name": "Factory domain, store and config",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for draft v4, events and fold",
           "description": "Write failing unit tests for lazy v4 stamping, the new event kinds, the SolutionState fold and request-fold extensions.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-1-task-6"
-          ]
+          ],
+          "commit_sha": "905f03b"
         },
         {
           "id": "phase-2-task-2",
           "name": "Implement draft v4, events and SolutionState fold",
           "description": "Add kind/factory frontmatter, the new event kinds with idempotency keys, ProblemRaised folding and the SolutionState fold in common.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-2-task-1"
-          ]
+          ],
+          "commit_sha": "905f03b"
         },
         {
           "id": "phase-2-task-3",
