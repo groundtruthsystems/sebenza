@@ -59,6 +59,7 @@ fn job(
             file.display()
         ),
         acknowledged_unverified: false,
+        cwd: None,
     }
 }
 
@@ -78,7 +79,7 @@ fn logged(base: &std::path::Path, prefix: &str) -> Vec<String> {
 #[test]
 fn embedded_prompts_equal_their_agent_files() {
     let dir = format!("{}/../../skills/agents", env!("CARGO_MANIFEST_DIR"));
-    for role in Role::SOLUTION_ROLES {
+    for role in Role::ALL {
         let file = std::fs::read_to_string(format!("{dir}/{}.md", role.as_str())).unwrap();
         assert_eq!(role.prompt().unwrap(), file, "{}", role.as_str());
         assert!(file.starts_with(&format!("---\nname: {}\n", role.as_str())));

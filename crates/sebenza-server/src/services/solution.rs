@@ -374,6 +374,7 @@ impl SolutionService {
             // The operator chose this profile on an operator-only route,
             // where an unverified agent is labelled; that is the acknowledgement.
             acknowledged_unverified: true,
+            cwd: None,
         }
     }
 
@@ -897,6 +898,7 @@ impl SolutionService {
                 problem_id: Some("P-PROJECTS".into()),
                 title: "No affected projects table".into(),
                 detail: "solution-design.md must name the affected registered projects in an \"Affected projects\" table.".into(),
+                task: None,
             }],
             Some(names) => names
                 .into_iter()
@@ -913,6 +915,7 @@ impl SolutionService {
                         detail: format!(
                             "{n} is named as an affected project but is not a registered Sebenza project. Register it, or change the design."
                         ),
+                        task: None,
                     }
                 })
                 .collect(),

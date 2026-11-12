@@ -53,6 +53,9 @@ pub struct ProblemOut {
     pub problem_id: Option<String>,
     pub title: String,
     pub detail: String,
+    /// Code review: the plan task this finding sends back.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
 }
 
 /// A validated reply.

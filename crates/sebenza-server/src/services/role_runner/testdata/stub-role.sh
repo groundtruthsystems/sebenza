@@ -42,11 +42,15 @@ if [ -n "$log" ]; then
   for a in "$@"; do printf '%s\n' "$a"; done > "$log/argv.$$"
   env > "$log/env.$$"
   pwd > "$log/cwd.$$"
+  find . -type f | sort > "$log/files.$$"
   touch "$log/running.$$"
   ls "$log" | grep -c '^running\.' >> "$log/peaks"
   echo "$role $round$mode_line" >> "$log/order"
 fi
 finish() { if [ -n "$log" ]; then rm -f "$log/running.$$"; fi; }
+# STUB-TOUCH: <path> — change a file outside the cwd (a tampering reviewer).
+touch_path=$(field STUB-TOUCH)
+[ -n "$touch_path" ] && echo tampered >> "$touch_path"
 case "$mode" in
   hang) sleep 300 & wait ;;
   exit) finish; echo "stub failing on purpose" >&2; exit 3 ;;

@@ -103,6 +103,12 @@ impl Daemon {
                 Arc::new(crate::services::role_runner::test_runner(&base)),
                 factory.clone(),
             )),
+            reviews: Arc::new(crate::services::project_review::ProjectReviewService::new(
+                inbox_for_solution.clone(),
+                Arc::new(crate::services::role_runner::test_runner(&base)),
+                factory.clone(),
+                base.join("snapshots"),
+            )),
             frontend_dist: None,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

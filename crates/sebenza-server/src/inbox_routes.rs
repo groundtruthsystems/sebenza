@@ -1944,6 +1944,12 @@ mod tests {
                 Arc::new(crate::services::role_runner::test_runner(&base)),
                 factory.clone(),
             )),
+            reviews: Arc::new(crate::services::project_review::ProjectReviewService::new(
+                inbox_for_solution.clone(),
+                Arc::new(crate::services::role_runner::test_runner(&base)),
+                factory.clone(),
+                base.join("snapshots"),
+            )),
             frontend_dist: None,
         };
         Fixture {

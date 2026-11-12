@@ -62,6 +62,8 @@ pub struct AppState {
     pub factory: Arc<crate::operator_routes::FactorySettings>,
     /// The solution level: coordinator, pipeline and review gate.
     pub solution: Arc<crate::services::solution::SolutionService>,
+    /// Project design and code reviews requested by worktrees.
+    pub reviews: Arc<crate::services::project_review::ProjectReviewService>,
     pub frontend_dist: Option<PathBuf>,
 }
 
@@ -326,6 +328,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/registry", get(fetch_registry))
         .route("/api/registry/file", get(fetch_registry_file))
         .route("/api/runtime/events", post(runtime_event))
+        .route(
+            "/api/runtime/review",
+            post(crate::solution_routes::start_review),
+        )
+        .route(
+            "/api/runtime/review/{job}",
+            get(crate::solution_routes::poll_review),
+        )
         // Inbox (global; drafts precede any project).
         .route(
             "/api/inbox/session",

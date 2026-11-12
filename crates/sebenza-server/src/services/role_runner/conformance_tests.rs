@@ -47,6 +47,7 @@ async fn run_raw(
         profile: AgentProfile::new(agent, None),
         prompt: prompt.into(),
         acknowledged_unverified: true,
+        cwd: None,
     };
     let launch = build_launch(&job, dir, Duration::from_secs(240), None, std::env::vars()).unwrap();
     AgentStreamManager::new()
@@ -150,6 +151,7 @@ async fn coordinator_reply_is_valid(agent: &str) {
         profile: AgentProfile::new(agent, None),
         prompt: "<note id=\"n1\" type=\"general\" title=\"Brief\">\nA small todo app for one team, with sign-in.\n</note>\n\nOperator: please propose acceptance criteria for this brief.".into(),
         acknowledged_unverified: true,
+        cwd: None,
     };
     let out = runner
         .run(job)

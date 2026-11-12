@@ -1423,6 +1423,28 @@ impl InboxService {
         result
     }
 
+    /// The created conversion of item `id` that produced the worktree at
+    /// `worktree_path` on `branch`, or `ForeignWorktree`. The same check
+    /// ingress uses: both path and branch must match one conversion.
+    pub fn linked_conversion(
+        &self,
+        id: &str,
+        worktree_path: &str,
+        branch: &str,
+    ) -> Result<ConversionOutcome, InboxServiceError> {
+        let draft = self.parsed(id)?;
+        let claimed = crate::util::path::comparable_path(worktree_path);
+        created_conversions(&draft)
+            .into_iter()
+            .find(|c| {
+                c.branch == branch
+                    && c.worktree_path
+                        .as_deref()
+                        .is_some_and(|p| crate::util::path::comparable_path(p) == claimed)
+            })
+            .ok_or_else(|| InboxServiceError::ForeignWorktree(id.to_string()))
+    }
+
     fn ingest_unaudited(&self, ingress: &WorktreeIngress) -> Result<InboxEvent, InboxServiceError> {
         let draft = self.parsed(&ingress.draft_id)?;
         let claimed = crate::util::path::comparable_path(&ingress.worktree_path);

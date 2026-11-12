@@ -35,7 +35,7 @@ pub enum Role {
     SystemAnalyst,
     SolutionsArchitect,
     SolutionReviewer,
-    /// Owned by the project-level track; listed so the gate is total.
+    /// Reviews a project's design or code on a read-only worktree snapshot.
     ProjectReviewer,
 }
 
@@ -57,6 +57,10 @@ pub const SOLUTION_REVIEWER_PROMPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../skills/agents/solution-reviewer.md"
 ));
+pub const PROJECT_REVIEWER_PROMPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../skills/agents/project-reviewer.md"
+));
 
 impl Role {
     pub const SOLUTION_ROLES: [Role; 4] = [
@@ -64,6 +68,13 @@ impl Role {
         Role::SystemAnalyst,
         Role::SolutionsArchitect,
         Role::SolutionReviewer,
+    ];
+    pub const ALL: [Role; 5] = [
+        Role::Coordinator,
+        Role::SystemAnalyst,
+        Role::SolutionsArchitect,
+        Role::SolutionReviewer,
+        Role::ProjectReviewer,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -84,7 +95,7 @@ impl Role {
             Role::SystemAnalyst => Some(SYSTEM_ANALYST_PROMPT),
             Role::SolutionsArchitect => Some(SOLUTIONS_ARCHITECT_PROMPT),
             Role::SolutionReviewer => Some(SOLUTION_REVIEWER_PROMPT),
-            Role::ProjectReviewer => None,
+            Role::ProjectReviewer => Some(PROJECT_REVIEWER_PROMPT),
         }
     }
 
@@ -241,8 +252,14 @@ pub fn tool_policy(agent: &str) -> ToolPolicy {
                 .map(|s| s.to_string())
                 .collect(),
             strict_mcp: true,
+            // No hooks run in a role job: a project's or the user's hooks
+            // are code that would execute inside the reviewer (FT-05).
             settings: Some(
-                serde_json::json!({ "permissions": { "deny": CLAUDE_READ_DENY } }).to_string(),
+                serde_json::json!({
+                    "permissions": { "deny": CLAUDE_READ_DENY },
+                    "disableAllHooks": true,
+                })
+                .to_string(),
             ),
             max_turns: None,
         },
@@ -292,6 +309,8 @@ pub struct RoleJob {
     pub prompt: String,
     /// The operator acknowledged running an unverified CLI.
     pub acknowledged_unverified: bool,
+    /// Run here instead of an empty scratch directory (a review snapshot).
+    pub cwd: Option<PathBuf>,
 }
 
 /// How a role job failed. None of these consume a review round.
@@ -515,11 +534,16 @@ impl RoleRunner {
     }
 
     async fn run_once(&self, job: &RoleJob, timeout: Duration) -> Result<String, RoleJobError> {
-        let scratch = prepare_scratch_dir(
-            &self.scratch_root,
-            &format!("{}{}", job.item_id, job.role.as_str().replace('-', "")),
-        )
-        .map_err(|e| RoleJobError::AgentFailed(format!("scratch dir: {e}")))?;
+        // A review snapshot when the job names one; otherwise an empty
+        // per-item scratch directory.
+        let scratch = match &job.cwd {
+            Some(dir) => dir.clone(),
+            None => prepare_scratch_dir(
+                &self.scratch_root,
+                &format!("{}{}", job.item_id, job.role.as_str().replace('-', "")),
+            )
+            .map_err(|e| RoleJobError::AgentFailed(format!("scratch dir: {e}")))?,
+        };
         let launch = build_launch(
             job,
             &scratch,

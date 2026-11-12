@@ -9,6 +9,8 @@ mod operator_auth;
 #[cfg(test)]
 mod operator_e2e_tests;
 mod operator_routes;
+#[cfg(test)]
+mod project_review_e2e_tests;
 mod server;
 mod services;
 #[cfg(test)]
@@ -197,8 +199,14 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
     }
     let solution = Arc::new(services::solution::SolutionService::new(
         inbox.clone(),
+        roles.clone(),
+        factory.clone(),
+    ));
+    let reviews = Arc::new(services::project_review::ProjectReviewService::new(
+        inbox.clone(),
         roles,
         factory.clone(),
+        std::env::temp_dir().join(format!("sebenza-review-snapshots-{}", std::process::id())),
     ));
     let state = AppState {
         manager,
@@ -211,6 +219,7 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         operator,
         factory,
         solution,
+        reviews,
         frontend_dist,
     };
 

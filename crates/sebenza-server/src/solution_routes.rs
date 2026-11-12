@@ -298,6 +298,62 @@ pub async fn defer_handover(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+impl From<crate::services::project_review::ReviewError> for ApiError {
+    fn from(e: crate::services::project_review::ReviewError) -> Self {
+        use crate::services::project_review::ReviewError as R;
+        match e {
+            R::BadLevel | R::BadTrack => ApiError::new(400, e.to_string()),
+            R::RoundLimit => ApiError::coded(409, "round_limit", e.to_string()),
+            R::NotIndependent(_) => ApiError::coded(422, "not_independent", e.to_string()),
+            R::Busy => ApiError::coded(409, "busy", e.to_string()),
+            R::Inbox(i) => i.into(),
+            R::Internal(_) => ApiError::new(500, e.to_string()),
+        }
+    }
+}
+
+fn control_only(headers: &HeaderMap) -> Result<(), ApiError> {
+    let token = headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    let expected =
+        crate::adapters::control_token::load_control_token().map_err(|e| ApiError::new(500, e))?;
+    if token != Some(expected.as_str()) {
+        return Err(ApiError::new(401, "Unauthorized".to_string()));
+    }
+    Ok(())
+}
+
+/// `POST /api/runtime/review` — `sebenza-agentctl review`: the control token
+/// plus a worktree that is a recorded conversion of the item.
+pub async fn start_review(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<crate::services::project_review::ReviewRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    control_only(&headers)?;
+    let job = state.reviews.start(req)?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(serde_json::to_value(job).unwrap_or_default()),
+    ))
+}
+
+/// `GET /api/runtime/review/{job}` — poll a review job.
+pub async fn poll_review(
+    State(state): State<AppState>,
+    Path(job): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    control_only(&headers)?;
+    let job = state
+        .reviews
+        .job(&job)
+        .ok_or_else(|| ApiError::new(404, format!("no review job {job}")))?;
+    Ok(Json(serde_json::to_value(job).unwrap_or_default()))
+}
+
 /// `GET /api/factory/agents` — agents for the pickers: installed, and how
 /// far their read-only enforcement is proven.
 pub async fn factory_agents(headers: HeaderMap) -> Result<Json<serde_json::Value>, ApiError> {

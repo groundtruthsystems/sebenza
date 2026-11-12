@@ -95,6 +95,14 @@ def build_parser():
     comment = subparsers.add_parser("comment", help="comment on this worktree's thread of its origin inbox item")
     comment.add_argument("--body", required=True, help="the comment text, or - to read stdin")
 
+    # An independent review of this worktree's design or code, run by the daemon
+    # on a read-only snapshot with the configured project reviewer. The agent
+    # cannot pick the reviewer or the round; it only asks and reads the verdict.
+    review = subparsers.add_parser("review", help="ask the daemon for an independent review of this worktree")
+    review.add_argument("--level", choices=["design", "code"], required=True)
+    review.add_argument("--track", required=True, help="the track id under .ai/sebenza/tracks/")
+    review.add_argument("--timeout", type=int, default=900, help="seconds to wait for the verdict")
+
     return parser
 
 
@@ -337,6 +345,78 @@ def send_inbox(command, args, control_env):
     return 0 if send_payload(payload, control_env) else 1
 
 
+# Exit codes for `review`, so a skill can branch without parsing text.
+REVIEW_EXIT = {"round_limit": 3, "not_independent": 4, "voided": 5, "unlinked": 6}
+
+
+def review_url(control_env, suffix=""):
+    base = control_env["SEBENZA_CONTROL_URL"]
+    marker = "/api/runtime/events"
+    root = base[: base.index(marker)] if marker in base else base.rstrip("/")
+    return f"{root}/api/runtime/review{suffix}"
+
+
+def http_json(url, control_env, payload=None, timeout=10):
+    request = urllib.request.Request(
+        url,
+        data=None if payload is None else json.dumps(payload).encode(),
+        headers={
+            "Authorization": f"Bearer {control_env['SEBENZA_CONTROL_TOKEN']}",
+            "Content-Type": "application/json",
+        },
+        method="GET" if payload is None else "POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as error:
+        try:
+            return error.code, json.loads(error.read() or b"{}")
+        except ValueError:
+            return error.code, {}
+
+
+def send_review(args, control_env, sleep=None, clock=None):
+    """Start a review, wait for it, print its JSON, and exit by outcome."""
+    import time
+
+    sleep = sleep or time.sleep
+    clock = clock or time.monotonic
+    worktree_path = resolve_worktree_path()
+    draft_id = read_origin_draft_id(worktree_path)
+    if not draft_id:
+        print(json.dumps({"status": "unlinked", "independent": False,
+                          "error": f"this worktree was not converted from an inbox item (no {INBOX_ORIGIN_REL_PATH}); review in-session and record the round locally"}))
+        return REVIEW_EXIT["unlinked"]
+    status, job = http_json(review_url(control_env), control_env, {
+        "draftId": draft_id,
+        "worktreePath": worktree_path,
+        "branch": control_env["SEBENZA_BRANCH"],
+        "level": args.level,
+        "trackId": args.track,
+    })
+    if status != 202:
+        code = job.get("code", "")
+        print(json.dumps({"status": "refused", "httpStatus": status, "code": code, "error": job.get("error", "")}))
+        return REVIEW_EXIT.get(code, 1)
+    deadline = clock() + args.timeout
+    while job.get("status") == "running" and clock() < deadline:
+        sleep(2)
+        status, polled = http_json(review_url(control_env, f"/{job['jobId']}"), control_env)
+        if status == 404:
+            # The daemon restarted: the job is gone and consumed no round.
+            job = {**job, "status": "failed", "errorCode": "daemon_restart"}
+            break
+        if status == 200:
+            job = polled
+    print(json.dumps(job, indent=2))
+    if job.get("status") == "succeeded":
+        return 0
+    if job.get("status") == "voided":
+        return REVIEW_EXIT["voided"]
+    return 1
+
+
 def main():
     parsed = build_parser().parse_args()
 
@@ -359,6 +439,9 @@ def main():
 
     if parsed.command in ("request", "comment"):
         return send_inbox(parsed.command, parsed, control_env)
+
+    if parsed.command == "review":
+        return send_review(parsed, control_env)
 
     if parsed.command == "codex-session-start":
         send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="idle"), control_env), control_env)

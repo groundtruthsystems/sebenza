@@ -162,6 +162,12 @@ pub enum InboxEventKind {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         problem_ids: Vec<String>,
     },
+    /// A review round thrown away because the reviewer changed the snapshot
+    /// or the live worktree (FT-04). It consumes no round.
+    ReviewRoundVoided {
+        round: RoundRef,
+        reason: String,
+    },
     /// One escalated problem, carried as its own request (FR-18). A new kind,
     /// so an older binary skips it instead of folding a request with no worktree.
     ProblemRaised {
