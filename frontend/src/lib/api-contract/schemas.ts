@@ -1051,9 +1051,14 @@ export const InboxDraftSchema = z.object({
   /** Token for adding, deleting or reordering notes. */
   listHash: z.string().default(""),
   raw: z.object({ text: z.string(), error: z.string() }).nullable(),
+  /** `solution` for a software-factory item; absent for a note. */
+  kind: z.enum(["note", "solution"]).optional().catch(undefined),
 });
 
-export const CreateInboxDraftRequestSchema = z.object({ title: z.string() });
+export const CreateInboxDraftRequestSchema = z.object({
+  title: z.string(),
+  kind: z.enum(["note", "solution"]).optional(),
+});
 
 export const SaveInboxDraftBodyRequestSchema = z.object({
   expectedHash: z.string(),
@@ -1135,9 +1140,21 @@ export const InboxRequestStatusSchema = z.enum([
   "delivery_failed",
 ]);
 
+/** Where a request came from; absent on servers that predate it. */
+export const InboxRequestOriginSchema = z.enum([
+  "worktree",
+  "approval",
+  "verification",
+  "solution_problem",
+]);
+
 export const InboxRequestSchema = z.object({
   requestId: z.string(),
-  worktree: InboxWorktreeKeySchema,
+  /** Absent for a solution problem, which no worktree pane receives. */
+  worktree: InboxWorktreeKeySchema.optional(),
+  /** Absent means "worktree"; an unknown value is read as absent. */
+  origin: InboxRequestOriginSchema.optional().catch(undefined),
+  problemId: z.string().optional(),
   title: z.string(),
   body: z.string(),
   status: InboxRequestStatusSchema,

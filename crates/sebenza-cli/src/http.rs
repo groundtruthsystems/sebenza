@@ -601,6 +601,74 @@ fn control_token() -> Result<String> {
 }
 
 impl Http {
+    /// `POST /api/operator/login` — start a CLI operator login.
+    pub async fn operator_login_start(&self, verifier_hash: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!("{}/api/operator/login", self.hub))
+            .bearer_auth(control_token()?)
+            .json(&serde_json::json!({ "client": "sebenza-cli", "verifierHash": verifier_hash }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `GET /api/operator/login/{id}` — poll it with the verifier.
+    pub async fn operator_login_poll(&self, login_id: &str, verifier: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .get(format!("{}/api/operator/login/{login_id}", self.hub))
+            .header("x-sebenza-login-verifier", verifier)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+}
+
+impl Http {
+    /// One factory route call: the operator token for operator routes, the
+    /// control token otherwise.
+    pub async fn factory_call(&self, call: &crate::factory_cli::Call) -> Result<Value> {
+        let token = if call.operator {
+            crate::login::operator_token()?
+        } else {
+            control_token()?
+        };
+        let url = format!("{}{}", self.hub, call.path);
+        let req = match call.method {
+            "GET" => self.http.get(url),
+            "PUT" => self.http.put(url),
+            _ => self.http.post(url),
+        }
+        .bearer_auth(token);
+        let req = match &call.body {
+            Some(b) => req.json(b),
+            None => req,
+        };
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `POST /api/inbox` with a kind.
+    pub async fn inbox_create_kind(&self, title: &str, kind: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!("{}/api/inbox", self.hub))
+            .bearer_auth(control_token()?)
+            .json(&serde_json::json!({ "title": title, "kind": kind }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+}
+
+impl Http {
     /// `GET /api/inbox`
     pub async fn inbox_list(&self, search: Option<&str>, include_dropped: bool) -> Result<Value> {
         let mut url = format!("{}/api/inbox?includeDropped={include_dropped}", self.hub);

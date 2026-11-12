@@ -571,6 +571,98 @@ pub fn load_system_agent_config_from(
     parse_system_agent_config(doc.as_mapping().and_then(|m| m.get("systemAgent")))
 }
 
+/// The machine-wide `factory:` block from `~/.ai/sebenza.yaml`.
+pub fn load_factory_config() -> std::result::Result<
+    crate::domain::factory::FactoryConfig,
+    crate::domain::factory::FactoryConfigError,
+> {
+    load_factory_config_from(&global_config_path())
+}
+
+fn global_config_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    Path::new(&home).join(".ai").join("sebenza.yaml")
+}
+
+/// [`load_factory_config`] over an explicit file. A missing file or block is
+/// the default; a block of the wrong shape is an error.
+pub fn load_factory_config_from(
+    path: &Path,
+) -> std::result::Result<
+    crate::domain::factory::FactoryConfig,
+    crate::domain::factory::FactoryConfigError,
+> {
+    use crate::domain::factory::{FactoryConfigError, parse_factory_config};
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return parse_factory_config(None);
+        }
+        Err(e) => {
+            return Err(FactoryConfigError::Invalid(format!(
+                "cannot read {}: {e}",
+                path.display()
+            )));
+        }
+    };
+    let doc: serde_yaml::Value = serde_yaml::from_str(&content).map_err(|e| {
+        FactoryConfigError::Invalid(format!("{} is not valid YAML: {e}", path.display()))
+    })?;
+    parse_factory_config(doc.as_mapping().and_then(|m| m.get("factory")))
+}
+
+/// Validate `config` and write it as the `factory:` key of `path`, keeping
+/// every other key. The file is written temp-then-rename and left 0600. A
+/// refused config writes nothing.
+pub fn save_factory_config_to(
+    path: &Path,
+    config: &crate::domain::factory::FactoryConfig,
+) -> std::result::Result<(), crate::domain::factory::FactoryConfigError> {
+    use crate::domain::factory::FactoryConfigError;
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    config.validate()?;
+    let io = |e: std::io::Error| FactoryConfigError::Invalid(format!("{}: {e}", path.display()));
+    let mut doc = match fs::read_to_string(path) {
+        Ok(text) => serde_yaml::from_str::<serde_yaml::Value>(&text).map_err(|e| {
+            FactoryConfigError::Invalid(format!("{} is not valid YAML: {e}", path.display()))
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            serde_yaml::Value::Mapping(Default::default())
+        }
+        Err(e) => return Err(io(e)),
+    };
+    if doc.is_null() {
+        doc = serde_yaml::Value::Mapping(Default::default());
+    }
+    let Some(map) = doc.as_mapping_mut() else {
+        return Err(FactoryConfigError::Invalid(format!(
+            "{} is not a YAML mapping",
+            path.display()
+        )));
+    };
+    let value =
+        serde_yaml::to_value(config).map_err(|e| FactoryConfigError::Invalid(e.to_string()))?;
+    map.insert("factory".into(), value);
+    let text =
+        serde_yaml::to_string(&doc).map_err(|e| FactoryConfigError::Invalid(e.to_string()))?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(io)?;
+    }
+    let tmp = path.with_extension("yaml.tmp");
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .map_err(io)?;
+    f.write_all(text.as_bytes()).map_err(io)?;
+    f.sync_all().map_err(io)?;
+    fs::rename(&tmp, path).map_err(io)?;
+    Ok(())
+}
+
 fn read_local_config_document(root: &str) -> (PathBuf, serde_yaml::Value) {
     let local_path = Path::new(root).join(".ai").join("sebenza.local.yaml");
     let mut doc = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
@@ -768,5 +860,74 @@ mod system_agent_config_tests {
         fs::write(&path, "systemAgent:\n  agent: grok\n").unwrap();
         assert!(load_system_agent_config_from(&path).is_err());
         let _ = fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod factory_config_tests {
+    use super::*;
+    use crate::domain::factory::{FactoryConfig, FactoryConfigError};
+    use crate::domain::solution::AgentProfile;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn temp(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("sebenza-factory-cfg-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir.join("sebenza.yaml")
+    }
+
+    #[test]
+    fn a_missing_file_or_block_is_the_default() {
+        let path = temp("missing");
+        assert_eq!(
+            load_factory_config_from(&path).unwrap(),
+            FactoryConfig::default()
+        );
+        fs::write(&path, "launchers: {}\n").unwrap();
+        assert_eq!(
+            load_factory_config_from(&path).unwrap(),
+            FactoryConfig::default()
+        );
+    }
+
+    #[test]
+    fn save_keeps_other_keys_and_is_owner_only() {
+        let path = temp("save");
+        fs::write(&path, "systemAgent:\n  model: opus\nlaunchers: {}\n").unwrap();
+        let mut cfg = FactoryConfig::default();
+        cfg.solution.reviewer = Some(AgentProfile::new("codex", None));
+        save_factory_config_to(&path, &cfg).unwrap();
+        assert_eq!(load_factory_config_from(&path).unwrap(), cfg);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("systemAgent"), "other keys survive:\n{text}");
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!path.with_extension("yaml.tmp").exists());
+    }
+
+    // TS-18 (save half): a reviewer equal to the designer is refused on save
+    // and nothing is written.
+    #[test]
+    fn a_dependent_reviewer_is_refused_on_save() {
+        let path = temp("refuse");
+        fs::write(&path, "launchers: {}\n").unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        let mut cfg = FactoryConfig::default();
+        cfg.solution.reviewer = Some(AgentProfile::new("claude", None));
+        let err = save_factory_config_to(&path, &cfg).unwrap_err();
+        assert_eq!(err.code(), "not_independent");
+        assert!(matches!(err, FactoryConfigError::NotIndependent { .. }));
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn a_malformed_block_is_an_error() {
+        let path = temp("bad");
+        fs::write(&path, "factory:\n  solution: [1, 2]\n").unwrap();
+        assert!(load_factory_config_from(&path).is_err());
     }
 }

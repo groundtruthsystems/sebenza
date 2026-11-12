@@ -56,6 +56,14 @@ pub struct AppState {
     pub inbox_jobs: Arc<crate::services::inbox_jobs::ConversionJobManager>,
     /// The per-item inbox system agent (triage, draft-help, convert jobs).
     pub system_agent: Arc<crate::services::system_agent::SystemAgentService>,
+    /// Operator credentials for this daemon run (in memory only).
+    pub operator: Arc<crate::operator_auth::OperatorAuth>,
+    /// The global `factory:` block.
+    pub factory: Arc<crate::operator_routes::FactorySettings>,
+    /// The solution level: coordinator, pipeline and review gate.
+    pub solution: Arc<crate::services::solution::SolutionService>,
+    /// Project design and code reviews requested by worktrees.
+    pub reviews: Arc<crate::services::project_review::ProjectReviewService>,
     pub frontend_dist: Option<PathBuf>,
 }
 
@@ -198,6 +206,9 @@ pub fn spawn_background_loops(state: AppState) {
 pub struct ApiError {
     pub status: StatusCode,
     pub message: String,
+    /// A stable machine-readable code (`operator_required`,
+    /// `not_independent`, ...), sent as `code` beside `error`.
+    pub code: Option<&'static str>,
 }
 
 impl ApiError {
@@ -205,6 +216,14 @@ impl ApiError {
         ApiError {
             status: StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             message,
+            code: None,
+        }
+    }
+
+    pub fn coded(status: u16, code: &'static str, message: String) -> Self {
+        ApiError {
+            code: Some(code),
+            ..ApiError::new(status, message)
         }
     }
 }
@@ -219,7 +238,10 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (
             self.status,
-            Json(serde_json::json!({ "error": self.message })),
+            Json(match self.code {
+                Some(code) => serde_json::json!({ "error": self.message, "code": code }),
+                None => serde_json::json!({ "error": self.message }),
+            }),
         )
             .into_response()
     }
@@ -306,10 +328,105 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/registry", get(fetch_registry))
         .route("/api/registry/file", get(fetch_registry_file))
         .route("/api/runtime/events", post(runtime_event))
+        .route(
+            "/api/runtime/review",
+            post(crate::solution_routes::start_review),
+        )
+        .route(
+            "/api/runtime/review/{job}",
+            get(crate::solution_routes::poll_review),
+        )
         // Inbox (global; drafts precede any project).
         .route(
             "/api/inbox/session",
             get(crate::inbox_routes::inbox_session),
+        )
+        // Operator credential and operator-only routes.
+        .route(
+            "/api/operator/session",
+            post(crate::operator_routes::operator_session),
+        )
+        .route(
+            "/api/operator/login",
+            post(crate::operator_routes::start_login),
+        )
+        .route(
+            "/api/operator/login/{id}",
+            get(crate::operator_routes::poll_login),
+        )
+        .route(
+            "/api/operator/logins",
+            get(crate::operator_routes::list_logins),
+        )
+        .route(
+            "/api/operator/logins/{id}/{decision}",
+            post(crate::operator_routes::decide_login),
+        )
+        .route(
+            "/api/factory/config",
+            get(crate::operator_routes::get_factory_config)
+                .put(crate::operator_routes::put_factory_config),
+        )
+        .route(
+            "/api/factory/agents",
+            get(crate::solution_routes::factory_agents),
+        )
+        .route(
+            "/api/inbox/{id}/solution",
+            get(crate::solution_routes::get_solution),
+        )
+        .route(
+            "/api/inbox/{id}/coordinator/turn",
+            post(crate::solution_routes::coordinator_turn),
+        )
+        .route(
+            "/api/inbox/{id}/coordinator/transcript",
+            get(crate::solution_routes::coordinator_transcript),
+        )
+        .route(
+            "/api/inbox/{id}/coordinator/proposals/{turn}/{index}/apply",
+            post(crate::solution_routes::apply_proposal),
+        )
+        .route(
+            "/api/inbox/{id}/solution/start-design",
+            post(crate::solution_routes::start_design),
+        )
+        .route(
+            "/api/inbox/{id}/solution/review",
+            post(crate::solution_routes::review),
+        )
+        .route(
+            "/api/inbox/{id}/solution/docs/{*name}",
+            get(crate::solution_routes::get_doc).put(crate::solution_routes::put_doc),
+        )
+        .route(
+            "/api/inbox/{id}/solution/approve-design",
+            post(crate::solution_routes::approve_design),
+        )
+        .route(
+            "/api/inbox/{id}/handover/draft",
+            post(crate::solution_routes::draft_handovers),
+        )
+        .route(
+            "/api/inbox/{id}/handover/{project}",
+            put(crate::solution_routes::edit_handover),
+        )
+        .route(
+            "/api/inbox/{id}/handover/{project}/approve",
+            post(crate::solution_routes::approve_handover),
+        )
+        .route(
+            "/api/inbox/{id}/handover/{project}/defer",
+            post(crate::solution_routes::defer_handover),
+        )
+        .route(
+            "/api/inbox/{id}/solution/problems/{pid}/resolve",
+            post(crate::solution_routes::resolve_problem),
+        )
+        .route(
+            "/api/inbox/{id}/factory/agents",
+            get(crate::operator_routes::get_item_agents)
+                .put(crate::operator_routes::put_item_agents),
         )
         .route(
             "/api/inbox",

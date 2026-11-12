@@ -112,6 +112,28 @@ RESIDUAL RISKS / OPEN QUESTIONS
 
 Rank findings by severity; make each actionable.
 
+## 5a. Code review rounds (software factory)
+
+When the track is implemented, its code gets an **independent** review: the operator's configured
+project reviewer, on a read-only snapshot of this worktree. At most **3 rounds**; report each as
+"round n of 3". `<sebenza>` is this plugin's directory.
+
+1. Run `python3 "<sebenza>/scripts/inbox.py" review --level code --track <track_id> --apply`.
+   - Exit `0`, verdict `changes`: the helper has already sent the tasks the findings name back to
+     `doing` in `plan.json` (with `review_round` and `review_findings`) and resolved findings the
+     reviewer dropped. Findings it could not match to a task are listed under `unmatched`; add them
+     to the report. Hand the reopened tasks to `sebenza-implement`, then come back to step 1.
+   - Exit `0`, verdict `agreed`: go to step 2.
+   - Exit `8` (round limit): **stop** — no fourth round. Go to step 2; the open findings travel with it.
+   - Exit `9` (not independent) or `10` (voided): as in `sebenza-architect` §7a.
+   - Exit `3` (unlinked): run the `project-reviewer` agent in code mode yourself and record it with
+     `review --level code --track <track_id> --local --verdict … --findings - --apply`; it is
+     flagged not independent and capped the same way.
+2. **Final verification.** Run `python3 "<sebenza>/scripts/inbox.py" verification --track <track_id>`.
+   It files one `[<track_id>/verification]` request on the origin item that says how review ended and
+   lists every finding still open. Then **stop**: the operator verifies and decides; do not mark the
+   track done until they answer.
+
 ## 6. Offer follow-up
 
 Based on the verdict, offer next steps (do not act without confirmation):

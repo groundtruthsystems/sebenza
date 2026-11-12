@@ -312,6 +312,13 @@ pub trait ConversionRunner {
         Ok(())
     }
 
+    /// Write an approved solution handover at [`SOLUTION_HANDOVER_REL_PATH`],
+    /// byte for byte. A runner that cannot must say so: a handover conversion
+    /// without its handover is a failure, never a silent skip.
+    fn write_handover(&self, _worktree_path: &str, _body: &str) -> Result<(), String> {
+        Err("this runner cannot write a solution handover".to_string())
+    }
+
     /// Keep the note out of `git status`, for this worktree only.
     fn exclude_note(&self, worktree_path: &str) -> Result<(), String>;
 
@@ -353,7 +360,25 @@ pub const NOTES_MANIFEST_SCHEMA: &str = "sebenza-inbox-notes-v1";
 ///
 /// Excluding only the note is not enough: git reports an untracked *directory*
 /// whole, so one un-excluded sibling puts `.ai/` back in `git status`.
-pub const WRITTEN_REL_PATHS: [&str; 3] = [NOTE_REL_PATH, ORIGIN_REL_PATH, NOTES_MANIFEST_REL_PATH];
+pub const WRITTEN_REL_PATHS: [&str; 4] = [
+    NOTE_REL_PATH,
+    ORIGIN_REL_PATH,
+    NOTES_MANIFEST_REL_PATH,
+    SOLUTION_HANDOVER_REL_PATH,
+];
+
+/// Where an approved solution handover lands in its worktree (FR-20).
+pub const SOLUTION_HANDOVER_REL_PATH: &str = ".ai/sebenza/solution-handover.md";
+
+/// One approved project handover: the exact approved bytes and the hashes
+/// they were approved under, stamped into `inbox-notes.json`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SolutionHandover {
+    pub project: String,
+    pub design_hash: String,
+    pub instruction_hash: String,
+    pub text: String,
+}
 
 /// Run one wave of conversions.
 ///
@@ -396,6 +421,7 @@ fn run_one<R: ConversionRunner>(
     item: &ConversionItem<'_>,
     target: &ConversionTarget,
     wave: &[ConversionTarget],
+    handover: Option<&SolutionHandover>,
 ) -> ConversionOutcome {
     let draft_id = item.draft_id;
     let body = render_concatenated(item.notes);
@@ -404,7 +430,20 @@ fn run_one<R: ConversionRunner>(
         .filter(|t| !(t.project_path == target.project_path && t.branch == target.branch))
         .cloned()
         .collect();
-    let manifest = notes_manifest_json(item, &siblings);
+    let manifest = match handover {
+        None => notes_manifest_json(item, &siblings),
+        Some(h) => {
+            let mut v: serde_json::Value =
+                serde_json::from_str(&notes_manifest_json(item, &siblings)).unwrap_or_default();
+            v["solution"] = serde_json::json!({
+                "project": h.project,
+                "design_hash": h.design_hash,
+                "handover_hash": h.instruction_hash,
+                "handover_path": SOLUTION_HANDOVER_REL_PATH,
+            });
+            serde_json::to_string_pretty(&v).unwrap_or_else(|_| "{}".to_string())
+        }
+    };
     let notes_list_hash = list_hash(item.notes);
     let note_types: Vec<String> = item.notes.iter().map(|n| n.note_type.clone()).collect();
     let system_instruction = target
@@ -447,6 +486,11 @@ fn run_one<R: ConversionRunner>(
     }
     if let Err(e) = runner.write_notes_manifest(&worktree_path, &manifest) {
         // Same rule as the note: an agent must not start without its notes.
+        return fail(e);
+    }
+    if let Some(h) = handover
+        && let Err(e) = runner.write_handover(&worktree_path, &h.text)
+    {
         return fail(e);
     }
     if let Err(e) = runner.exclude_note(&worktree_path) {
@@ -701,6 +745,45 @@ mod tests {
         assert_eq!(out.error.as_deref(), Some("worktree exists"));
         assert_eq!(out.prompt, "do the thing");
         assert_eq!(out.worktree_path, None);
+    }
+
+    // FR-20: a handover conversion whose runner cannot write the handover
+    // fails; the agent is never prompted without it.
+    #[test]
+    fn a_handover_conversion_needs_its_handover_written() {
+        let runner = FakeRunner::default();
+        let notes = [InboxNote::default_with("brief")];
+        let item = ConversionItem {
+            draft_id: "01ITEM",
+            title: "t",
+            notes: &notes,
+        };
+        let h = SolutionHandover {
+            project: "/code/acme".into(),
+            design_hash: "d".into(),
+            instruction_hash: "i".into(),
+            text: "do x".into(),
+        };
+        let out = run_handover_conversion(&runner, &item, &target("/code/acme", "x"), &h);
+        assert!(!out.is_created());
+        assert!(
+            out.error
+                .unwrap()
+                .contains("cannot write a solution handover")
+        );
+        assert!(
+            !runner
+                .calls
+                .borrow()
+                .iter()
+                .any(|c| c.starts_with("prompt")),
+            "never prompted: {:?}",
+            runner.calls.borrow()
+        );
+        assert!(
+            WRITTEN_REL_PATHS.contains(&SOLUTION_HANDOVER_REL_PATH),
+            "git-excluded"
+        );
     }
 
     // --- run_conversion ---------------------------------------------------
@@ -1018,7 +1101,8 @@ mod tests {
         assert!(WRITTEN_REL_PATHS.contains(&NOTE_REL_PATH));
         assert!(WRITTEN_REL_PATHS.contains(&ORIGIN_REL_PATH));
         assert!(WRITTEN_REL_PATHS.contains(&NOTES_MANIFEST_REL_PATH));
-        assert_eq!(WRITTEN_REL_PATHS.len(), 3);
+        assert!(WRITTEN_REL_PATHS.contains(&SOLUTION_HANDOVER_REL_PATH));
+        assert_eq!(WRITTEN_REL_PATHS.len(), 4);
         for path in WRITTEN_REL_PATHS {
             assert!(
                 path.starts_with(".ai/sebenza/"),
@@ -1109,6 +1193,78 @@ pub fn secret_hit_names(text: &str) -> Vec<&'static str> {
         .filter(|(_, prefix, min_tail)| looks_like_key(text, prefix, *min_tail))
         .map(|(label, _, _)| *label)
         .collect()
+}
+
+/// Replace every secret-pattern match in `text` with `[redacted: <label>]`,
+/// plus Sebenza operator tokens (`op_` + 64 hex) and each exact string in
+/// `known` (the control token, live operator tokens). Returns the text and the
+/// labels that fired, once each. Used on agent output, which is rejected or
+/// redacted rather than merely warned about (FT-06, FT-11).
+pub fn redact_secrets(text: &str, known: &[String]) -> (String, Vec<&'static str>) {
+    let mut out = text.to_string();
+    let mut hits: Vec<&'static str> = Vec::new();
+    for k in known.iter().filter(|k| k.len() >= 8) {
+        if out.contains(k.as_str()) {
+            out = out.replace(k.as_str(), "[redacted: Sebenza token]");
+            if !hits.contains(&"Sebenza token") {
+                hits.push("Sebenza token");
+            }
+        }
+    }
+    let patterns =
+        SECRET_PATTERNS
+            .iter()
+            .copied()
+            .chain(std::iter::once(("Sebenza token", "op_", 64)));
+    for (label, prefix, min_tail) in patterns {
+        let mut result = String::with_capacity(out.len());
+        let mut rest = out.as_str();
+        let mut fired = false;
+        while let Some(at) = rest.find(prefix) {
+            let boundary = at == 0 || !rest.as_bytes()[at - 1].is_ascii_alphanumeric();
+            let after = &rest[at + prefix.len()..];
+            let tail = if prefix == "-----BEGIN" {
+                // A key block runs to its END line.
+                after
+                    .find("-----END")
+                    .map(|e| {
+                        let end_line = &after[e + 8..];
+                        e + 8
+                            + end_line
+                                .find("-----")
+                                .map(|x| x + 5)
+                                .unwrap_or(end_line.len())
+                    })
+                    .unwrap_or(after.len())
+            } else {
+                after
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                    .map(char::len_utf8)
+                    .sum()
+            };
+            let long_enough = if prefix == "-----BEGIN" {
+                true
+            } else {
+                tail >= min_tail
+            };
+            if boundary && long_enough {
+                result.push_str(&rest[..at]);
+                result.push_str(&format!("[redacted: {label}]"));
+                rest = &after[tail..];
+                fired = true;
+            } else {
+                result.push_str(&rest[..at + prefix.len()]);
+                rest = after;
+            }
+        }
+        result.push_str(rest);
+        out = result;
+        if fired && !hits.contains(&label) {
+            hits.push(label);
+        }
+    }
+    (out, hits)
 }
 
 /// Warn when a target's worktree will not be sandboxed.
@@ -1314,6 +1470,22 @@ pub fn notes_manifest_json(item: &ConversionItem<'_>, siblings: &[ConversionTarg
     serde_json::to_string_pretty(&manifest).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// Convert one project of a solution item with its approved handover.
+pub fn run_handover_conversion<R: ConversionRunner>(
+    runner: &R,
+    item: &ConversionItem<'_>,
+    target: &ConversionTarget,
+    handover: &SolutionHandover,
+) -> ConversionOutcome {
+    run_one(
+        runner,
+        item,
+        target,
+        std::slice::from_ref(target),
+        Some(handover),
+    )
+}
+
 /// [`run_conversion`], with the item's title available to the launch prompt.
 pub fn run_conversion_item<R, F>(
     runner: &R,
@@ -1329,7 +1501,7 @@ where
     targets
         .iter()
         .map(|target| {
-            let outcome = run_one(runner, item, target, targets);
+            let outcome = run_one(runner, item, target, targets, None);
             on_outcome(&outcome);
             outcome
         })
@@ -1878,5 +2050,44 @@ mod notes_delivery_tests {
         );
         let written: serde_json::Value = serde_json::from_str(&written).unwrap();
         assert_eq!(written, golden);
+    }
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::redact_secrets;
+
+    // TS-43 / TS-45 (scan unit): secrets in agent output are redacted, the
+    // labels say which, and ordinary words that merely share a prefix stay.
+    #[test]
+    fn secrets_and_sebenza_tokens_are_redacted() {
+        let op = format!("op_{}", "a1".repeat(32));
+        let text = format!(
+            "key AKIAABCDEFGHIJKLMNOP and {op} and ghp_abcdefghijklmnopqrstuv1234 plus task-123 and risk-averse"
+        );
+        let (out, hits) = redact_secrets(&text, &[]);
+        assert!(!out.contains("AKIAABCDEFGHIJKLMNOP"), "{out}");
+        assert!(!out.contains(&op));
+        assert!(!out.contains("ghp_abcdef"));
+        assert!(out.contains("task-123") && out.contains("risk-averse"));
+        assert!(hits.contains(&"AWS access key"));
+        assert!(hits.contains(&"Sebenza token"));
+        assert!(hits.contains(&"GitHub token"));
+    }
+
+    #[test]
+    fn known_tokens_and_key_blocks_are_redacted() {
+        let control = "0f6e2c1a-1111-4222-8333-944455556666".to_string();
+        let text = format!(
+            "token {control}\n-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\nafter"
+        );
+        let (out, hits) = redact_secrets(&text, &[control.clone()]);
+        assert!(!out.contains(&control));
+        assert!(!out.contains("abc\n"), "{out}");
+        assert!(out.ends_with("\nafter"), "{out}");
+        assert_eq!(hits, vec!["Sebenza token", "private key block"]);
+        let (same, none) = redact_secrets("nothing here", &[control]);
+        assert_eq!(same, "nothing here");
+        assert!(none.is_empty());
     }
 }

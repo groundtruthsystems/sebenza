@@ -441,8 +441,9 @@ fn inbox_request(
         .iter()
         .rev()
         .find(|r| {
-            r.worktree.project == project
-                && r.worktree.branch == branch
+            r.worktree
+                .as_ref()
+                .is_some_and(|w| w.project == project && w.branch == branch)
                 && r.task
                     .as_ref()
                     .is_some_and(|t| t.track_id == track_id && t.task_id == task_id)
@@ -1143,10 +1144,12 @@ mod tests {
 
         let request = RequestView {
             request_id: "01REQ".into(),
-            worktree: WorktreeKey {
+            worktree: Some(WorktreeKey {
                 project: "/code/acme".into(),
                 branch: "x".into(),
-            },
+            }),
+            origin: Default::default(),
+            problem_id: None,
             title: "t".into(),
             body: "b".into(),
             status: RequestStatus::Open,

@@ -106,6 +106,10 @@ impl Daemon {
         let pane = Arc::new(FakePane::default());
         inbox.set_pane_sink(pane.clone());
 
+        let factory = Arc::new(crate::operator_routes::FactorySettings::new(
+            base.join("sebenza.yaml"),
+        ));
+        let inbox_for_solution = inbox.clone();
         let state = AppState {
             manager: Arc::new(crate::services::project_manager::ProjectManager::new(
                 ProjectsRegistry::with_file(base.join("server-projects.json")),
@@ -119,6 +123,19 @@ impl Daemon {
             inbox,
             inbox_jobs: Arc::new(crate::services::inbox_jobs::ConversionJobManager::new()),
             system_agent,
+            operator: Arc::new(crate::operator_auth::OperatorAuth::new()),
+            factory: factory.clone(),
+            solution: Arc::new(crate::services::solution::SolutionService::new(
+                inbox_for_solution.clone(),
+                Arc::new(crate::services::role_runner::test_runner(&base)),
+                factory.clone(),
+            )),
+            reviews: Arc::new(crate::services::project_review::ProjectReviewService::new(
+                inbox_for_solution.clone(),
+                Arc::new(crate::services::role_runner::test_runner(&base)),
+                factory.clone(),
+                base.join("snapshots"),
+            )),
             frontend_dist: None,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

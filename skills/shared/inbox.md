@@ -30,6 +30,11 @@ python3 "<sebenza>/scripts/inbox.py" feedback [--retry]
 python3 "<sebenza>/scripts/inbox.py" check-blocked
 python3 "<sebenza>/scripts/inbox.py" request --move <track_id> <track_id>/<task_id>             # sends nothing
 python3 "<sebenza>/scripts/inbox.py" notes                                                     # sends nothing
+python3 "<sebenza>/scripts/inbox.py" approval --track <track_id> [--raise]                     # the approval gate
+python3 "<sebenza>/scripts/inbox.py" review --level design|code --track <track_id>             # independent review
+python3 "<sebenza>/scripts/inbox.py" review --level design|code --track <track_id> --local --verdict agreed|changes --findings -
+python3 "<sebenza>/scripts/inbox.py" review --level code --track <track_id> --apply           # findings reopen tasks
+python3 "<sebenza>/scripts/inbox.py" verification --track <track_id>                           # final verification
 ```
 
 The commands do the following:
@@ -44,6 +49,16 @@ The commands do the following:
   before a plan existed) to the task it turned out to concern.
 - `feedback` returns this worktree's requests, operator answers and new comments, and brings cached
   request state in line with the daemon.
+- `approval --track` reports whether the operator approved the track's design for implementation:
+  the track's `[<track_id>/approval]` request, answered. `--raise` files it when there is none. An
+  unlinked worktree gets `"linked": false` and asks in chat instead.
+- `review --level --track` asks the daemon for an independent design or code review of this worktree
+  (`sebenza-agentctl review`), on a read-only snapshot, at most 3 rounds per level. `--local` records
+  a review you ran in-session in an unlinked worktree; it is flagged not independent and capped too.
+  With `--apply` at the code level, the tasks the findings name go back to `doing` in `plan.json`
+  (`review_round`, `review_findings`); findings the reviewer no longer raises are resolved.
+- `verification --track` files the track's `[<track_id>/verification]` request after code review
+  ends, listing every finding still open.
 
 Each call prints one JSON object. Branch on the exit code, never on the text:
 
@@ -55,6 +70,10 @@ Each call prints one JSON object. Branch on the exit code, never on the text:
 | `4` | daemon unreachable | The request is stored as `unsent`. Tell the user in chat, then switch or halt. |
 | `5` | daemon refused it | The request is stored as `unsent`. Tell the user in chat, then switch or halt. |
 | `6` | refused by local policy | Rewrite the title or body (see below) and run it again. Nothing was stored. |
+| `7` | not approved (`approval`) | Do not implement. Raise the approval request if missing; wait for the operator. |
+| `8` | round limit (`review`) | Stop reviewing at this level; carry open findings to the next request. |
+| `9` | reviewer not independent (`review`) | Raise a request: the operator's reviewer settings must change. |
+| `10` | review voided (`review`) | Something changed the worktree or snapshot; review again (no round was used). |
 
 ## When to raise a request
 

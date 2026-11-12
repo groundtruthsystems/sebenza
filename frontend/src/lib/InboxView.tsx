@@ -26,6 +26,9 @@ import NewDraftDialog from "./NewDraftDialog";
 import ConfirmDialog from "./ConfirmDialog";
 import Btn from "./Btn";
 import GraphTab from "./GraphTab";
+import CoordinatorTab from "./CoordinatorTab";
+import DesignTab from "./DesignTab";
+import { solutionApi } from "./solutionApi";
 import NotesPanel, { NoteAdder, isDefaultOnly, notesChangedSinceConversion } from "./NotesPanel";
 import Toggle from "./Toggle";
 import ConvertDraftDialog, { type ConvertTarget } from "./ConvertDraftDialog";
@@ -66,6 +69,21 @@ interface Summary {
   isRaw: boolean;
 }
 
+type PageTab = "notes" | "graph" | "coordinator" | "design";
+
+const TAB_LABELS: Record<PageTab, string> = {
+  notes: "Notes",
+  graph: "Graph",
+  coordinator: "Coordinator",
+  design: "Design",
+};
+
+/** A solution item opens on Coordinator / Design / Graph; a note keeps
+ *  Notes / Graph, exactly as before (FR-22). */
+function tabsFor(d: { kind?: string } | null): PageTab[] {
+  return d?.kind === "solution" ? ["coordinator", "design", "graph"] : ["notes", "graph"];
+}
+
 interface Draft extends DraftLike {
   id: string;
   title: string;
@@ -77,6 +95,8 @@ interface Draft extends DraftLike {
   /** The item's notes (schema v3); absent from older servers. */
   notes?: InboxNote[];
   listHash?: string;
+  /** `solution` for a software-factory item; absent for a note. */
+  kind?: "note" | "solution";
   conversions?: {
     projectPath: string;
     branch: string;
@@ -137,7 +157,9 @@ export default function InboxView() {
   // moved underneath it — the merge the operator must resolve.
   const [showHelp, setShowHelp] = useState(false);
   /** The item page's view: its notes, or its worktree/task graph. */
-  const [pageTab, setPageTab] = useState<"notes" | "graph">("notes");
+  const [pageTab, setPageTab] = useState<PageTab>("notes");
+  const [newKind, setNewKind] = useState<"note" | "solution">("note");
+  const [coordinatorNotes, setCoordinatorNotes] = useState<Record<string, string>>({});
   /** The note draft help is aimed at; `null` means the plain body. */
   const [helpNote, setHelpNote] = useState<InboxNote | null>(null);
   const [helpPending, setHelpPending] = useState(false);
@@ -295,6 +317,24 @@ export default function InboxView() {
       setStatus((err as Error).message);
     }
   }, [selectedId]);
+
+  const activeTab: PageTab = tabsFor(draft).includes(pageTab) ? pageTab : tabsFor(draft)[0];
+
+  // The coordinator badge needs the solution fold; notes never fetch it.
+  useEffect(() => {
+    if (draft?.kind !== "solution") {
+      setCoordinatorNotes({});
+      return;
+    }
+    let alive = true;
+    void solutionApi
+      .view(draft.id)
+      .then((v) => alive && setCoordinatorNotes(v.state.coordinatorNotes ?? {}))
+      .catch(() => alive && setCoordinatorNotes({}));
+    return () => {
+      alive = false;
+    };
+  }, [draft?.id, draft?.kind, draft?.listHash]);
 
   const onNotesChanged = (notes: InboxNote[], listHash: string) => {
     setDraft((d) => (d ? { ...d, notes, listHash } : d));
@@ -469,7 +509,7 @@ export default function InboxView() {
     setCreating(true);
     setCreateError("");
     try {
-      const d = (await createInboxDraft(title)) as Draft;
+      const d = (await createInboxDraft(title, newKind === "solution" ? "solution" : undefined)) as Draft;
       setShowNewDialog(false);
       await refresh();
       await open(d.id);
@@ -643,11 +683,23 @@ export default function InboxView() {
               className="h-8 px-2 gap-1.5 rounded-md border border-edge bg-surface text-accent text-xs flex items-center justify-center cursor-pointer hover:bg-hover"
               onClick={() => {
                 setCreateError("");
+                setNewKind("note");
                 setShowNewDialog(true);
               }}
               title="New draft"
             >
               <span className="text-lg leading-none">+</span> New
+            </button>
+            <button
+              className="h-8 px-2 gap-1.5 rounded-md border border-edge bg-surface text-accent text-xs flex items-center justify-center cursor-pointer hover:bg-hover"
+              onClick={() => {
+                setCreateError("");
+                setNewKind("solution");
+                setShowNewDialog(true);
+              }}
+              title="New solution"
+            >
+              <span className="text-lg leading-none">+</span> Solution
             </button>
           </div>
           <div className="mt-3 flex flex-col gap-2">
@@ -877,21 +929,33 @@ export default function InboxView() {
             <div className="flex-1 min-h-0 flex">
               <div className="flex-1 min-w-0 min-h-0 flex flex-col">
                 <div role="tablist" aria-label="Item view" className="flex border-b border-edge bg-sidebar">
-                  {(["notes", "graph"] as const).map((t) => (
+                  {tabsFor(draft).map((t) => (
                     <button
                       key={t}
                       type="button"
                       role="tab"
-                      aria-selected={pageTab === t}
-                      className={`px-3 py-1.5 text-xs border-b-2 cursor-pointer ${pageTab === t ? "border-accent text-primary" : "border-transparent text-muted hover:text-primary"}`}
+                      aria-selected={activeTab === t}
+                      className={`px-3 py-1.5 text-xs border-b-2 cursor-pointer ${activeTab === t ? "border-accent text-primary" : "border-transparent text-muted hover:text-primary"}`}
                       onClick={() => setPageTab(t)}
                     >
-                      {t === "notes" ? "Notes" : "Graph"}
+                      {TAB_LABELS[t]}
                     </button>
                   ))}
                 </div>
-                {pageTab === "graph" ? (
+                {activeTab === "graph" ? (
                   <GraphTab draftId={draft.id} />
+                ) : activeTab === "coordinator" ? (
+                  <CoordinatorTab
+                    key={draft.id}
+                    draftId={draft.id}
+                    notes={draft.notes ?? []}
+                    listHash={draft.listHash ?? ""}
+                    coordinatorNotes={coordinatorNotes}
+                    onNotesChanged={onNotesChanged}
+                    onStale={() => void reloadDraft()}
+                  />
+                ) : activeTab === "design" ? (
+                  <DesignTab key={draft.id} draftId={draft.id} />
                 ) : (
                   <>
                 <PhiNotice className="px-4 py-1 border-b border-edge bg-sidebar" />

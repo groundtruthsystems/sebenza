@@ -3,9 +3,11 @@
 
 mod completions;
 mod env_files;
+mod factory_cli;
 mod http;
 mod inbox;
 mod init;
+mod login;
 mod migrate;
 mod oneshot;
 mod port;
@@ -47,6 +49,7 @@ Usage:
   sebenza-cli prune        Remove all closed (not open) worktrees in the current project
   sebenza-cli restore      Re-open all worktree sessions that were open before
   sebenza-cli inbox        Draft notes, triage worktree requests, convert to worktrees
+  sebenza-cli login        Sign in as the operator (confirm the code in the dashboard)
   sebenza-cli project      List, add, or remove projects served by the dashboard
   sebenza-cli completion   Generate shell completion script (bash, zsh)
 
@@ -87,6 +90,7 @@ const ROOT_COMMANDS: &[&str] = &[
     "restore",
     "project",
     "completion",
+    "login",
 ];
 
 const WORKTREE_COMMANDS: &[&str] = &[
@@ -264,7 +268,9 @@ async fn main() {
         migrate::warn_if_other_instances(effective_port);
     }
 
-    let code = if command == "inbox" {
+    let code = if command == "login" {
+        login::run(&parsed.command_args, effective_port).await
+    } else if command == "inbox" {
         inbox::run(&parsed.command_args, effective_port).await
     } else if command == "oneshot" {
         oneshot::run(&parsed.command_args, effective_port, &cwd).await
@@ -306,6 +312,7 @@ mod tests {
             "inbox",
             "oneshot",
             "project",
+            "login",
         ];
         for cmd in dispatched {
             assert!(

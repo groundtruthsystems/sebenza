@@ -45,6 +45,9 @@ if cfg.get("reject_flags") and ("--track" in args or "--task" in args):
     sys.exit(2)
 if cfg.get("stderr"):
     sys.stderr.write(cfg["stderr"])
+if args and args[0] == "review":
+    sys.stdout.write(json.dumps(cfg.get("review_stdout") or {{}}))
+    sys.exit(cfg.get("review_exit", 0))
 code = cfg.get("exit", 0)
 if code == 0 and cfg.get("append_request", True) and args and args[0] == "request":
     title = args[args.index("--title") + 1] if "--title" in args else stdin.splitlines()[0]
@@ -174,10 +177,11 @@ class Workspace:
                 fh.write(f"{k}={v}\n")
 
     def configure_agentctl(self, exit=0, stderr="", append_request=True, reject_flags=False,
-                           reject_message=None):
+                           reject_message=None, review_stdout=None, review_exit=0):
         self.write_json(os.path.join(self.sdir, "fake-agentctl.json"),
                         {"exit": exit, "stderr": stderr, "append_request": append_request,
                          "reject_flags": reject_flags, "reject_message": reject_message,
+                         "review_stdout": review_stdout, "review_exit": review_exit,
                          "state": self.state_path, "branch": BRANCH})
 
     def set_state(self, requests=None, comments=None):

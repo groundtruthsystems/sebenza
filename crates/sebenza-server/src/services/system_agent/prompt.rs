@@ -127,8 +127,14 @@ pub fn build_job_prompt(ctx: &PromptContext<'_>, input: &JobInput) -> Result<Str
             out.push_str(&fence(
                 "request",
                 &format!(
-                    "Worktree: {}/{}\nTitle: {}\n\n{}",
-                    request.worktree.project, request.worktree.branch, request.title, request.body
+                    "Worktree: {}\nTitle: {}\n\n{}",
+                    request
+                        .worktree
+                        .as_ref()
+                        .map(|w| format!("{}/{}", w.project, w.branch))
+                        .unwrap_or_else(|| "none (solution problem)".into()),
+                    request.title,
+                    request.body
                 ),
             ));
             out.push_str("\nOther open items (title and priority only):\n");
@@ -318,6 +324,8 @@ mod tests {
                 conversions: vec![],
                 priority: Priority::P2,
                 priority_source: PrioritySource::Agent,
+                kind: None,
+                factory: None,
                 extra: Default::default(),
             },
             body: body.into(),
@@ -362,6 +370,7 @@ mod tests {
                 body: body.into(),
                 warnings: vec![],
                 task: None,
+                origin: None,
             },
         )
     }

@@ -513,6 +513,264 @@ def raise_request(link, title, body, item):
             "request_id": request_id, "item": item.ref if item else None}
 
 
+# --- approval gate and project review (software factory, project level) --------
+
+#: Exit code when the design is not (yet) approved: implementation must wait.
+NOT_APPROVED = 7
+#: inbox.py's own review exit codes (agentctl's 3-6 mean other things here).
+ROUND_LIMIT, NOT_INDEPENDENT, VOIDED = 8, 9, 10
+#: agentctl review exit code -> inbox.py exit code. Unlinked is NOT_LINKED.
+AGENTCTL_REVIEW = {3: ROUND_LIMIT, 4: NOT_INDEPENDENT, 5: VOIDED, 6: NOT_LINKED}
+MAX_REVIEW_ROUNDS = 3
+TRACK_ID = re.compile(r"^[a-z0-9_]+_[0-9]{8}$")
+DESIGN_DOCS = ("design.md", "business-architecture.md", "application-architecture.md",
+               "data-architecture.md", "technical-architecture.md", "security-architecture.md",
+               "test-plan.md")
+
+
+def approval_title(track):
+    return f"[{track}/approval] Approve the design of {track} for implementation"
+
+
+def design_hash(track_dir):
+    """SHA-256 over the track's design documents, as approved."""
+    h = hashlib.sha256()
+    for name in DESIGN_DOCS:
+        path = os.path.join(track_dir, name)
+        if regular_file(path):
+            with open(path, "rb") as fh:
+                h.update(name.encode() + b"\0" + fh.read() + b"\0")
+    return h.hexdigest()
+
+
+def track_dir(ws, track):
+    if not TRACK_ID.match(track or ""):
+        raise InboxError(USAGE, f"--track must be a track id, got {track!r}")
+    path = os.path.join(ws.dir, "tracks", track)
+    if not os.path.isdir(path):
+        raise InboxError(USAGE, f"no track directory for {track}")
+    return path
+
+
+def cmd_approval(args, stdin, cwd):
+    """Is this track's design approved for implementation by the operator?
+
+    Linked: the answer is the track's `[<track>/approval]` request; `--raise`
+    files it when there is none. Approved only once the operator answers it.
+    Unlinked: there is no inbox, so the skill asks the user in chat.
+    """
+    ws = Workspace.find(cwd)
+    tdir = track_dir(ws, args.track)
+    try:
+        link = Link(cwd)
+    except InboxError:
+        return {"ok": True, "linked": False, "approved": None,
+                "hint": "No inbox link: ask the user in chat to approve the design before implementing."}
+    title = approval_title(args.track)
+    reqs = Daemon(link).mine(Daemon(link).requests())
+    match = latest_match(reqs, title)
+    if match and match.get("status") in ("confirmed", "resolved") and match.get("confirmedText"):
+        meta_path = os.path.join(tdir, "metadata.json")
+        meta = read_json(meta_path) if regular_file(meta_path) else {}
+        meta["design_approved"] = {"at": now_iso(), "request_id": match.get("requestId"),
+                                   "design_hash": design_hash(tdir)}
+        write_json_atomic(meta_path, meta)
+        return {"ok": True, "linked": True, "approved": True, "request_id": match.get("requestId"),
+                "answer": sanitise(match.get("confirmedText"))}
+    if not match and args.raise_request:
+        body = (f"The design of {args.track} passed design review and is ready for implementation.\n"
+                f"Approve it to let implementation start, or say what to change. Implementation "
+                f"waits for your answer.\nDesign hash: {design_hash(tdir)}")
+        raised = raise_request(link, title, body, None)
+        raise InboxError(NOT_APPROVED, "the design is waiting for the operator's approval",
+                         approved=False, status="open", request_id=raised.get("request_id"))
+    raise InboxError(NOT_APPROVED, "the design is not approved yet", approved=False,
+                     status=(match or {}).get("status", "missing"),
+                     request_id=(match or {}).get("requestId"))
+
+
+def local_reviews_path(tdir):
+    return os.path.join(tdir, "reviews.json")
+
+
+def record_local_round(tdir, level, verdict, findings):
+    """An unlinked worktree's review, run in-session: recorded here, flagged
+    not independent, and capped like the daemon's."""
+    path = local_reviews_path(tdir)
+    data = read_json(path) if regular_file(path) else {"rounds": []}
+    rounds = [r for r in data.get("rounds", []) if r.get("level") == level]
+    if len(rounds) >= MAX_REVIEW_ROUNDS:
+        raise InboxError(ROUND_LIMIT, f"{level} review round {MAX_REVIEW_ROUNDS} of "
+                         f"{MAX_REVIEW_ROUNDS} is done", round_limit=True)
+    entry = {"level": level, "round": len(rounds) + 1, "of": MAX_REVIEW_ROUNDS,
+             "verdict": verdict, "findings": findings, "independent": False, "at": now_iso()}
+    data.setdefault("rounds", []).append(entry)
+    write_json_atomic(path, data)
+    return entry
+
+
+MAX_FINDING_CHARS = 500
+MAX_FINDINGS_PER_TASK = 20
+
+
+def plan_path_for(ws, track):
+    for t in (ws.tracks() or {}).get("tracks", []):
+        if t.get("track_id") == track:
+            return ws.plan_file(t)
+    return None
+
+
+def sync_tracks(ws, track, plan):
+    """Mirror phase statuses and progress into tracks.json, keeping unknown keys."""
+    data = ws.tracks()
+    if not data:
+        return
+    tasks = [t for ph in plan.get("phases", []) for t in ph.get("tasks", [])]
+    done = sum(1 for t in tasks if t.get("status") == "done")
+    for t in data.get("tracks", []):
+        if t.get("track_id") != track:
+            continue
+        t["phases_summary"] = [{"id": ph.get("id"), "name": ph.get("name"), "status": ph.get("status"),
+                                "blocked_reason": ph.get("blocked_reason")} for ph in plan.get("phases", [])]
+        t["progress"] = {"total_tasks": len(tasks), "completed_tasks": done,
+                         "percentage": round(100 * done / len(tasks)) if tasks else 0}
+        t["current_phase_id"] = next((ph.get("id") for ph in plan.get("phases", [])
+                                      if ph.get("status") != "done"), t.get("current_phase_id"))
+        if t.get("status") == "done":
+            t["status"] = "doing"
+        t["updated_at"] = now_iso()
+    write_json_atomic(ws.tracks_path, data)
+
+
+def apply_findings(ws, track, rnd, findings):
+    """Send the tasks code review named back to `doing` (FR-10).
+
+    Each named task gets `review_round` and its findings (text capped, at most
+    20 kept). Open findings on tasks this round did not name are resolved:
+    the reviewer no longer raises them. Unknown task ids are reported, never
+    invented.
+    """
+    path = plan_path_for(ws, track)
+    if not path:
+        raise InboxError(USAGE, f"no plan.json for {track}")
+    plan = read_json(path)
+    by_id = {t.get("id"): (ph, t) for ph in plan.get("phases", []) for t in ph.get("tasks", [])}
+    reopened, unmatched = [], []
+    named = {}
+    for f in findings:
+        tid = f.get("task")
+        if tid in by_id:
+            named.setdefault(tid, []).append(f)
+        else:
+            unmatched.append(f.get("problem_id") or f.get("title") or "?")
+    for tid, (ph, task) in by_id.items():
+        existing = task.get("review_findings") or []
+        if tid not in named:
+            for f in existing:
+                if f.get("status") == "open":
+                    f["status"] = "resolved"
+            continue
+        ids = {f.get("problem_id") for f in named[tid]}
+        for f in existing:
+            if f.get("status") == "open" and f.get("id") not in ids:
+                f["status"] = "resolved"
+        for f in named[tid]:
+            text = sanitise(f"{f.get('title', '')}: {f.get('detail', '')}", MAX_FINDING_CHARS)
+            prev = next((x for x in existing if x.get("id") == f.get("problem_id")), None)
+            if prev:
+                prev.update(text=text, status="open")
+            else:
+                existing.append({"id": f.get("problem_id"), "text": text, "status": "open"})
+        task["review_findings"] = existing[-MAX_FINDINGS_PER_TASK:]
+        task["review_round"] = rnd
+        task["status"] = "doing"
+        ph["status"] = "doing"
+        reopened.append(tid)
+    write_json_atomic(path, plan)
+    sync_tracks(ws, track, plan)
+    return reopened, unmatched
+
+
+def open_findings(ws, track):
+    path = plan_path_for(ws, track)
+    plan = read_json(path) if path else {"phases": []}
+    return [(t.get("id"), f) for ph in plan.get("phases", []) for t in ph.get("tasks", [])
+            for f in (t.get("review_findings") or []) if f.get("status") == "open"]
+
+
+def cmd_verification(args, stdin, cwd):
+    """Raise the final-verification request after code review ends (FR-11):
+    on acceptance, or after round 3, carrying every finding still open."""
+    ws = Workspace.find(cwd)
+    track_dir(ws, args.track)
+    link = Link(cwd)
+    path = plan_path_for(ws, args.track)
+    plan = read_json(path) if path else {"phases": []}
+    rounds = [t["review_round"] for ph in plan.get("phases", []) for t in ph.get("tasks", [])
+              if isinstance(t.get("review_round"), int)]
+    last = max(rounds) if rounds else None
+    still_open = open_findings(ws, args.track)
+    lines = [f"Code review of {args.track} has ended"
+             + (f" at round {last} of {MAX_REVIEW_ROUNDS}." if last else ".")]
+    if still_open:
+        lines.append(f"{len(still_open)} finding(s) are still open and need your decision:")
+        lines += [f"- {f.get('id')} on task {tid}: {f.get('text', '')[:200]}" for tid, f in still_open]
+    else:
+        lines.append("The code was accepted: no findings are open.")
+    lines.append("Please run your final verification of this worktree and answer this request.")
+    body = "\n".join(lines)
+    hit = policy_hit(body)
+    if hit:
+        raise InboxError(REFUSED, "verification request refused by local policy", refused={"pattern": hit})
+    title = f"[{args.track}/verification] Final verification of {args.track}"
+    raised = raise_request(link, title, body, None)
+    return {**raised, "open_findings": len(still_open)}
+
+
+def cmd_review(args, stdin, cwd):
+    """Ask for an independent review (linked), or record an in-session one."""
+    ws = Workspace.find(cwd)
+    tdir = track_dir(ws, args.track)
+    if args.local:
+        if args.verdict not in ("agreed", "changes"):
+            raise InboxError(USAGE, "--local needs --verdict agreed|changes")
+        findings = json.loads(stdin.read() or "[]") if args.findings == "-" else []
+        entry = record_local_round(tdir, args.level, args.verdict, findings)
+        out = {"ok": True, "status": "succeeded", "independent": False, **entry}
+        if args.apply and args.level == "code":
+            out["reopened"], out["unmatched"] = apply_findings(ws, args.track, entry["round"], findings)
+        return out
+    try:
+        link = Link(cwd)
+    except InboxError:
+        raise InboxError(NOT_LINKED, "no inbox link: review in-session, then record "
+                         "the round with --local (it is flagged not independent)", independent=False)
+    env = clean_env()
+    env["SEBENZA_WORKTREE_PATH"] = link.ws.root
+    try:
+        res = subprocess.run([link.agentctl, "review", "--level", args.level, "--track", args.track],
+                             capture_output=True, text=True, env=env, cwd=link.ws.root,
+                             timeout=args.timeout + 30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise InboxError(UNREACHABLE, f"agentctl review failed: {type(exc).__name__}")
+    try:
+        job = json.loads(res.stdout or "{}")
+    except ValueError:
+        job = {"status": "failed", "error": "agentctl printed no JSON"}
+    if res.returncode == 0:
+        out = {"ok": True, "independent": True, **job}
+        if args.apply and args.level == "code":
+            out["reopened"], out["unmatched"] = apply_findings(
+                ws, args.track, job.get("round") or 0, job.get("findings") or [])
+        return out
+    if res.returncode == 6:
+        raise InboxError(NOT_LINKED, "no inbox link: review in-session and record it "
+                         "with --local", independent=False)
+    raise InboxError(AGENTCTL_REVIEW.get(res.returncode, REJECTED),
+                     job.get("error") or "the review did not complete",
+                     reason=job.get("code") or job.get("status"), review=job)
+
+
 # --- feedback -------------------------------------------------------------------
 
 def label_for(author):
@@ -891,6 +1149,25 @@ def build_parser():
 
     sub.add_parser("check-blocked", help="blocked items that have no inbox request")
 
+    a = sub.add_parser("approval", help="is this track's design approved for implementation?")
+    a.add_argument("--track", required=True)
+    a.add_argument("--raise", dest="raise_request", action="store_true",
+                   help="file the approval request if there is none")
+
+    v = sub.add_parser("review", help="independent design or code review of this worktree")
+    v.add_argument("--level", choices=["design", "code"], required=True)
+    v.add_argument("--track", required=True)
+    v.add_argument("--timeout", type=int, default=900)
+    v.add_argument("--local", action="store_true",
+                   help="record an in-session review (unlinked worktree; not independent)")
+    v.add_argument("--verdict", help="with --local: agreed or changes")
+    v.add_argument("--findings", help="with --local: - to read a JSON list of findings on stdin")
+    v.add_argument("--apply", action="store_true",
+                   help="code level: send the tasks the findings name back to doing in plan.json")
+
+    vf = sub.add_parser("verification", help="raise the final-verification request after code review")
+    vf.add_argument("--track", required=True)
+
     sub.add_parser("notes", help="every note of the inbox item (inbox-notes.json, else inbox-note.md)")
 
     h = sub.add_parser("hook", help="Claude Code hook entry point; reads the hook JSON on stdin")
@@ -899,7 +1176,8 @@ def build_parser():
 
 
 COMMANDS = {"request": cmd_request, "feedback": cmd_feedback, "check-blocked": cmd_check_blocked,
-            "notes": cmd_notes}
+            "notes": cmd_notes, "approval": cmd_approval, "review": cmd_review,
+            "verification": cmd_verification}
 
 
 def emit(payload):

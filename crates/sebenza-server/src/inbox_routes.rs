@@ -126,6 +126,9 @@ pub struct DraftWire {
     pub list_hash: String,
     /// Present instead of the fields above when the file did not parse.
     pub raw: Option<RawWire>,
+    /// `solution` for a software-factory item; absent for a note.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<common::domain::solution::DraftKind>,
 }
 
 /// One note as the API shows it: the codec's fields plus its edit token.
@@ -184,6 +187,7 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
                 priority_source: d.frontmatter.priority_source,
                 conversions: d.frontmatter.conversions,
                 raw: None,
+                kind: d.frontmatter.kind,
             }
         }
         InboxDraftView::Raw {
@@ -208,6 +212,7 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
                 text: raw_text,
                 error,
             }),
+            kind: None,
         },
     }
 }
@@ -242,6 +247,12 @@ impl From<InboxServiceError> for ApiError {
             InboxServiceError::Store(
                 InboxStoreError::NoteConflict { .. } | InboxStoreError::NoteIdsDropped { .. },
             ) => ApiError::new(409, err.to_string()),
+            InboxServiceError::Store(InboxStoreError::DocConflict { .. }) => {
+                ApiError::coded(409, "doc_conflict", err.to_string())
+            }
+            InboxServiceError::Store(InboxStoreError::InvalidDocName(_)) => {
+                ApiError::new(400, err.to_string())
+            }
             InboxServiceError::Invalid(_) => ApiError::new(400, err.to_string()),
             InboxServiceError::TooLarge { .. } => ApiError::new(413, err.to_string()),
             InboxServiceError::RateLimited | InboxServiceError::TooManyOpenRequests(_) => {
@@ -264,7 +275,7 @@ impl From<InboxServiceError> for ApiError {
 /// `self_origin` is derived from the request's own `Host` header rather than a
 /// configured value, so `localhost:5111` and `127.0.0.1:5111` both work without
 /// the server having to know which one the browser used.
-fn check(headers: &HeaderMap, method: &str) -> Result<(), ApiError> {
+pub(crate) fn check(headers: &HeaderMap, method: &str) -> Result<(), ApiError> {
     let header = |name: axum::http::HeaderName| -> Option<String> {
         headers.get(name)?.to_str().ok().map(str::to_string)
     };
@@ -301,7 +312,7 @@ fn check(headers: &HeaderMap, method: &str) -> Result<(), ApiError> {
 /// Refuse a `Host` that is not this loopback daemon (T-10). The origin check
 /// trusts `Host` to say what "same origin" means, so on its own it waves
 /// through a DNS-rebinding page whose `Origin` and `Host` agree.
-fn check_host(host: &str) -> Result<(), ApiError> {
+pub(crate) fn check_host(host: &str) -> Result<(), ApiError> {
     if host_is_allowed(Some(host), &allowed_hosts_from_env()) {
         Ok(())
     } else {
@@ -309,7 +320,7 @@ fn check_host(host: &str) -> Result<(), ApiError> {
     }
 }
 
-fn inbox(state: &AppState) -> Arc<InboxService> {
+pub(crate) fn inbox(state: &AppState) -> Arc<InboxService> {
     state.inbox.clone()
 }
 
@@ -586,6 +597,9 @@ pub async fn get_draft(
 #[serde(rename_all = "camelCase")]
 pub struct CreateBody {
     pub title: String,
+    /// `solution` creates a software-factory item; absent is a note.
+    #[serde(default)]
+    pub kind: Option<common::domain::solution::DraftKind>,
 }
 
 /// `POST /api/inbox` — a new, empty draft.
@@ -595,7 +609,7 @@ pub async fn create_draft(
     Json(body): Json<CreateBody>,
 ) -> Result<Json<DraftWire>, ApiError> {
     check(&headers, "POST")?;
-    let draft = inbox(&state).create(&body.title)?;
+    let draft = inbox(&state).create_kind(&body.title, body.kind.unwrap_or_default())?;
     Ok(Json(draft_to_wire(draft, None)))
 }
 
@@ -755,6 +769,16 @@ pub async fn convert_draft(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     check(&headers, "POST")?;
     let svc = inbox(&state);
+    // A solution item reaches worktrees only through approved handovers.
+    if let Ok((InboxDraftView::Parsed(d), _)) = svc.get(&id)
+        && d.frontmatter.kind() == common::domain::solution::DraftKind::Solution
+    {
+        return Err(ApiError::coded(
+            409,
+            "approval_required",
+            "A solution item is converted per project, after the operator approves the design and that project's handover.".to_string(),
+        ));
+    }
 
     // Validate before promising a job id. `convert` re-validates inside the
     // job, but a caller deserves the errors now, not by polling for them.
@@ -1132,7 +1156,7 @@ impl From<EnqueueError> for ApiError {
 
 /// Run a blocking inbox call off the async runtime. Confirm and redeliver
 /// paste through tmux, so they must not stall a runtime thread.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, InboxServiceError> + Send + 'static,
 ) -> Result<T, ApiError> {
     tokio::task::spawn_blocking(f)
@@ -1177,11 +1201,36 @@ pub async fn confirm_request(
     headers: HeaderMap,
     Json(body): Json<ConfirmBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    check(&headers, "POST")?;
-    let caller = caller_marker(&headers);
+    // A solution problem's answer steers the design, so only the operator
+    // may confirm it, and the audit caller is the credential, not the header.
+    let problem = inbox(&state)
+        .request(&id, &rid)
+        .map(|r| r.origin == common::domain::solution::RequestOrigin::SolutionProblem)
+        .unwrap_or(false);
+    let operator = if problem {
+        Some(crate::operator_routes::require_operator(
+            &state,
+            &headers,
+            "inbox.problem.confirmed",
+            Some(&id),
+        )?)
+    } else {
+        check(&headers, "POST")?;
+        None
+    };
+    let caller = match operator {
+        Some(class) => Some(class.as_str().to_string()),
+        None => caller_marker(&headers),
+    };
     let svc = inbox(&state);
     let request = blocking(move || {
-        svc.confirm_resolution(&id, &rid, body.body.as_deref(), &body.content_hash, caller)
+        let request =
+            svc.confirm_resolution(&id, &rid, body.body.as_deref(), &body.content_hash, caller)?;
+        if let Some(class) = operator {
+            let hash = request.content_hash.clone();
+            svc.record_gated_action(&id, "inbox.problem.confirmed", class, hash.as_deref())?;
+        }
+        Ok(request)
     })
     .await?;
     Ok(Json(serde_json::json!({ "request": request })))
@@ -1871,6 +1920,10 @@ mod tests {
                 crate::services::system_agent::apply::TriageApplier::new(inbox.clone()),
             ));
         }
+        let factory = Arc::new(crate::operator_routes::FactorySettings::new(
+            base.join("sebenza.yaml"),
+        ));
+        let inbox_for_solution = inbox.clone();
         let state = AppState {
             manager: Arc::new(crate::services::project_manager::ProjectManager::new(
                 ProjectsRegistry::with_file(base.join("server-projects.json")),
@@ -1884,6 +1937,19 @@ mod tests {
             inbox,
             inbox_jobs: Arc::new(crate::services::inbox_jobs::ConversionJobManager::new()),
             system_agent,
+            operator: Arc::new(crate::operator_auth::OperatorAuth::new()),
+            factory: factory.clone(),
+            solution: Arc::new(crate::services::solution::SolutionService::new(
+                inbox_for_solution.clone(),
+                Arc::new(crate::services::role_runner::test_runner(&base)),
+                factory.clone(),
+            )),
+            reviews: Arc::new(crate::services::project_review::ProjectReviewService::new(
+                inbox_for_solution.clone(),
+                Arc::new(crate::services::role_runner::test_runner(&base)),
+                factory.clone(),
+                base.join("snapshots"),
+            )),
             frontend_dist: None,
         };
         Fixture {
@@ -2638,6 +2704,94 @@ mod tests {
         assert_eq!(code, StatusCode::CONFLICT);
         assert_eq!(v["current"]["body"], "A1");
         assert!(v["listHash"].is_string());
+    }
+
+    // TS-06 (software factory): on a v4 solution item, a note write with a
+    // stale expected hash is a 409 carrying the current note; the stored note
+    // keeps the first write and the item stays a v4 solution item.
+    #[tokio::test]
+    async fn a_stale_note_write_on_a_solution_item_is_a_409() {
+        use common::domain::solution::DraftKind;
+        let f = fixture();
+        let id = f
+            .store
+            .create_kind("Solution", DraftKind::Solution)
+            .expect("create")
+            .id;
+        let n1 = notes_of(&f, &id).await["notes"][0].clone();
+        let (code, _) = edit(
+            &f,
+            &id,
+            "n1",
+            serde_json::json!({"body": "brief v1", "expectedHash": n1["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::OK);
+        let (code, v) = edit(
+            &f,
+            &id,
+            "n1",
+            serde_json::json!({"body": "brief v2 (stale)", "expectedHash": n1["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::CONFLICT);
+        assert_eq!(
+            v["current"]["body"], "brief v1",
+            "the 409 carries the stored version"
+        );
+        let stored = notes_of(&f, &id).await;
+        assert_eq!(
+            stored["notes"][0]["body"], "brief v1",
+            "nothing was overwritten"
+        );
+        let common::domain::model::InboxDraftView::Parsed(d) = f.store.get(&id).unwrap() else {
+            panic!("unparsed");
+        };
+        assert_eq!(d.frontmatter.schema_version, 4);
+        assert_eq!(d.frontmatter.kind(), DraftKind::Solution);
+    }
+
+    // TS-02 (route half): a v3 draft from an older binary opens with its
+    // notes, carries no v4 keys on the wire, stays v3 when written, and its
+    // requests list as before.
+    #[tokio::test]
+    async fn a_v3_draft_opens_and_writes_as_before() {
+        let f = fixture();
+        let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        std::fs::create_dir_all(f.store.dir()).unwrap();
+        std::fs::write(
+            f.store.dir().join(format!("{id}.md")),
+            "---\nschema_version: 3\ntitle: Legacy\nstatus: Draft\ncreated_at: a\nupdated_at: a\nconversions: []\n---\nOld brief\n",
+        )
+        .unwrap();
+        let Json(item) = get_draft(State(f.state.clone()), Path(id.to_string()))
+            .await
+            .expect("get");
+        let item = serde_json::to_value(item).unwrap();
+        assert_eq!(item["notes"][0]["body"], "Old brief\n");
+        let wire = item.to_string();
+        assert!(!wire.contains("\"kind\""), "no v4 key on a note: {wire}");
+        assert!(!wire.contains("\"factory\""));
+
+        let n1 = notes_of(&f, id).await["notes"][0].clone();
+        let (code, _) = edit(
+            &f,
+            id,
+            n1["id"].as_str().unwrap(),
+            serde_json::json!({"body": "New brief", "expectedHash": n1["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::OK);
+        let text = std::fs::read_to_string(f.store.dir().join(format!("{id}.md"))).unwrap();
+        assert!(text.contains("schema_version: 3"), "still v3:\n{text}");
+
+        let Json(list) = list_requests(State(f.state.clone()), Path(id.to_string()))
+            .await
+            .expect("requests");
+        assert_eq!(list["requests"], serde_json::json!([]));
     }
 
     // TS-22 / TS-23 / TS-24 / TS-25 / TS-26 / TS-57: structural changes need

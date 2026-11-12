@@ -119,13 +119,18 @@ pub struct StartRunInput {
     pub timeout: Option<std::time::Duration>,
 }
 
-/// Which tools a headless run may use.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Which tools a headless run may use. Tool names are the CLI's own (claude
+/// `Read`, grok `read_file`); codex has none and relies on `--sandbox`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ToolPolicy {
     pub allowed: Vec<String>,
     pub disallowed: Vec<String>,
     /// Ignore every MCP server from user or project settings.
     pub strict_mcp: bool,
+    /// claude only: a `--settings` JSON value (e.g. `Read` deny rules).
+    pub settings: Option<String>,
+    /// grok only: `--max-turns`.
+    pub max_turns: Option<u32>,
 }
 
 /// How a run ended, for callers that await it rather than stream it.
@@ -387,7 +392,7 @@ async fn run_messages_stream_agent(
         command.env(k, v);
     }
 
-    let mut child = match command.spawn() {
+    let mut child = match spawn_retrying(&mut command).await {
         Ok(child) => child,
         Err(e) => {
             let message = format!("failed to spawn {binary}: {e}");
@@ -473,6 +478,26 @@ async fn run_messages_stream_agent(
     outcome.exit_code = status.and_then(|s| s.code());
 }
 
+/// `spawn`, retried briefly on ETXTBSY ("text file busy"). Exec fails with it
+/// when another thread forked while the binary was still open for writing —
+/// a freshly written agent script, typically — and the fd is gone a moment
+/// later, so a short retry is the standard remedy.
+async fn spawn_retrying(
+    command: &mut tokio::process::Command,
+) -> std::io::Result<tokio::process::Child> {
+    const ETXTBSY: i32 = 26;
+    let mut attempt = 0;
+    loop {
+        match command.spawn() {
+            Err(e) if e.raw_os_error() == Some(ETXTBSY) && attempt < 10 => {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(20 * attempt)).await;
+            }
+            other => return other,
+        }
+    }
+}
+
 /// Resolves at `deadline`, or never when there is none.
 async fn sleep_until_deadline(deadline: Option<tokio::time::Instant>) {
     match deadline {
@@ -535,7 +560,95 @@ pub fn claude_args(input: &StartRunInput) -> Vec<String> {
             args.push("--disallowedTools".into());
             args.push(tools.disallowed.join(","));
         }
+        if let Some(settings) = &tools.settings {
+            args.push("--settings".into());
+            args.push(settings.clone());
+        }
     }
+    args
+}
+
+/// The `grok` argv for `input`. In-app chat sets no `tools` or `model`, so its
+/// argv is what it always was; a role job adds the model, a tool allowlist,
+/// the denied tools and a turn cap.
+pub fn grok_args(input: &StartRunInput) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-p".into(),
+        input.prompt.clone(),
+        "--output-format".into(),
+        "streaming-messages-json".into(),
+        "--include-partial-messages".into(),
+    ];
+    if let Some(resume) = &input.resume_session_id {
+        args.push("-r".into());
+        args.push(resume.clone());
+    }
+    if let Some(mode) = &input.permission_mode {
+        args.push("--permission-mode".into());
+        args.push(mode.clone());
+    }
+    if let Some(sys) = &input.system_prompt {
+        if input.tools.is_some() {
+            // One token, so text starting with `-` is never read as a flag.
+            args.push(format!("--rules={sys}"));
+        } else {
+            args.push("--rules".into());
+            args.push(sys.clone());
+        }
+    }
+    if let Some(model) = &input.model {
+        args.push("--model".into());
+        args.push(model.clone());
+    }
+    if let Some(tools) = &input.tools {
+        if !tools.allowed.is_empty() {
+            args.push("--tools".into());
+            args.push(tools.allowed.join(","));
+        }
+        if !tools.disallowed.is_empty() {
+            args.push("--disallowed-tools".into());
+            args.push(tools.disallowed.join(","));
+        }
+        if let Some(n) = tools.max_turns {
+            args.push("--max-turns".into());
+            args.push(n.to_string());
+        }
+    }
+    args
+}
+
+/// The `codex` argv for `input`. In-app chat (no `tools`) keeps its argv. A
+/// role job (`tools` set) runs `exec` read-only and ephemeral in its cwd, with
+/// the system prompt fenced ahead of the prompt (codex has no append flag).
+pub fn codex_args(input: &StartRunInput) -> Vec<String> {
+    let mut args: Vec<String> = vec!["exec".into()];
+    if let Some(session) = &input.resume_session_id {
+        args.push("resume".into());
+        args.push(session.clone());
+    }
+    args.push("--json".into());
+    args.push("--skip-git-repo-check".into());
+    if input.tools.is_none() {
+        args.push(input.prompt.clone());
+        return args;
+    }
+    args.extend(
+        ["--sandbox", "read-only", "--ephemeral", "-C", &input.cwd]
+            .iter()
+            .map(|s| s.to_string()),
+    );
+    if let Some(model) = &input.model {
+        args.push("--model".into());
+        args.push(model.clone());
+    }
+    let prompt = match &input.system_prompt {
+        Some(sys) => format!(
+            "<system_instructions>\n{sys}\n</system_instructions>\n\n{}",
+            input.prompt
+        ),
+        None => input.prompt.clone(),
+    };
+    args.push(prompt);
     args
 }
 
@@ -558,26 +671,7 @@ async fn run_claude(input: StartRunInput, run: Arc<RunState>) {
 ///   reads `.claude/settings.local.json` hooks by default, which are Sebenza's *Claude*
 ///   hooks and would fire `claude-*` handlers with grok's camelCase payloads.
 async fn run_grok(input: StartRunInput, run: Arc<RunState>) {
-    let mut args: Vec<String> = vec![
-        "-p".into(),
-        input.prompt.clone(),
-        "--output-format".into(),
-        "streaming-messages-json".into(),
-        "--include-partial-messages".into(),
-    ];
-    if let Some(resume) = &input.resume_session_id {
-        args.push("-r".into());
-        args.push(resume.clone());
-    }
-    if let Some(mode) = &input.permission_mode {
-        args.push("--permission-mode".into());
-        args.push(mode.clone());
-    }
-    if let Some(sys) = &input.system_prompt {
-        args.push("--rules".into());
-        args.push(sys.clone());
-    }
-
+    let args = grok_args(&input);
     let mut input = input;
     input
         .env
@@ -685,44 +779,48 @@ fn handle_stream_line(
 /// run's broadcast. Codex emits completed items (no token deltas), so each item
 /// becomes a finalized upsert.
 async fn run_codex(input: StartRunInput, run: Arc<RunState>) {
-    let mut args: Vec<String> = vec!["exec".into()];
-    if let Some(session) = &input.resume_session_id {
-        args.push("resume".into());
-        args.push(session.clone());
-    }
-    args.push("--json".into());
-    args.push("--skip-git-repo-check".into());
-    args.push(input.prompt.clone());
-
-    let mut command = tokio::process::Command::new("codex");
+    let args = codex_args(&input);
+    let binary = input.binary.clone().unwrap_or_else(|| "codex".to_string());
+    let mut command = tokio::process::Command::new(&binary);
     command
         .args(&args)
         .current_dir(&input.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(if input.isolated {
+            Stdio::null()
+        } else {
+            Stdio::piped()
+        });
+    if input.isolated {
+        command.env_clear().process_group(0).kill_on_drop(true);
+    }
     for (k, v) in &input.env {
         command.env(k, v);
     }
 
-    let mut child = match command.spawn() {
+    let mut child = match spawn_retrying(&mut command).await {
         Ok(child) => child,
         Err(e) => {
-            let _ = run.tx.send(StreamEvent::Error {
-                message: format!("failed to spawn codex: {e}"),
-            });
+            let message = format!("failed to spawn {binary}: {e}");
+            run.outcome.lock().unwrap().error = Some(message.clone());
+            let _ = run.tx.send(StreamEvent::Error { message });
             return;
         }
     };
+    let group = if input.isolated { child.id() } else { None };
+    let deadline = input.timeout.map(|t| tokio::time::Instant::now() + t);
     let stdout = child.stdout.take();
     let (int_tx, mut int_rx) = tokio::sync::oneshot::channel::<()>();
     *run.interrupt.lock().unwrap() = Some(int_tx);
 
+    let mut timed_out = false;
     if let Some(stdout) = stdout {
         let mut lines = BufReader::new(stdout).lines();
         loop {
             tokio::select! {
                 _ = &mut int_rx => { let _ = child.start_kill(); break; }
+                _ = sleep_until_deadline(deadline) => { timed_out = true; break; }
                 line = lines.next_line() => match line {
                     Ok(Some(line)) => {
                         let line = line.trim();
@@ -735,7 +833,58 @@ async fn run_codex(input: StartRunInput, run: Arc<RunState>) {
             }
         }
     }
-    let _ = child.wait().await;
+    let status = if timed_out {
+        None
+    } else {
+        tokio::select! {
+            status = child.wait() => status.ok(),
+            _ = sleep_until_deadline(deadline) => { timed_out = true; None }
+        }
+    };
+    if timed_out {
+        kill_group(group);
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+    let mut outcome = run.outcome.lock().unwrap();
+    outcome.timed_out = timed_out;
+    outcome.exit_code = status.and_then(|s| s.code());
+}
+
+/// What a `codex exec --json` event says about how the run ends: the thread id
+/// is the session, the last completed agent message is the final message, and
+/// a failed turn or error event is the error.
+pub fn record_codex_outcome(event: &Value, outcome: &mut RunOutcome) {
+    match event.get("type").and_then(Value::as_str) {
+        Some("thread.started") => {
+            if let Some(id) = event.get("thread_id").and_then(Value::as_str) {
+                outcome.session_id = Some(id.to_string());
+            }
+        }
+        Some("item.completed") => {
+            let item = event.get("item");
+            if item.and_then(|i| i.get("type")).and_then(Value::as_str) == Some("agent_message") {
+                if let Some(text) = item.and_then(|i| i.get("text")).and_then(Value::as_str) {
+                    outcome.final_message = Some(text.to_string());
+                }
+            }
+        }
+        Some("turn.failed") => {
+            let msg = event
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .unwrap_or("codex turn failed");
+            outcome.error = Some(msg.to_string());
+        }
+        Some("error") => {
+            let msg = event
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("codex error");
+            outcome.error = Some(msg.to_string());
+        }
+        _ => {}
+    }
 }
 
 /// Apply one `codex exec --json` event line to the run.
@@ -743,6 +892,7 @@ fn handle_codex_line(line: &str, run: &RunState) {
     let Ok(event) = serde_json::from_str::<Value>(line) else {
         return;
     };
+    record_codex_outcome(&event, &mut run.outcome.lock().unwrap());
     match event.get("type").and_then(Value::as_str) {
         Some("item.completed") | Some("item.started") => {
             let Some(item) = event.get("item") else {
@@ -926,6 +1076,7 @@ mod run_outcome_tests {
             allowed: vec!["Read".into(), "Grep".into()],
             disallowed: vec!["Bash".into(), "Write".into()],
             strict_mcp: true,
+            ..Default::default()
         });
         let args = claude_args(&run);
         let after = |flag: &str| {
