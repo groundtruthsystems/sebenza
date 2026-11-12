@@ -192,7 +192,7 @@
           "id": "phase-3-task-5",
           "name": "Execute test scenarios TS-18, TS-23, TS-38, TS-48, TS-50, TS-51, TS-58, TS-62",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-18",
             "TS-23",
@@ -202,7 +202,8 @@
             "TS-51",
             "TS-58",
             "TS-62"
-          ]
+          ],
+          "commit_sha": "b07b9ff"
         },
         {
           "id": "phase-3-task-6",
@@ -386,10 +387,11 @@
         },
         {
           "id": "phase-6-task-4",
-          "name": "Execute test scenarios TS-21, TS-22, TS-24, TS-60, TS-54",
+          "name": "Execute test scenarios TS-23, TS-21, TS-22, TS-24, TS-60, TS-54",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
           "status": "backlog",
           "test_scenarios": [
+            "TS-23",
             "TS-21",
             "TS-22",
             "TS-24",
