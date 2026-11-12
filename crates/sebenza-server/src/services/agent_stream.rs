@@ -392,7 +392,7 @@ async fn run_messages_stream_agent(
         command.env(k, v);
     }
 
-    let mut child = match command.spawn() {
+    let mut child = match spawn_retrying(&mut command).await {
         Ok(child) => child,
         Err(e) => {
             let message = format!("failed to spawn {binary}: {e}");
@@ -476,6 +476,26 @@ async fn run_messages_stream_agent(
     let mut outcome = run.outcome.lock().unwrap();
     outcome.timed_out = timed_out;
     outcome.exit_code = status.and_then(|s| s.code());
+}
+
+/// `spawn`, retried briefly on ETXTBSY ("text file busy"). Exec fails with it
+/// when another thread forked while the binary was still open for writing —
+/// a freshly written agent script, typically — and the fd is gone a moment
+/// later, so a short retry is the standard remedy.
+async fn spawn_retrying(
+    command: &mut tokio::process::Command,
+) -> std::io::Result<tokio::process::Child> {
+    const ETXTBSY: i32 = 26;
+    let mut attempt = 0;
+    loop {
+        match command.spawn() {
+            Err(e) if e.raw_os_error() == Some(ETXTBSY) && attempt < 10 => {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(20 * attempt)).await;
+            }
+            other => return other,
+        }
+    }
 }
 
 /// Resolves at `deadline`, or never when there is none.
@@ -779,7 +799,7 @@ async fn run_codex(input: StartRunInput, run: Arc<RunState>) {
         command.env(k, v);
     }
 
-    let mut child = match command.spawn() {
+    let mut child = match spawn_retrying(&mut command).await {
         Ok(child) => child,
         Err(e) => {
             let message = format!("failed to spawn {binary}: {e}");
