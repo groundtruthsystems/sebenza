@@ -556,9 +556,9 @@ export async function fetchInboxDraft(id: string) {
   return hubApi.fetchInboxDraft({ params: { id } });
 }
 
-export async function createInboxDraft(title: string) {
+export async function createInboxDraft(title: string, kind?: "note" | "solution") {
   return hubApi.createInboxDraft({
-    body: { title },
+    body: kind ? { title, kind } : { title },
     extraHeaders: inboxAuthHeaders(),
   });
 }

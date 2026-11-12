@@ -1051,9 +1051,14 @@ export const InboxDraftSchema = z.object({
   /** Token for adding, deleting or reordering notes. */
   listHash: z.string().default(""),
   raw: z.object({ text: z.string(), error: z.string() }).nullable(),
+  /** `solution` for a software-factory item; absent for a note. */
+  kind: z.enum(["note", "solution"]).optional().catch(undefined),
 });
 
-export const CreateInboxDraftRequestSchema = z.object({ title: z.string() });
+export const CreateInboxDraftRequestSchema = z.object({
+  title: z.string(),
+  kind: z.enum(["note", "solution"]).optional(),
+});
 
 export const SaveInboxDraftBodyRequestSchema = z.object({
   expectedHash: z.string(),

@@ -143,6 +143,7 @@ function NoteCard({
   onmove,
   ondelete,
   onhelp,
+  coordinator = false,
 }: {
   draftId: string;
   note: InboxNote;
@@ -153,6 +154,8 @@ function NoteCard({
   onmove: (delta: -1 | 1) => void;
   ondelete: () => void;
   onhelp?: (note: InboxNote) => void;
+  /** Last written by the solution coordinator, and unchanged since. */
+  coordinator?: boolean;
 }) {
   const [title, setTitle] = useState(note.title);
   const [type, setType] = useState(note.type);
@@ -201,6 +204,14 @@ function NoteCard({
       className="border-b border-edge px-4 py-3 flex flex-col gap-2"
     >
       <div className="flex flex-wrap items-center gap-2 text-xs">
+        {coordinator && (
+          <span
+            className="px-1 rounded border border-accent text-accent"
+            title="Written by the solution coordinator and not edited since. Edit it to make it yours."
+          >
+            coordinator
+          </span>
+        )}
         <select
           aria-label="Note type"
           className="h-7 rounded-md border border-edge bg-surface px-2"
@@ -312,6 +323,7 @@ export default function NotesPanel({
   onchange,
   onhelp,
   onstale,
+  coordinatorNotes,
 }: {
   draftId: string;
   notes: InboxNote[];
@@ -320,6 +332,8 @@ export default function NotesPanel({
   onchange: Changed;
   onhelp?: (note: InboxNote) => void;
   onstale?: () => void;
+  /** note id -> hash of the coordinator's write; the badge shows while it matches. */
+  coordinatorNotes?: Record<string, string>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -370,6 +384,7 @@ export default function NotesPanel({
           onmove={(d) => move(i, d)}
           ondelete={() => void structural(() => deleteInboxNote(draftId, n.id, listHash))}
           onhelp={onhelp}
+          coordinator={coordinatorNotes?.[n.id] === n.hash}
         />
       ))}
     </div>

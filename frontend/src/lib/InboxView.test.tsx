@@ -70,7 +70,15 @@ vi.mock("./inboxMarkdown", () => ({
   renderMermaidSvg: () => Promise.resolve("<svg></svg>"),
 }));
 
+// The solution tabs talk to their own client; list behaviour never needs it.
+vi.mock("./solutionApi", async () => {
+  const { fakeApi } = await import("./solutionTestApi");
+  const actual = await vi.importActual<typeof import("./solutionApi")>("./solutionApi");
+  return { ...actual, solutionApi: fakeApi() };
+});
+
 import InboxView from "./InboxView";
+import * as inboxApi from "./api";
 
 beforeAll(() => {
   if (!HTMLDialogElement.prototype.showModal) {
@@ -633,5 +641,37 @@ describe("InboxView graph tab", () => {
     expect(screen.queryByLabelText("Draft body")).toBeNull();
     await user.click(screen.getByRole("tab", { name: "Notes" }));
     expect(await screen.findByLabelText("Draft body")).toBeInTheDocument();
+  });
+
+  // TS-01: "+ Solution" creates a solution item, which opens on exactly
+  // Coordinator, Design and Graph; a note keeps Notes and Graph (TS-55).
+  it("opens a new solution item on Coordinator, Design and Graph", async () => {
+    const user = userEvent.setup();
+    const solution = full({ id: "01SOL", title: "Billing", kind: "solution", notes: [], listHash: "" });
+    vi.mocked(inboxApi.createInboxDraft).mockResolvedValue(solution as never);
+    drafts.mockResolvedValue({ drafts: [summary({ id: "01SOL", title: "Billing" })] });
+    draft.mockResolvedValue(solution);
+    render(<InboxView />);
+    await user.click(await screen.findByTitle("New solution"));
+    await user.type(screen.getByPlaceholderText("What is this about?"), "Billing");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    expect(inboxApi.createInboxDraft).toHaveBeenCalledWith("Billing", "solution");
+    const tabs = await screen.findByRole("tablist", { name: "Item view" });
+    await waitFor(() =>
+      expect(within(tabs).getAllByRole("tab").map((t) => t.textContent)).toEqual([
+        "Coordinator",
+        "Design",
+        "Graph",
+      ]),
+    );
+    expect(await screen.findByRole("region", { name: "Coordinator chat" })).toBeInTheDocument();
+  });
+
+  it("keeps Notes and Graph for a plain note", async () => {
+    draft.mockResolvedValue(full());
+    render(<InboxView />);
+    await userEvent.click(await screen.findByText("Rework the scorer"));
+    const tabs = await screen.findByRole("tablist", { name: "Item view" });
+    expect(within(tabs).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Notes", "Graph"]);
   });
 });
