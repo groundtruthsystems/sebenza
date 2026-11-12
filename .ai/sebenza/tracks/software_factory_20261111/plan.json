@@ -223,7 +223,7 @@
     {
       "id": "phase-4",
       "name": "Role runner on Claude, Codex and Grok",
-      "status": "backlog",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -288,9 +288,11 @@
           "id": "phase-4-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "561789c"
         }
-      ]
+      ],
+      "checkpoint_sha": "561789c"
     },
     {
       "id": "phase-5",
