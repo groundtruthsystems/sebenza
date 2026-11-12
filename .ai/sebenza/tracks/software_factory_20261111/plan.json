@@ -386,34 +386,37 @@
           "id": "phase-6-task-1",
           "name": "Write tests for approvals and handover",
           "description": "Write failing tests for hash-bound design approval, per-project approve/defer, edit voiding, idempotency and convert gating.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-5-task-6"
-          ]
+          ],
+          "commit_sha": "8104046"
         },
         {
           "id": "phase-6-task-2",
           "name": "Implement design approval and HandoverService",
           "description": "Bind DesignApproved to document hashes, draft per-project instructions and record approve/defer bound to instruction hashes.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-6-task-1"
-          ]
+          ],
+          "commit_sha": "8104046"
         },
         {
           "id": "phase-6-task-3",
           "name": "Gate convert and write solution-handover.md",
           "description": "Refuse solution-item convert without approvals and convert one approved project writing its approved bytes as solution-handover.md.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-6-task-1"
-          ]
+          ],
+          "commit_sha": "8104046"
         },
         {
           "id": "phase-6-task-4",
           "name": "Execute test scenarios TS-23, TS-21, TS-22, TS-24, TS-60, TS-54",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-23",
             "TS-21",
@@ -421,7 +424,8 @@
             "TS-24",
             "TS-60",
             "TS-54"
-          ]
+          ],
+          "commit_sha": "8104046"
         },
         {
           "id": "phase-6-task-5",
