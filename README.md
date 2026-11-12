@@ -217,7 +217,8 @@ export PATH="$PWD/target/release:$PATH"   # sebenza-cli, sebenza-server
 | `tab` | List/create/switch/close agent tabs in a worktree. |
 | `prune` / `restore` | Remove closed worktrees / re-open previously-open sessions. |
 | `oneshot` | Run a worktree start-to-finish, streaming to stdout. |
-| `inbox` | `ls` / `show` / `new` / `edit` / `link` / `drop` / `rm` drafts; `convert`, `convert-instructions` and `job`; `priority`; `comment` / `comments`; `requests`, `confirm` / `reject` / `redeliver` / `retry-triage`; `draft-help`, `agent-job`; `redact`. See [Inbox](#inbox). |
+| `login` | Sign in as the operator; confirm the printed code in the dashboard (`--status`, `--logout`). |
+| `inbox` | `ls` / `show` / `new [--kind solution]` / `edit` / `link` / `drop` / `rm` drafts; `solution`, `coordinator` and `factory` for the [software factory](#software-factory); `convert`, `convert-instructions` and `job`; `priority`; `comment` / `comments`; `requests`, `confirm` / `reject` / `redeliver` / `retry-triage`; `draft-help`, `agent-job`; `redact`. See [Inbox](#inbox). |
 | `project` | `ls` / `add` / `rm` / `migrate` the served projects. |
 | `service` | Install/uninstall the systemd/launchd service. |
 | `completion` | Print a bash/zsh completion script. |
@@ -476,6 +477,46 @@ boundary: a worktree agent that chose to could call the confirm, priority or com
 routes itself. Such calls are accepted, audited as the operator, and tagged with the
 self-declared `X-Sebenza-Caller` marker, which is not authentication. This is an
 accepted risk (threat **T-01**); scoped per-worktree tokens are a planned follow-up.
+
+## Software factory
+
+A **solution item** (`+ Solution` in the inbox, or `sebenza-cli inbox new <title> --kind solution`)
+takes a brief through design and review before any worktree exists. It opens on three tabs:
+
+- **Coordinator** — chat with a coordinator agent (Claude, Codex or Grok) that proposes
+  notes, constraints and acceptance criteria. Nothing changes until you apply a proposal;
+  applied notes carry a `coordinator` badge until you edit them.
+- **Design** — *Start design* runs a system analyst, then a solutions architect, then an
+  independent solution reviewer. Review is capped at **3 rounds** per cycle, shown as
+  "Round n of 3"; a fourth is refused. If round 3 ends without agreement, each open problem
+  becomes its own inbox request. You resolve it through the coordinator or by editing the
+  design and pressing *Resolve*. You then **approve the design**, review each affected
+  project's handover instruction, and **approve** (one worktree, with the approved text as
+  `.ai/sebenza/solution-handover.md`) or **defer** each project. Any later edit voids an approval.
+- **Graph** — the item's worktrees, tracks and tasks, as before.
+
+The reviewer must be independent of the designer: a different agent, or the same agent with
+a different, explicitly set model that is at least as capable. Lightweight models (Haiku-class)
+never review. Grok is shown as **read-only unverified**: it may coordinate or design once you
+choose it, but it cannot review. Set the agents per item on the Design tab, globally in the
+`factory:` block of `~/.ai/sebenza.yaml`, or with `sebenza-cli inbox factory set|item`.
+Notes, documents and code go to the provider of the agent you pick.
+
+Role agents run headless and read-only, in an empty scratch directory, and only propose;
+the daemon validates their JSON replies, redacts secrets and rejects likely PHI.
+
+### Operator actions and their known limitation
+
+Every action that runs an agent, edits a document or approves something is **operator-only**.
+It needs the operator token, which the dashboard gets from the daemon (same-origin) and
+`sebenza-cli login` gets after you confirm its code in the dashboard. The shared control
+token that worktree agents hold is refused with `operator_required`. Each gated action posts
+an audit comment on the item naming the action, the credential and the hash it approved.
+
+> **Known limitation.** Outside an lxc or Apple sandbox, a worktree agent runs as your user and
+> can forge the browser headers the token is issued against, or read the CLI's cached token. So on
+> unsandboxed worktrees the operator gates **deter and leave an audit trail; they do not enforce**.
+> Run worktrees sandboxed when that matters. Per-worktree agent tokens are a planned follow-up.
 
 ### Network exposure
 
