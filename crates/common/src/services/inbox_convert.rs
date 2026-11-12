@@ -1101,7 +1101,8 @@ mod tests {
         assert!(WRITTEN_REL_PATHS.contains(&NOTE_REL_PATH));
         assert!(WRITTEN_REL_PATHS.contains(&ORIGIN_REL_PATH));
         assert!(WRITTEN_REL_PATHS.contains(&NOTES_MANIFEST_REL_PATH));
-        assert_eq!(WRITTEN_REL_PATHS.len(), 3);
+        assert!(WRITTEN_REL_PATHS.contains(&SOLUTION_HANDOVER_REL_PATH));
+        assert_eq!(WRITTEN_REL_PATHS.len(), 4);
         for path in WRITTEN_REL_PATHS {
             assert!(
                 path.starts_with(".ai/sebenza/"),
