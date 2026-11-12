@@ -15,4 +15,5 @@ pub mod oneshot_watcher_service;
 pub mod pane_delivery;
 pub mod project_init_service;
 pub mod project_manager;
+pub mod role_runner;
 pub mod system_agent;

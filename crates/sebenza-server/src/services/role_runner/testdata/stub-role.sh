@@ -1,0 +1,54 @@
+#!/bin/sh
+# Test-only stand-in for claude, codex and grok in role mode. It never calls a
+# model and is never written at test time (so no ETXTBSY races). The child gets
+# a clean env, so its behaviour comes from lines in the prompt:
+#   STUB-LOG: <dir>     record argv, env and cwd there
+#   STUB-MODE: reply | hang | exit | write | slow   (default reply)
+#   STUB-REPLY: <file>  the assistant's final text
+#   STUB-REPAIR: <file> the reply to a repair retry
+# The CLI flavour comes from argv: codex starts with `exec`; claude is
+# `-p --verbose` with the prompt on stdin; grok is `-p <prompt>`.
+if [ "$1" = "exec" ]; then
+  flavour=codex
+  for a in "$@"; do prompt="$a"; done
+elif [ "$1" = "-p" ] && [ "$2" = "--verbose" ]; then
+  flavour=claude
+  prompt=$(cat)
+else
+  flavour=grok
+  prompt="$2"
+fi
+field() { printf '%s\n' "$prompt" | sed -n "s/^$1: //p" | head -n 1; }
+log=$(field STUB-LOG)
+mode=$(field STUB-MODE)
+reply=$(field STUB-REPLY)
+# A repair retry (the runner's second attempt) answers from STUB-REPAIR.
+case "$prompt" in
+  *"could not be used"*) r=$(field STUB-REPAIR); [ -n "$r" ] && reply="$r" ;;
+esac
+if [ -n "$log" ]; then
+  mkdir -p "$log"
+  for a in "$@"; do printf '%s\n' "$a"; done > "$log/argv.$$"
+  env > "$log/env.$$"
+  pwd > "$log/cwd.$$"
+  touch "$log/running.$$"
+  ls "$log" | grep -c '^running\.' >> "$log/peaks"
+  echo "$$" >> "$log/order"
+fi
+finish() { [ -n "$log" ] && rm -f "$log/running.$$"; }
+case "$mode" in
+  hang) sleep 300 & wait ;;
+  exit) finish; echo "stub failing on purpose" >&2; exit 3 ;;
+  write) touch ./written-by-agent ;;
+  slow) sleep 0.4 ;;
+esac
+text=$(python3 -c 'import json,sys; print(json.dumps(open(sys.argv[1]).read()))' "$reply")
+if [ "$flavour" = "codex" ]; then
+  printf '{"type":"thread.started","thread_id":"stub-thread"}\n'
+  printf '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":%s}}\n' "$text"
+  printf '{"type":"turn.completed","usage":{}}\n'
+else
+  printf '{"type":"system","subtype":"init","session_id":"stub-session"}\n'
+  printf '{"type":"result","subtype":"success","is_error":false,"result":%s,"session_id":"stub-session"}\n' "$text"
+fi
+finish

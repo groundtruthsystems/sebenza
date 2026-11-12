@@ -84,6 +84,7 @@ pub fn read_only_tools() -> ToolPolicy {
         allowed: ALLOWED_TOOLS.iter().map(|t| t.to_string()).collect(),
         disallowed: DISALLOWED_TOOLS.iter().map(|t| t.to_string()).collect(),
         strict_mcp: true,
+        ..Default::default()
     }
 }
 
