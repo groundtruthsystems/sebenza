@@ -487,7 +487,7 @@
           "id": "phase-7-task-5",
           "name": "Execute test scenarios TS-01, TS-03, TS-49, TS-55, TS-56, TS-45, TS-04, TS-09, TS-12, TS-16, TS-17",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-01",
             "TS-03",
@@ -500,7 +500,8 @@
             "TS-12",
             "TS-16",
             "TS-17"
-          ]
+          ],
+          "commit_sha": "407442c"
         },
         {
           "id": "phase-7-task-6",
