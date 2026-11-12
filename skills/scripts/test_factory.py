@@ -176,5 +176,85 @@ class Review(unittest.TestCase):
         self.assertTrue(all(r["independent"] is False for r in rounds))
 
 
+class CodeReviewRounds(unittest.TestCase):
+    """TS-30..TS-33: findings reopen the tasks they name; the cap stops the
+    loop; final verification carries what is still open."""
+
+    def setUp(self):
+        self.w = Workspace()
+        self.w.write_tracks(task_status="done")
+        self.plan_path = os.path.join(self.w.ws, "tracks", TRACK, "plan.json")
+
+    def tearDown(self):
+        self.w.close()
+
+    def plan(self):
+        return self.w.read_json(self.plan_path)
+
+    def task(self, tid):
+        return next(t for ph in self.plan()["phases"] for t in ph["tasks"] if t["id"] == tid)
+
+    def review(self, verdict, findings, rnd, code=0):
+        self.w.configure_agentctl(review_exit=code, review_stdout={
+            "status": "succeeded" if code == 0 else "refused", "verdict": verdict, "round": rnd,
+            "roundOf": 3, "findings": findings, "code": "round_limit" if code == 3 else None})
+        return run(["review", "--level", "code", "--track", TRACK, "--apply"], self.w.wt)
+
+    def test_ts30_findings_reopen_only_the_tasks_they_name(self):
+        code, out, _, _ = self.review("changes", [
+            {"problem_id": "F-1", "title": "Totals ignore tax", "detail": "src/x.rs:4 sums net. " * 60, "task": "t1"},
+            {"problem_id": "F-2", "title": "No such task", "detail": "d", "task": "nope"}], 1)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out["reopened"], ["t1"])
+        self.assertEqual(out["unmatched"], ["F-2"])
+        t1 = self.task("t1")
+        self.assertEqual((t1["status"], t1["review_round"]), ("doing", 1))
+        self.assertEqual(t1["review_findings"][0]["id"], "F-1")
+        self.assertEqual(t1["review_findings"][0]["status"], "open")
+        self.assertLessEqual(len(t1["review_findings"][0]["text"]), 500)
+        self.assertEqual(self.task("t2")["status"], "backlog", "an unnamed task is unchanged")
+        tracks = self.w.read_json(os.path.join(self.w.ws, "tracks.json"))
+        self.assertEqual(tracks["tracks"][0]["phases_summary"][0]["status"], "doing")
+        # Round 2 agrees: the open finding on t1 is closed, nothing reopened.
+        code, out, _, _ = self.review("agreed", [], 2)
+        self.assertEqual((code, out["reopened"]), (0, []))
+        self.assertEqual(self.task("t1")["review_findings"][0]["status"], "resolved")
+
+    def test_ts31_ts32_the_fourth_round_is_refused_and_findings_carry_forward(self):
+        for n in (1, 2, 3):
+            code, out, _, _ = self.review("changes", [{"problem_id": "F-1", "title": "Tax", "detail": "d", "task": "t1"}], n)
+            self.assertEqual(code, 0, out)
+        code, out, _, _ = self.review("changes", [], 4, code=3)
+        self.assertEqual(code, 8, "round_limit")
+        self.assertEqual(self.task("t1")["review_round"], 3, "nothing applied past the cap")
+        code, out, _, _ = run(["verification", "--track", TRACK], self.w.wt)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(out["open_findings"], 1)
+        state = self.w.read_json(self.w.state_path)
+        req = [r for r in state["requests"] if r["title"].startswith(f"[{TRACK}/verification]")]
+        self.assertEqual(len(req), 1)
+        self.assertIn("F-1", req[0]["body"])
+        self.assertIn("round 3 of 3", req[0]["body"])
+
+    def test_ts33_acceptance_raises_verification_with_nothing_open(self):
+        self.review("changes", [{"problem_id": "F-1", "title": "Tax", "detail": "d", "task": "t1"}], 1)
+        self.review("agreed", [], 2)
+        code, out, _, _ = run(["verification", "--track", TRACK], self.w.wt)
+        self.assertEqual((code, out["open_findings"]), (0, 0), out)
+        body = [r for r in self.w.read_json(self.w.state_path)["requests"] if "/verification]" in r["title"]][0]["body"]
+        self.assertIn("accepted", body.lower())
+        # Raising again files nothing new.
+        run(["verification", "--track", TRACK], self.w.wt)
+        reqs = [r for r in self.w.read_json(self.w.state_path)["requests"] if "/verification]" in r["title"]]
+        self.assertEqual(len(reqs), 1)
+
+    def test_the_review_skill_runs_rounds_and_stops(self):
+        skill = read("skills", "sebenza-review", "SKILL.md")
+        rounds = section(skill, "Code review rounds")
+        for needle in ("review --level code", "--apply", "round n of 3", "verification --track", "8"):
+            self.assertIn(needle, rounds, needle)
+        self.assertRegex(rounds, r"(?i)stop")
+
+
 if __name__ == "__main__":
     unittest.main()
