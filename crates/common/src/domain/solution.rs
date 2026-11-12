@@ -156,6 +156,16 @@ pub enum CredentialClass {
     Control,
 }
 
+impl CredentialClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CredentialClass::OperatorSession => "operator_session",
+            CredentialClass::OperatorCli => "operator_cli",
+            CredentialClass::Control => "control",
+        }
+    }
+}
+
 /// Identifies one review round. `scope` is the item id for solution rounds and
 /// [`project_scope`] for project rounds; it is persisted, never inferred.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]

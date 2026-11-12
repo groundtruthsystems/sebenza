@@ -891,6 +891,71 @@ impl InboxService {
     }
 
     /// The item's notes and the list hash gating structural changes.
+    /// Record a gated operator action on item `id` (FR-11, FT-01): an
+    /// Overall-thread comment naming the action, the credential class the
+    /// server saw, and the SHA-256 the action bound to, plus an audit line.
+    /// The caller is the credential class, never a self-declared header.
+    pub fn record_gated_action(
+        &self,
+        id: &str,
+        action: &'static str,
+        credential: crate::domain::solution::CredentialClass,
+        hash: Option<&str>,
+    ) -> Result<InboxEvent, InboxServiceError> {
+        let caller = Some(credential.as_str().to_string());
+        let mut body = format!(
+            "Operator action `{action}` · credential `{}`",
+            credential.as_str()
+        );
+        if let Some(h) = hash {
+            body.push_str(&format!(" · sha256 `{h}`"));
+        }
+        let event = self.store.append_event(
+            id,
+            EventAuthor {
+                caller: caller.clone(),
+                ..EventAuthor::operator()
+            },
+            None,
+            InboxEventKind::Comment {
+                thread: Thread::Overall,
+                body,
+                warnings: Vec::new(),
+            },
+        )?;
+        let mut record = AuditRecord::new(action, id, AuthorKind::Operator).with_caller(&caller);
+        record.thread = Some("overall");
+        record.hash_after = hash.map(str::to_string);
+        self.audit.record(&record.with_event(&event));
+        Ok(event)
+    }
+
+    /// An audit line for an operator action or refusal that belongs to no
+    /// item (`draft_id` empty): global config, CLI logins, denied calls.
+    pub fn audit_operator(
+        &self,
+        action: &'static str,
+        draft_id: Option<&str>,
+        credential: Option<crate::domain::solution::CredentialClass>,
+        hash: Option<&str>,
+        refusal: Option<&'static str>,
+    ) {
+        let mut record = AuditRecord::new(action, draft_id.unwrap_or(""), AuthorKind::Operator)
+            .with_caller(&credential.map(|c| c.as_str().to_string()));
+        record.hash_after = hash.map(str::to_string);
+        record.refusal = refusal;
+        self.audit.record(&record);
+    }
+
+    /// Replace the item's per-item agent profiles (draft `factory:`).
+    pub fn set_factory_overrides(
+        &self,
+        id: &str,
+        overrides: crate::domain::solution::FactoryOverrides,
+    ) -> Result<InboxDraft, InboxServiceError> {
+        Ok(self.store.set_factory_overrides(id, overrides)?)
+    }
+
     pub fn notes(&self, id: &str) -> Result<(Vec<InboxNote>, String), InboxServiceError> {
         Ok(self.store.notes(id)?)
     }

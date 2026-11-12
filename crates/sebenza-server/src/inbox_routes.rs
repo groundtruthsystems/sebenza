@@ -264,7 +264,7 @@ impl From<InboxServiceError> for ApiError {
 /// `self_origin` is derived from the request's own `Host` header rather than a
 /// configured value, so `localhost:5111` and `127.0.0.1:5111` both work without
 /// the server having to know which one the browser used.
-fn check(headers: &HeaderMap, method: &str) -> Result<(), ApiError> {
+pub(crate) fn check(headers: &HeaderMap, method: &str) -> Result<(), ApiError> {
     let header = |name: axum::http::HeaderName| -> Option<String> {
         headers.get(name)?.to_str().ok().map(str::to_string)
     };
@@ -301,7 +301,7 @@ fn check(headers: &HeaderMap, method: &str) -> Result<(), ApiError> {
 /// Refuse a `Host` that is not this loopback daemon (T-10). The origin check
 /// trusts `Host` to say what "same origin" means, so on its own it waves
 /// through a DNS-rebinding page whose `Origin` and `Host` agree.
-fn check_host(host: &str) -> Result<(), ApiError> {
+pub(crate) fn check_host(host: &str) -> Result<(), ApiError> {
     if host_is_allowed(Some(host), &allowed_hosts_from_env()) {
         Ok(())
     } else {
@@ -309,7 +309,7 @@ fn check_host(host: &str) -> Result<(), ApiError> {
     }
 }
 
-fn inbox(state: &AppState) -> Arc<InboxService> {
+pub(crate) fn inbox(state: &AppState) -> Arc<InboxService> {
     state.inbox.clone()
 }
 
@@ -1132,7 +1132,7 @@ impl From<EnqueueError> for ApiError {
 
 /// Run a blocking inbox call off the async runtime. Confirm and redeliver
 /// paste through tmux, so they must not stall a runtime thread.
-async fn blocking<T: Send + 'static>(
+pub(crate) async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, InboxServiceError> + Send + 'static,
 ) -> Result<T, ApiError> {
     tokio::task::spawn_blocking(f)
@@ -1177,11 +1177,36 @@ pub async fn confirm_request(
     headers: HeaderMap,
     Json(body): Json<ConfirmBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    check(&headers, "POST")?;
-    let caller = caller_marker(&headers);
+    // A solution problem's answer steers the design, so only the operator
+    // may confirm it, and the audit caller is the credential, not the header.
+    let problem = inbox(&state)
+        .request(&id, &rid)
+        .map(|r| r.origin == common::domain::solution::RequestOrigin::SolutionProblem)
+        .unwrap_or(false);
+    let operator = if problem {
+        Some(crate::operator_routes::require_operator(
+            &state,
+            &headers,
+            "inbox.problem.confirmed",
+            Some(&id),
+        )?)
+    } else {
+        check(&headers, "POST")?;
+        None
+    };
+    let caller = match operator {
+        Some(class) => Some(class.as_str().to_string()),
+        None => caller_marker(&headers),
+    };
     let svc = inbox(&state);
     let request = blocking(move || {
-        svc.confirm_resolution(&id, &rid, body.body.as_deref(), &body.content_hash, caller)
+        let request =
+            svc.confirm_resolution(&id, &rid, body.body.as_deref(), &body.content_hash, caller)?;
+        if let Some(class) = operator {
+            let hash = request.content_hash.clone();
+            svc.record_gated_action(&id, "inbox.problem.confirmed", class, hash.as_deref())?;
+        }
+        Ok(request)
     })
     .await?;
     Ok(Json(serde_json::json!({ "request": request })))
@@ -1884,6 +1909,10 @@ mod tests {
             inbox,
             inbox_jobs: Arc::new(crate::services::inbox_jobs::ConversionJobManager::new()),
             system_agent,
+            operator: Arc::new(crate::operator_auth::OperatorAuth::new()),
+            factory: Arc::new(crate::operator_routes::FactorySettings::new(
+                base.join("sebenza.yaml"),
+            )),
             frontend_dist: None,
         };
         Fixture {

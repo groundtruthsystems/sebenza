@@ -56,6 +56,10 @@ pub struct AppState {
     pub inbox_jobs: Arc<crate::services::inbox_jobs::ConversionJobManager>,
     /// The per-item inbox system agent (triage, draft-help, convert jobs).
     pub system_agent: Arc<crate::services::system_agent::SystemAgentService>,
+    /// Operator credentials for this daemon run (in memory only).
+    pub operator: Arc<crate::operator_auth::OperatorAuth>,
+    /// The global `factory:` block.
+    pub factory: Arc<crate::operator_routes::FactorySettings>,
     pub frontend_dist: Option<PathBuf>,
 }
 
@@ -198,6 +202,9 @@ pub fn spawn_background_loops(state: AppState) {
 pub struct ApiError {
     pub status: StatusCode,
     pub message: String,
+    /// A stable machine-readable code (`operator_required`,
+    /// `not_independent`, ...), sent as `code` beside `error`.
+    pub code: Option<&'static str>,
 }
 
 impl ApiError {
@@ -205,6 +212,14 @@ impl ApiError {
         ApiError {
             status: StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             message,
+            code: None,
+        }
+    }
+
+    pub fn coded(status: u16, code: &'static str, message: String) -> Self {
+        ApiError {
+            code: Some(code),
+            ..ApiError::new(status, message)
         }
     }
 }
@@ -219,7 +234,10 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (
             self.status,
-            Json(serde_json::json!({ "error": self.message })),
+            Json(match self.code {
+                Some(code) => serde_json::json!({ "error": self.message, "code": code }),
+                None => serde_json::json!({ "error": self.message }),
+            }),
         )
             .into_response()
     }
@@ -310,6 +328,37 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/inbox/session",
             get(crate::inbox_routes::inbox_session),
+        )
+        // Operator credential and operator-only routes.
+        .route(
+            "/api/operator/session",
+            post(crate::operator_routes::operator_session),
+        )
+        .route(
+            "/api/operator/login",
+            post(crate::operator_routes::start_login),
+        )
+        .route(
+            "/api/operator/login/{id}",
+            get(crate::operator_routes::poll_login),
+        )
+        .route(
+            "/api/operator/logins",
+            get(crate::operator_routes::list_logins),
+        )
+        .route(
+            "/api/operator/logins/{id}/{decision}",
+            post(crate::operator_routes::decide_login),
+        )
+        .route(
+            "/api/factory/config",
+            get(crate::operator_routes::get_factory_config)
+                .put(crate::operator_routes::put_factory_config),
+        )
+        .route(
+            "/api/inbox/{id}/factory/agents",
+            get(crate::operator_routes::get_item_agents)
+                .put(crate::operator_routes::put_item_agents),
         )
         .route(
             "/api/inbox",

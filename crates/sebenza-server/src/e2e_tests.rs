@@ -119,6 +119,10 @@ impl Daemon {
             inbox,
             inbox_jobs: Arc::new(crate::services::inbox_jobs::ConversionJobManager::new()),
             system_agent,
+            operator: Arc::new(crate::operator_auth::OperatorAuth::new()),
+            factory: Arc::new(crate::operator_routes::FactorySettings::new(
+                base.join("sebenza.yaml"),
+            )),
             frontend_dist: None,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

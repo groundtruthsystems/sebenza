@@ -5,6 +5,10 @@ mod adapters;
 mod e2e_tests;
 mod inbox_routes;
 mod inbox_runner;
+mod operator_auth;
+#[cfg(test)]
+mod operator_e2e_tests;
+mod operator_routes;
 mod server;
 mod services;
 
@@ -182,6 +186,12 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         inbox_jobs: Arc::new(services::inbox_jobs::ConversionJobManager::new()),
         inbox,
         system_agent,
+        operator: Arc::new(operator_auth::OperatorAuth::new()),
+        factory: Arc::new(operator_routes::FactorySettings::new(
+            std::path::Path::new(&std::env::var("HOME").unwrap_or_default())
+                .join(".ai")
+                .join("sebenza.yaml"),
+        )),
         frontend_dist,
     };
 
