@@ -66,6 +66,16 @@ is built on demand from each converted worktree's `tracks.json` / `plan.json` (n
 confined to daemon-registered worktrees, and rendered client-side as Mermaid (`strict` +
 DOMPurify). Cross-repo shapes are pinned by golden fixtures in `crates/common/testdata/contracts/`.
 
+**Software factory (dated 2026-11-12).** Role agents (coordinator, analyst, architect,
+reviewers) run headless and read-only through one role runner on `claude`, `codex` or `grok`.
+Each runs in an empty scratch directory or a read-only review snapshot, returns a validated JSON
+envelope, and is gated by a per-CLI conformance table; `grok` is "read-only unverified" and never
+reviews. Approvals bind SHA-256 hashes, which added the `sha2` crate (the SHA-1 helper is still
+used for concurrency hashes only). Solution state is an event-sourced fold over the item's event
+log, and operator routes need an in-memory operator token rather than the control token. The
+Claude Code skills plugin lives in `skills/` (Python stdlib scripts, tested with `unittest`),
+published through `.claude-plugin/marketplace.json`.
+
 `sebenza-cli init` reports each tool's detected version, so a session-format or hook change
 that breaks history can be diagnosed against the version actually installed rather than
 guessed at. opencode moves fast — 1.18.7 → 1.18.9 was observed within a day — so the

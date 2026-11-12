@@ -16,6 +16,13 @@ worktree lifecycle — create, open, label, archive, merge, remove — without l
 One server serves every registered project on a single port under per-project URL prefixes, and
 everything the dashboard does is also available from `sebenza-cli`.
 
+It also runs a two-level **software factory**. A solution item in the inbox is shaped by a
+coordinator chat and designed by analyst, architect and independent reviewer agents, with
+review capped at three rounds. Each project gets implementation only after the operator approves
+its handover. Inside each worktree, the Sebenza skills plugin (shipped from `skills/`) designs in
+ordered architect waves, waits for an `[approval]` request and runs independent code-review
+rounds, also capped at three.
+
 ## Core goal — agent-agnostic parallelism
 
 Agents are interchangeable. A worktree's agent is a **choice made at creation time**, and the
