@@ -16,6 +16,7 @@ import WorktreeLabelDialog from "./lib/WorktreeLabelDialog";
 import SidebarRepoRow from "./lib/SidebarRepoRow";
 import ProjectSwitcher from "./lib/ProjectSwitcher";
 import MigrationBanner from "./lib/MigrationBanner";
+import OperatorLogins from "./lib/OperatorLogins";
 import Toggle from "./lib/Toggle";
 import TabBar from "./lib/TabBar";
 import { agentCan } from "./lib/agent-capabilities";
@@ -1283,6 +1284,7 @@ export default function App() {
 
         <main className="flex-1 min-w-0 flex flex-col overflow-hidden">
           <MigrationBanner />
+          <OperatorLogins />
           <TopBar
             name={selectedWorktree?.branch ?? null}
             worktree={selectedWorktree}

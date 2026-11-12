@@ -601,6 +601,33 @@ fn control_token() -> Result<String> {
 }
 
 impl Http {
+    /// `POST /api/operator/login` — start a CLI operator login.
+    pub async fn operator_login_start(&self, verifier_hash: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!("{}/api/operator/login", self.hub))
+            .bearer_auth(control_token()?)
+            .json(&serde_json::json!({ "client": "sebenza-cli", "verifierHash": verifier_hash }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `GET /api/operator/login/{id}` — poll it with the verifier.
+    pub async fn operator_login_poll(&self, login_id: &str, verifier: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .get(format!("{}/api/operator/login/{login_id}", self.hub))
+            .header("x-sebenza-login-verifier", verifier)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+}
+
+impl Http {
     /// `GET /api/inbox`
     pub async fn inbox_list(&self, search: Option<&str>, include_dropped: bool) -> Result<Value> {
         let mut url = format!("{}/api/inbox?includeDropped={include_dropped}", self.hub);

@@ -97,6 +97,7 @@ vi.mock("@xterm/addon-web-links", () => ({
   WebLinksAddon: class MockWebLinksAddon {},
 }));
 
+vi.mock("./lib/OperatorLogins", () => ({ default: () => null }));
 vi.mock("./lib/api", () => ({
   api: {
     closeWorktree: vi.fn(),
