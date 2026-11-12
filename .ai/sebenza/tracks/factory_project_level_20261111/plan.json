@@ -203,7 +203,7 @@
           "id": "phase-4-task-1",
           "name": "Re-run this track's full test plan",
           "description": "Re-run every scenario this track claims against the finished feature and close traceability gaps.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-17",
             "TS-25",
@@ -223,13 +223,15 @@
           ],
           "depends_on": [
             "phase-3-task-5"
-          ]
+          ],
+          "commit_sha": "0f27f10"
         },
         {
           "id": "phase-4-task-2",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "Waiting for the operator's own final verification and sign-off."
         }
       ]
     }
