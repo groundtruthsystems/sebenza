@@ -144,40 +144,44 @@
           "id": "phase-3-task-1",
           "name": "Write tests for code-review send-back and caps",
           "description": "Write failing tests for reopening named tasks, review fields in plan.json, the 3-round cap and the verification request.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-2-task-5"
-          ]
+          ],
+          "commit_sha": "bddf3c6"
         },
         {
           "id": "phase-3-task-2",
           "name": "Extend sebenza-review with code-review rounds",
           "description": "Run code review via agentctl review, reopen named tasks to doing, stop at acceptance or round 3.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-3-task-1"
-          ]
+          ],
+          "commit_sha": "6fd8e1d"
         },
         {
           "id": "phase-3-task-3",
           "name": "Raise the final-verification request",
           "description": "Raise a final-verification inbox request carrying any open findings and record the changes in MIGRATION.md.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-3-task-1"
-          ]
+          ],
+          "commit_sha": "6fd8e1d"
         },
         {
           "id": "phase-3-task-4",
           "name": "Execute test scenarios TS-30, TS-31, TS-32, TS-33",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-30",
             "TS-31",
             "TS-32",
             "TS-33"
-          ]
+          ],
+          "commit_sha": "6fd8e1d"
         },
         {
           "id": "phase-3-task-5",
