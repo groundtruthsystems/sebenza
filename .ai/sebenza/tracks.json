@@ -119,7 +119,7 @@
         {
           "id": "phase-7",
           "name": "Inbox UI: Coordinator, Design and Graph tabs",
-          "status": "backlog",
+          "status": "done",
           "blocked_reason": null
         },
         {
@@ -131,8 +131,8 @@
       ],
       "progress": {
         "total_tasks": 43,
-        "completed_tasks": 40,
-        "percentage": 93
+        "completed_tasks": 41,
+        "percentage": 95
       },
       "origin": {
         "inbox_item_id": "01M75PKDJNMCNTD4EM28NX4H0P",
@@ -146,7 +146,7 @@
       },
       "spec_path": "./tracks/software_factory_20261111/spec.md",
       "plan_path": "./tracks/software_factory_20261111/plan.json",
-      "current_phase_id": "phase-7"
+      "current_phase_id": "phase-8"
     },
     {
       "track_id": "factory_project_level_20261111",

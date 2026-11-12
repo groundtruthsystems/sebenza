@@ -440,7 +440,7 @@
     {
       "id": "phase-7",
       "name": "Inbox UI: Coordinator, Design and Graph tabs",
-      "status": "backlog",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -507,9 +507,11 @@
           "id": "phase-7-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "407442c"
         }
-      ]
+      ],
+      "checkpoint_sha": "407442c"
     },
     {
       "id": "phase-8",
