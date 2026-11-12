@@ -99,16 +99,18 @@
           "id": "phase-2-task-3",
           "name": "Write tests for FactoryConfig and independence",
           "description": "Write failing tests for the factory: config block, per-item overrides and the agent/model capability independence rule.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "dea3cbf"
         },
         {
           "id": "phase-2-task-4",
           "name": "Implement FactoryConfig and independence rule",
           "description": "Parse factory: profiles, resolve overrides and enforce reviewer independence with a model capability table returning reasons.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-2-task-1"
-          ]
+          ],
+          "commit_sha": "dea3cbf"
         },
         {
           "id": "phase-2-task-5",
