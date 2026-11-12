@@ -97,6 +97,10 @@ Files added under `skills/` after the move:
 
 ```text
 MIGRATION.md
+agents/solution-coordinator.md
+agents/solution-reviewer.md
+agents/solutions-architect.md
+agents/system-analyst.md
 scripts/test_migration.py
 ```
 
