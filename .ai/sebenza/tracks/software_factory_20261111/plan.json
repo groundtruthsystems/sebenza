@@ -270,7 +270,7 @@
           "id": "phase-4-task-5",
           "name": "Execute test scenarios TS-11, TS-37, TS-39, TS-41, TS-43, TS-45, TS-47, TS-52, TS-61",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-11",
             "TS-37",
@@ -281,7 +281,8 @@
             "TS-47",
             "TS-52",
             "TS-61"
-          ]
+          ],
+          "commit_sha": "561789c"
         },
         {
           "id": "phase-4-task-6",
@@ -335,7 +336,7 @@
         },
         {
           "id": "phase-5-task-5",
-          "name": "Execute test scenarios TS-04, TS-05, TS-07, TS-08, TS-09, TS-10, TS-12, TS-13, TS-14, TS-15, TS-16, TS-17, TS-20, TS-44",
+          "name": "Execute test scenarios TS-04, TS-05, TS-07, TS-08, TS-09, TS-10, TS-12, TS-13, TS-14, TS-15, TS-16, TS-17, TS-20, TS-44, TS-11, TS-47, TS-45",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
           "status": "backlog",
           "test_scenarios": [
@@ -352,7 +353,10 @@
             "TS-16",
             "TS-17",
             "TS-20",
-            "TS-44"
+            "TS-44",
+            "TS-11",
+            "TS-47",
+            "TS-45"
           ]
         },
         {
@@ -462,7 +466,7 @@
         },
         {
           "id": "phase-7-task-5",
-          "name": "Execute test scenarios TS-01, TS-03, TS-49, TS-55, TS-56",
+          "name": "Execute test scenarios TS-01, TS-03, TS-49, TS-55, TS-56, TS-45",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
           "status": "backlog",
           "test_scenarios": [
@@ -470,7 +474,8 @@
             "TS-03",
             "TS-49",
             "TS-55",
-            "TS-56"
+            "TS-56",
+            "TS-45"
           ]
         },
         {
