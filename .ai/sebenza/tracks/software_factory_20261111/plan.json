@@ -116,7 +116,7 @@
           "id": "phase-2-task-5",
           "name": "Execute test scenarios TS-02, TS-06, TS-18, TS-19, TS-53, TS-54",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-02",
             "TS-06",
@@ -124,7 +124,8 @@
             "TS-19",
             "TS-53",
             "TS-54"
-          ]
+          ],
+          "commit_sha": "3be7c69"
         },
         {
           "id": "phase-2-task-6",
@@ -152,7 +153,7 @@
         {
           "id": "phase-3-task-2",
           "name": "Implement operator session token and caller class",
-          "description": "Mint an in-memory operator token per daemon run, issue it same-origin, gate operator routes and derive the audit caller from credentials.",
+          "description": "Mint an in-memory operator token per daemon run, issue it same-origin, gate operator routes (including GET/PUT /api/factory/config and PUT /api/inbox/{id}/factory/agents, which this task adds) and derive the audit caller from credentials.",
           "status": "backlog",
           "depends_on": [
             "phase-3-task-1"
@@ -178,10 +179,11 @@
         },
         {
           "id": "phase-3-task-5",
-          "name": "Execute test scenarios TS-23, TS-38, TS-48, TS-50, TS-51, TS-58, TS-62",
+          "name": "Execute test scenarios TS-18, TS-23, TS-38, TS-48, TS-50, TS-51, TS-58, TS-62",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
           "status": "backlog",
           "test_scenarios": [
+            "TS-18",
             "TS-23",
             "TS-38",
             "TS-48",
@@ -373,14 +375,15 @@
         },
         {
           "id": "phase-6-task-4",
-          "name": "Execute test scenarios TS-21, TS-22, TS-24, TS-60",
+          "name": "Execute test scenarios TS-21, TS-22, TS-24, TS-60, TS-54",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
           "status": "backlog",
           "test_scenarios": [
             "TS-21",
             "TS-22",
             "TS-24",
-            "TS-60"
+            "TS-60",
+            "TS-54"
           ]
         },
         {
