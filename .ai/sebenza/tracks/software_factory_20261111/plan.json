@@ -145,26 +145,28 @@
     {
       "id": "phase-3",
       "name": "Operator credential and audit",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Write tests for operator token and route gating",
           "description": "Write failing route tests proving the shared token gets 403 operator_required on every operator route and token issuance rules.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-2-task-6"
-          ]
+          ],
+          "commit_sha": "69fea38"
         },
         {
           "id": "phase-3-task-2",
           "name": "Implement operator session token and caller class",
           "description": "Mint an in-memory operator token per daemon run, issue it same-origin, gate operator routes (including GET/PUT /api/factory/config and PUT /api/inbox/{id}/factory/agents, which this task adds) and derive the audit caller from credentials.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-3-task-1"
-          ]
+          ],
+          "commit_sha": "69fea38"
         },
         {
           "id": "phase-3-task-3",
@@ -179,10 +181,11 @@
           "id": "phase-3-task-4",
           "name": "Implement audit comments for gated actions",
           "description": "Post an attributed Overall-thread comment for every gated action with action, credential class and hash.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-3-task-1"
-          ]
+          ],
+          "commit_sha": "69fea38"
         },
         {
           "id": "phase-3-task-5",
