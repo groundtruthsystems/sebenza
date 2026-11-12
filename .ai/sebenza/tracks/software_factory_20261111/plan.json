@@ -379,7 +379,7 @@
     {
       "id": "phase-6",
       "name": "Design approval and per-project handover",
-      "status": "backlog",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -431,9 +431,11 @@
           "id": "phase-6-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "8104046"
         }
-      ]
+      ],
+      "checkpoint_sha": "f493ac0"
     },
     {
       "id": "phase-7",
