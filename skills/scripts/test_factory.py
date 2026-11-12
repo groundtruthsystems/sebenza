@@ -250,7 +250,7 @@ class CodeReviewRounds(unittest.TestCase):
 
     def test_the_review_skill_runs_rounds_and_stops(self):
         skill = read("skills", "sebenza-review", "SKILL.md")
-        rounds = section(skill, "Code review rounds")
+        rounds = section(skill, "5a. Code review rounds")
         for needle in ("review --level code", "--apply", "round n of 3", "verification --track", "8"):
             self.assertIn(needle, rounds, needle)
         self.assertRegex(rounds, r"(?i)stop")

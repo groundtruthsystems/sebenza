@@ -33,6 +33,8 @@ python3 "<sebenza>/scripts/inbox.py" notes                                      
 python3 "<sebenza>/scripts/inbox.py" approval --track <track_id> [--raise]                     # the approval gate
 python3 "<sebenza>/scripts/inbox.py" review --level design|code --track <track_id>             # independent review
 python3 "<sebenza>/scripts/inbox.py" review --level design|code --track <track_id> --local --verdict agreed|changes --findings -
+python3 "<sebenza>/scripts/inbox.py" review --level code --track <track_id> --apply           # findings reopen tasks
+python3 "<sebenza>/scripts/inbox.py" verification --track <track_id>                           # final verification
 ```
 
 The commands do the following:
@@ -53,6 +55,10 @@ The commands do the following:
 - `review --level --track` asks the daemon for an independent design or code review of this worktree
   (`sebenza-agentctl review`), on a read-only snapshot, at most 3 rounds per level. `--local` records
   a review you ran in-session in an unlinked worktree; it is flagged not independent and capped too.
+  With `--apply` at the code level, the tasks the findings name go back to `doing` in `plan.json`
+  (`review_round`, `review_findings`); findings the reviewer no longer raises are resolved.
+- `verification --track` files the track's `[<track_id>/verification]` request after code review
+  ends, listing every finding still open.
 
 Each call prints one JSON object. Branch on the exit code, never on the text:
 

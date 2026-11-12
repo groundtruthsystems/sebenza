@@ -609,6 +609,124 @@ def record_local_round(tdir, level, verdict, findings):
     return entry
 
 
+MAX_FINDING_CHARS = 500
+MAX_FINDINGS_PER_TASK = 20
+
+
+def plan_path_for(ws, track):
+    for t in (ws.tracks() or {}).get("tracks", []):
+        if t.get("track_id") == track:
+            return ws.plan_file(t)
+    return None
+
+
+def sync_tracks(ws, track, plan):
+    """Mirror phase statuses and progress into tracks.json, keeping unknown keys."""
+    data = ws.tracks()
+    if not data:
+        return
+    tasks = [t for ph in plan.get("phases", []) for t in ph.get("tasks", [])]
+    done = sum(1 for t in tasks if t.get("status") == "done")
+    for t in data.get("tracks", []):
+        if t.get("track_id") != track:
+            continue
+        t["phases_summary"] = [{"id": ph.get("id"), "name": ph.get("name"), "status": ph.get("status"),
+                                "blocked_reason": ph.get("blocked_reason")} for ph in plan.get("phases", [])]
+        t["progress"] = {"total_tasks": len(tasks), "completed_tasks": done,
+                         "percentage": round(100 * done / len(tasks)) if tasks else 0}
+        t["current_phase_id"] = next((ph.get("id") for ph in plan.get("phases", [])
+                                      if ph.get("status") != "done"), t.get("current_phase_id"))
+        if t.get("status") == "done":
+            t["status"] = "doing"
+        t["updated_at"] = now_iso()
+    write_json_atomic(ws.tracks_path, data)
+
+
+def apply_findings(ws, track, rnd, findings):
+    """Send the tasks code review named back to `doing` (FR-10).
+
+    Each named task gets `review_round` and its findings (text capped, at most
+    20 kept). Open findings on tasks this round did not name are resolved:
+    the reviewer no longer raises them. Unknown task ids are reported, never
+    invented.
+    """
+    path = plan_path_for(ws, track)
+    if not path:
+        raise InboxError(USAGE, f"no plan.json for {track}")
+    plan = read_json(path)
+    by_id = {t.get("id"): (ph, t) for ph in plan.get("phases", []) for t in ph.get("tasks", [])}
+    reopened, unmatched = [], []
+    named = {}
+    for f in findings:
+        tid = f.get("task")
+        if tid in by_id:
+            named.setdefault(tid, []).append(f)
+        else:
+            unmatched.append(f.get("problem_id") or f.get("title") or "?")
+    for tid, (ph, task) in by_id.items():
+        existing = task.get("review_findings") or []
+        if tid not in named:
+            for f in existing:
+                if f.get("status") == "open":
+                    f["status"] = "resolved"
+            continue
+        ids = {f.get("problem_id") for f in named[tid]}
+        for f in existing:
+            if f.get("status") == "open" and f.get("id") not in ids:
+                f["status"] = "resolved"
+        for f in named[tid]:
+            text = sanitise(f"{f.get('title', '')}: {f.get('detail', '')}", MAX_FINDING_CHARS)
+            prev = next((x for x in existing if x.get("id") == f.get("problem_id")), None)
+            if prev:
+                prev.update(text=text, status="open")
+            else:
+                existing.append({"id": f.get("problem_id"), "text": text, "status": "open"})
+        task["review_findings"] = existing[-MAX_FINDINGS_PER_TASK:]
+        task["review_round"] = rnd
+        task["status"] = "doing"
+        ph["status"] = "doing"
+        reopened.append(tid)
+    write_json_atomic(path, plan)
+    sync_tracks(ws, track, plan)
+    return reopened, unmatched
+
+
+def open_findings(ws, track):
+    path = plan_path_for(ws, track)
+    plan = read_json(path) if path else {"phases": []}
+    return [(t.get("id"), f) for ph in plan.get("phases", []) for t in ph.get("tasks", [])
+            for f in (t.get("review_findings") or []) if f.get("status") == "open"]
+
+
+def cmd_verification(args, stdin, cwd):
+    """Raise the final-verification request after code review ends (FR-11):
+    on acceptance, or after round 3, carrying every finding still open."""
+    ws = Workspace.find(cwd)
+    track_dir(ws, args.track)
+    link = Link(cwd)
+    path = plan_path_for(ws, args.track)
+    plan = read_json(path) if path else {"phases": []}
+    rounds = [t["review_round"] for ph in plan.get("phases", []) for t in ph.get("tasks", [])
+              if isinstance(t.get("review_round"), int)]
+    last = max(rounds) if rounds else None
+    still_open = open_findings(ws, args.track)
+    lines = [f"Code review of {args.track} has ended"
+             + (f" at round {last} of {MAX_REVIEW_ROUNDS}." if last else ".")]
+    if still_open:
+        lines.append(f"{len(still_open)} finding(s) are still open and need your decision:")
+        lines += [f"- {f.get('id')} on task {tid}: {f.get('text', '')[:200]}" for tid, f in still_open]
+    else:
+        lines.append("The code was accepted: no findings are open.")
+    lines.append("Please run your final verification of this worktree and answer this request.")
+    body = "\n".join(lines)
+    hit = policy_hit(body)
+    if hit:
+        raise InboxError(REFUSED, "verification request refused by local policy", refused={"pattern": hit})
+    title = f"[{args.track}/verification] Final verification of {args.track}"
+    raised = raise_request(link, title, body, None)
+    return {**raised, "open_findings": len(still_open)}
+
+
 def cmd_review(args, stdin, cwd):
     """Ask for an independent review (linked), or record an in-session one."""
     ws = Workspace.find(cwd)
@@ -618,7 +736,10 @@ def cmd_review(args, stdin, cwd):
             raise InboxError(USAGE, "--local needs --verdict agreed|changes")
         findings = json.loads(stdin.read() or "[]") if args.findings == "-" else []
         entry = record_local_round(tdir, args.level, args.verdict, findings)
-        return {"ok": True, "status": "succeeded", "independent": False, **entry}
+        out = {"ok": True, "status": "succeeded", "independent": False, **entry}
+        if args.apply and args.level == "code":
+            out["reopened"], out["unmatched"] = apply_findings(ws, args.track, entry["round"], findings)
+        return out
     try:
         link = Link(cwd)
     except InboxError:
@@ -637,7 +758,11 @@ def cmd_review(args, stdin, cwd):
     except ValueError:
         job = {"status": "failed", "error": "agentctl printed no JSON"}
     if res.returncode == 0:
-        return {"ok": True, "independent": True, **job}
+        out = {"ok": True, "independent": True, **job}
+        if args.apply and args.level == "code":
+            out["reopened"], out["unmatched"] = apply_findings(
+                ws, args.track, job.get("round") or 0, job.get("findings") or [])
+        return out
     if res.returncode == 6:
         raise InboxError(NOT_LINKED, "no inbox link: review in-session and record it "
                          "with --local", independent=False)
@@ -1037,6 +1162,11 @@ def build_parser():
                    help="record an in-session review (unlinked worktree; not independent)")
     v.add_argument("--verdict", help="with --local: agreed or changes")
     v.add_argument("--findings", help="with --local: - to read a JSON list of findings on stdin")
+    v.add_argument("--apply", action="store_true",
+                   help="code level: send the tasks the findings name back to doing in plan.json")
+
+    vf = sub.add_parser("verification", help="raise the final-verification request after code review")
+    vf.add_argument("--track", required=True)
 
     sub.add_parser("notes", help="every note of the inbox item (inbox-notes.json, else inbox-note.md)")
 
@@ -1046,7 +1176,8 @@ def build_parser():
 
 
 COMMANDS = {"request": cmd_request, "feedback": cmd_feedback, "check-blocked": cmd_check_blocked,
-            "notes": cmd_notes, "approval": cmd_approval, "review": cmd_review}
+            "notes": cmd_notes, "approval": cmd_approval, "review": cmd_review,
+            "verification": cmd_verification}
 
 
 def emit(payload):
