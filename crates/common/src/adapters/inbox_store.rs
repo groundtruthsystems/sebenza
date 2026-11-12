@@ -9,12 +9,14 @@ use crate::domain::inbox_events::{
 };
 use crate::domain::model::{
     DraftStatus, FileRevision, INBOX_DRAFT_SCHEMA_VERSION, InboxDraft, InboxDraftFrontmatter,
-    InboxDraftView, Priority, PrioritySource, ProjectRef, parse_inbox_file, render_inbox_file,
+    InboxDraftView, NOTE_DRAFT_SCHEMA_VERSION, Priority, PrioritySource, ProjectRef,
+    parse_inbox_file, render_inbox_file,
 };
 use crate::domain::note_codec::{
     InboxNote, MAX_TITLE_CHARS, NOTES_SCHEMA_VERSION, is_valid_type, list_hash, new_note_id,
     parse_notes, render_notes,
 };
+use crate::domain::solution::{DraftKind, FactoryOverrides, idempotency_key};
 use crate::util::id::{is_ulid, random_ulid};
 use std::collections::HashMap;
 use std::fs;
@@ -243,10 +245,11 @@ impl InboxStore {
     }
 
     /// Load a draft for rewriting: refuse a newer schema, and stamp an older one
-    /// with the current version. Every write stamps, so the v2 -> v3 step must
-    /// be lossless whatever triggers it: the old body is re-rendered through
-    /// the note codec as its single default note, escaping any line that a v3
-    /// reader would otherwise take for a marker.
+    /// with the version its content needs. Every write stamps, so the v2 -> v3
+    /// step must be lossless whatever triggers it: the old body is re-rendered
+    /// through the note codec as its single default note, escaping any line
+    /// that a v3 reader would otherwise take for a marker. v4 is stamped only
+    /// when a v4 field is in use, and a version is never lowered.
     fn require_writable(&self, id: &str) -> Result<InboxDraft, InboxStoreError> {
         let mut draft = self.require_parsed(id)?;
         let version = draft.frontmatter.schema_version;
@@ -259,7 +262,7 @@ impl InboxStore {
         if version < NOTES_SCHEMA_VERSION {
             draft.body = render_notes(&parse_notes(&draft.body, version));
         }
-        draft.frontmatter.schema_version = INBOX_DRAFT_SCHEMA_VERSION;
+        stamp_version(&mut draft.frontmatter);
         Ok(draft)
     }
 
@@ -432,12 +435,18 @@ impl InboxStore {
     /// Create an empty draft under a fresh ULID. The title is frontmatter only,
     /// so no user text reaches the path.
     pub fn create(&self, title: &str) -> Result<InboxDraft, InboxStoreError> {
+        self.create_kind(title, DraftKind::Note)
+    }
+
+    /// Create an empty draft of `kind`. A note is written as v3 with no
+    /// `kind` key; a solution item is v4.
+    pub fn create_kind(&self, title: &str, kind: DraftKind) -> Result<InboxDraft, InboxStoreError> {
         let id = random_ulid();
         let now = now_rfc3339();
-        let draft = InboxDraft {
+        let mut draft = InboxDraft {
             id: id.clone(),
             frontmatter: InboxDraftFrontmatter {
-                schema_version: INBOX_DRAFT_SCHEMA_VERSION,
+                schema_version: NOTE_DRAFT_SCHEMA_VERSION,
                 title: title.to_string(),
                 project: None,
                 status: DraftStatus::Draft,
@@ -446,12 +455,32 @@ impl InboxStore {
                 conversions: Vec::new(),
                 priority: Priority::default(),
                 priority_source: PrioritySource::default(),
+                kind: (kind == DraftKind::Solution).then_some(kind),
+                factory: None,
                 extra: serde_yaml::Mapping::new(),
             },
             body: String::new(),
         };
+        stamp_version(&mut draft.frontmatter);
         self.atomic_write(&id, &render_inbox_file(&draft))?;
         Ok(draft)
+    }
+
+    /// Replace the item's `factory:` overrides; an empty set removes the key.
+    /// Setting overrides on a note stamps it v4.
+    pub fn set_factory_overrides(
+        &self,
+        id: &str,
+        overrides: FactoryOverrides,
+    ) -> Result<InboxDraft, InboxStoreError> {
+        self.locked(id, || {
+            let mut draft = self.require_writable(id)?;
+            draft.frontmatter.factory = (!overrides.is_empty()).then_some(overrides);
+            stamp_version(&mut draft.frontmatter);
+            draft.frontmatter.updated_at = now_rfc3339();
+            self.atomic_write(id, &render_inbox_file(&draft))?;
+            Ok(draft)
+        })
     }
 
     /// Read one draft. Unparseable frontmatter comes back as
@@ -659,6 +688,54 @@ impl InboxStore {
         if !self.path_for(id)?.is_file() {
             return Err(InboxStoreError::NotFound(id.to_string()));
         }
+        let path = self.sidecar(id, "events.jsonl")?;
+        // One lock per log keeps appends single-writer within the process;
+        // O_APPEND plus a single write keeps each line whole.
+        let lock = path_lock(&path);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.append_unlocked(&path, author, parent_event_id, kind)
+    }
+
+    /// Append `kind` unless an earlier event has the same
+    /// [`idempotency_key`]. Returns the event and whether it was appended: a
+    /// repeat returns the existing event and writes nothing. Check and append
+    /// happen under the log's lock, so two racing writers record once.
+    pub fn append_event_once(
+        &self,
+        id: &str,
+        author: EventAuthor,
+        parent_event_id: Option<String>,
+        kind: InboxEventKind,
+    ) -> Result<(InboxEvent, bool), InboxStoreError> {
+        if !self.path_for(id)?.is_file() {
+            return Err(InboxStoreError::NotFound(id.to_string()));
+        }
+        let path = self.sidecar(id, "events.jsonl")?;
+        let lock = path_lock(&path);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(key) = idempotency_key(&kind) {
+            let existing = self
+                .read_events(id)?
+                .into_iter()
+                .find(|e| idempotency_key(&e.kind).as_deref() == Some(key.as_str()));
+            if let Some(e) = existing {
+                return Ok((e, false));
+            }
+        }
+        Ok((
+            self.append_unlocked(&path, author, parent_event_id, kind)?,
+            true,
+        ))
+    }
+
+    fn append_unlocked(
+        &self,
+        path: &Path,
+        author: EventAuthor,
+        parent_event_id: Option<String>,
+        kind: InboxEventKind,
+    ) -> Result<InboxEvent, InboxStoreError> {
+        let path = path.to_path_buf();
         let event = InboxEvent {
             schema_version: INBOX_EVENT_SCHEMA_VERSION,
             event_id: random_ulid(),
@@ -671,11 +748,6 @@ impl InboxStore {
         let mut line = serde_json::to_string(&event)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         line.push('\n');
-        let path = self.sidecar(id, "events.jsonl")?;
-        // One lock per log keeps appends single-writer within the process;
-        // O_APPEND plus a single write keeps each line whole.
-        let lock = path_lock(&path);
-        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
         self.ensure_dir()?;
         let mut f = fs::OpenOptions::new()
             .append(true)
@@ -751,6 +823,14 @@ impl InboxStore {
         }
         Ok(removed)
     }
+}
+
+/// Stamp the lowest version that holds the frontmatter, never lowering it.
+fn stamp_version(fm: &mut InboxDraftFrontmatter) {
+    fm.schema_version = fm
+        .schema_version
+        .max(NOTES_SCHEMA_VERSION)
+        .max(fm.required_schema_version());
 }
 
 fn ends_with_newline(path: &Path) -> Result<bool, InboxStoreError> {
@@ -1486,7 +1566,8 @@ mod tests {
         s.set_priority(v1, PriorityWrite::Operator(Some(Priority::P1)))
             .unwrap();
         let cur = parsed(s.get(v1).unwrap());
-        assert_eq!(cur.frontmatter.schema_version, INBOX_DRAFT_SCHEMA_VERSION);
+        // A note is upgraded to v3, not v4: v4 is stamped lazily.
+        assert_eq!(cur.frontmatter.schema_version, NOTE_DRAFT_SCHEMA_VERSION);
         assert_eq!(cur.body, "body\n");
 
         let v9 = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -1510,6 +1591,155 @@ mod tests {
         ));
         // Reading still works.
         assert_eq!(parsed(s.get(v9).unwrap()).frontmatter.schema_version, 9);
+    }
+
+    // TS-02 (store half): v4 is stamped lazily. A note stays v3 with no `kind`
+    // key, so an older binary can still write it; a solution item, or a note
+    // given factory overrides, is v4; a version is never lowered.
+    #[test]
+    fn v4_is_stamped_only_when_a_v4_field_is_used() {
+        use crate::domain::solution::{AgentProfile, DraftKind, FactoryOverrides};
+        let s = store();
+        let note = s.create("Note").unwrap();
+        assert_eq!(note.frontmatter.schema_version, NOTE_DRAFT_SCHEMA_VERSION);
+        let text = fs::read_to_string(s.dir().join(format!("{}.md", note.id))).unwrap();
+        assert!(
+            !text.contains("kind:"),
+            "a note writes no kind key:\n{text}"
+        );
+        assert!(!text.contains("factory:"));
+        s.set_priority(&note.id, PriorityWrite::Operator(Some(Priority::P1)))
+            .unwrap();
+        let cur = parsed(s.get(&note.id).unwrap());
+        assert_eq!(cur.frontmatter.schema_version, NOTE_DRAFT_SCHEMA_VERSION);
+        assert_eq!(cur.frontmatter.kind(), DraftKind::Note);
+
+        let sol = s.create_kind("Solution", DraftKind::Solution).unwrap();
+        let cur = parsed(s.get(&sol.id).unwrap());
+        assert_eq!(cur.frontmatter.schema_version, INBOX_DRAFT_SCHEMA_VERSION);
+        assert_eq!(cur.frontmatter.kind(), DraftKind::Solution);
+        // A later write keeps it a v4 solution item.
+        s.set_priority(&sol.id, PriorityWrite::Operator(Some(Priority::P0)))
+            .unwrap();
+        let cur = parsed(s.get(&sol.id).unwrap());
+        assert_eq!(cur.frontmatter.schema_version, INBOX_DRAFT_SCHEMA_VERSION);
+        assert_eq!(cur.frontmatter.kind(), DraftKind::Solution);
+
+        let overrides = FactoryOverrides {
+            designer: Some(AgentProfile::new("claude", Some("opus"))),
+            ..Default::default()
+        };
+        s.set_factory_overrides(&note.id, overrides.clone())
+            .unwrap();
+        let cur = parsed(s.get(&note.id).unwrap());
+        assert_eq!(cur.frontmatter.schema_version, INBOX_DRAFT_SCHEMA_VERSION);
+        assert_eq!(cur.frontmatter.factory, Some(overrides));
+        assert_eq!(cur.frontmatter.kind(), DraftKind::Note);
+
+        s.set_factory_overrides(&note.id, FactoryOverrides::default())
+            .unwrap();
+        let cur = parsed(s.get(&note.id).unwrap());
+        assert_eq!(
+            cur.frontmatter.factory, None,
+            "an empty set removes the key"
+        );
+        assert_eq!(
+            cur.frontmatter.schema_version, INBOX_DRAFT_SCHEMA_VERSION,
+            "never lowered"
+        );
+    }
+
+    // TS-02 (compat half): a v3 note with markers keeps its notes, and v4 keys
+    // this binary reads survive a rewrite by an editor patch.
+    #[test]
+    fn a_v3_note_reads_and_writes_as_before() {
+        let s = store();
+        let id = "01ARZ3NDEKTSV4RRFFQ69G5FAX";
+        let src = "---\nschema_version: 3\ntitle: Old\nstatus: Draft\ncreated_at: a\nupdated_at: a\nconversions: []\n---\nbody\n";
+        fs::write(s.dir().join(format!("{id}.md")), src).unwrap();
+        let (before, _) = s.notes(id).unwrap();
+        s.merge_frontmatter(
+            id,
+            FrontmatterAuthor::Editor,
+            FrontmatterPatch {
+                title: Some("Renamed".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let cur = parsed(s.get(id).unwrap());
+        assert_eq!(cur.frontmatter.schema_version, NOTE_DRAFT_SCHEMA_VERSION);
+        assert_eq!(cur.frontmatter.title, "Renamed");
+        assert_eq!(s.notes(id).unwrap().0, before);
+    }
+
+    fn approval(h: &str) -> InboxEventKind {
+        use crate::domain::solution::CredentialClass;
+        InboxEventKind::DesignApproved {
+            doc_hashes: std::collections::BTreeMap::from([("design.md".into(), h.into())]),
+            credential: CredentialClass::OperatorSession,
+        }
+    }
+
+    // FT-08: a keyed event is recorded once; a repeat returns the original.
+    #[test]
+    fn keyed_events_append_once() {
+        let s = store();
+        let id = s.create("T").unwrap().id;
+        let (first, appended) = s
+            .append_event_once(&id, EventAuthor::operator(), None, approval("h1"))
+            .unwrap();
+        assert!(appended);
+        let (again, appended) = s
+            .append_event_once(&id, EventAuthor::operator(), None, approval("h1"))
+            .unwrap();
+        assert!(!appended);
+        assert_eq!(again.event_id, first.event_id);
+        let (_, appended) = s
+            .append_event_once(&id, EventAuthor::operator(), None, approval("h2"))
+            .unwrap();
+        assert!(appended, "a different hash set is a new approval");
+        // Unkeyed events always append.
+        for _ in 0..2 {
+            let (_, appended) = s
+                .append_event_once(&id, EventAuthor::operator(), None, comment("x"))
+                .unwrap();
+            assert!(appended);
+        }
+        assert_eq!(s.read_events(&id).unwrap().len(), 4);
+        assert!(matches!(
+            s.append_event_once(
+                "01ARZ3NDEKTSV4RRFFQ69G5FZZ",
+                EventAuthor::operator(),
+                None,
+                approval("h")
+            ),
+            Err(InboxStoreError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn racing_keyed_appends_record_once() {
+        let s = Arc::new(store());
+        let id = s.create("T").unwrap().id;
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let s = s.clone();
+                let id = id.clone();
+                std::thread::spawn(move || {
+                    s.append_event_once(&id, EventAuthor::operator(), None, approval("h"))
+                        .unwrap()
+                        .1
+                })
+            })
+            .collect();
+        let appended = handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .filter(|a| *a)
+            .count();
+        assert_eq!(appended, 1);
+        assert_eq!(s.read_events(&id).unwrap().len(), 1);
     }
 
     // TS-54: Drop keeps sidecars, Delete removes them, the sweep clears orphans.

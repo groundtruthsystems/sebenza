@@ -6,7 +6,12 @@
 //! comments, requests, proposals, decisions and deliveries.
 
 use super::model::{Priority, PrioritySource};
+use super::solution::{
+    AgentProfile, CredentialClass, NoteAuthor, RequestOrigin, ReviewLevel, ReviewVerdict, RoundRef,
+    SolutionPhase,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 pub const INBOX_EVENT_SCHEMA_VERSION: i32 = 1;
 
@@ -55,6 +60,9 @@ pub enum InboxEventKind {
         /// The plan task the agent is blocked on, when it named one.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         task: Option<TaskLink>,
+        /// Absent on legacy lines, which are worktree requests.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<RequestOrigin>,
     },
     Proposal {
         request_id: String,
@@ -118,6 +126,80 @@ pub enum InboxEventKind {
     Redacted {
         target_event_id: String,
     },
+    /// A note was written by the operator or the coordinator. The note text
+    /// stays in the draft; the hash drives the `coordinator` badge.
+    NoteUpserted {
+        note_id: String,
+        by: NoteAuthor,
+        note_hash: String,
+    },
+    /// One coordinator chat turn. The text lives in `<id>.coordinator.jsonl`.
+    CoordinatorTurn {
+        turn_id: String,
+        agent: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+        session_id: String,
+        transcript_offset: u64,
+    },
+    SolutionPhaseChanged {
+        phase: SolutionPhase,
+    },
+    /// Operator only: the one thing that resets a scope's round count.
+    ReviewCycleStarted {
+        level: ReviewLevel,
+        scope: String,
+        cycle: u32,
+    },
+    /// Written only by the review gate; unique on `round`.
+    ReviewRoundRecorded {
+        round: RoundRef,
+        verdict: ReviewVerdict,
+        reviewer: AgentProfile,
+        /// document -> SHA-256 of what was reviewed.
+        #[serde(default)]
+        doc_hashes: BTreeMap<String, String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        problem_ids: Vec<String>,
+    },
+    /// One escalated problem, carried as its own request (FR-18). A new kind,
+    /// so an older binary skips it instead of folding a request with no worktree.
+    ProblemRaised {
+        request_id: String,
+        problem_id: String,
+        round: RoundRef,
+        title: String,
+        detail: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
+    },
+    /// Operator only. Binds to the SHA-256 of every design document.
+    DesignApproved {
+        doc_hashes: BTreeMap<String, String>,
+        credential: CredentialClass,
+    },
+    HandoverDrafted {
+        project: String,
+        instruction_hash: String,
+        design_hash: String,
+        branch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
+    },
+    /// Operator only. Approves one project's worktree for exactly this text.
+    HandoverApproved {
+        project: String,
+        instruction_hash: String,
+        design_hash: String,
+        branch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
+        credential: CredentialClass,
+    },
+    HandoverDeferred {
+        project: String,
+        credential: CredentialClass,
+    },
     /// An event type written by a newer binary. Kept out of every fold.
     #[serde(other)]
     Unknown,
@@ -154,7 +236,14 @@ pub enum RequestStatus {
 #[serde(rename_all = "camelCase")]
 pub struct RequestView {
     pub request_id: String,
-    pub worktree: WorktreeKey,
+    /// The worktree that asked. `None` for a solution problem, which no pane
+    /// receives.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeKey>,
+    pub origin: RequestOrigin,
+    /// The escalated problem this request carries, for `SolutionProblem`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub problem_id: Option<String>,
     pub title: String,
     pub body: String,
     pub status: RequestStatus,
@@ -193,36 +282,49 @@ pub struct TaskLink {
 pub fn fold_requests(events: &[InboxEvent]) -> Vec<RequestView> {
     let mut views: Vec<RequestView> = Vec::new();
     for e in events {
-        if let InboxEventKind::RequestOpened {
-            request_id,
-            worktree,
-            title,
-            body,
-            warnings,
-            task,
-        } = &e.kind
-        {
-            if views.iter().all(|v| &v.request_id != request_id) {
-                views.push(RequestView {
-                    request_id: request_id.clone(),
-                    worktree: worktree.clone(),
-                    title: title.clone(),
-                    body: body.clone(),
-                    status: RequestStatus::Open,
-                    flagged: false,
-                    proposal_id: None,
-                    proposal: None,
-                    proposal_hash: None,
-                    proposal_warnings: Vec::new(),
-                    content_hash: None,
-                    confirmed_text: None,
-                    last_reason: None,
-                    last_error: None,
-                    attempts: 0,
-                    warnings: warnings.clone(),
-                    opened_at: e.ts.clone(),
-                    task: task.clone(),
-                });
+        let opened = match &e.kind {
+            InboxEventKind::RequestOpened {
+                request_id,
+                worktree,
+                title,
+                body,
+                warnings,
+                task,
+                origin,
+            } => Some(RequestView::opened(
+                request_id,
+                Some(worktree.clone()),
+                origin.unwrap_or_default(),
+                None,
+                title,
+                body,
+                warnings,
+                &e.ts,
+                task.clone(),
+            )),
+            InboxEventKind::ProblemRaised {
+                request_id,
+                problem_id,
+                title,
+                detail,
+                warnings,
+                ..
+            } => Some(RequestView::opened(
+                request_id,
+                None,
+                RequestOrigin::SolutionProblem,
+                Some(problem_id.clone()),
+                title,
+                detail,
+                warnings,
+                &e.ts,
+                None,
+            )),
+            _ => None,
+        };
+        if let Some(view) = opened {
+            if views.iter().all(|v| v.request_id != view.request_id) {
+                views.push(view);
             }
             continue;
         }
@@ -284,10 +386,55 @@ pub fn fold_requests(events: &[InboxEvent]) -> Vec<RequestView> {
     views
 }
 
+impl RequestView {
+    #[allow(clippy::too_many_arguments)]
+    fn opened(
+        request_id: &str,
+        worktree: Option<WorktreeKey>,
+        origin: RequestOrigin,
+        problem_id: Option<String>,
+        title: &str,
+        body: &str,
+        warnings: &[String],
+        ts: &str,
+        task: Option<TaskLink>,
+    ) -> Self {
+        RequestView {
+            request_id: request_id.to_string(),
+            worktree,
+            origin,
+            problem_id,
+            title: title.to_string(),
+            body: body.to_string(),
+            status: RequestStatus::Open,
+            flagged: false,
+            proposal_id: None,
+            proposal: None,
+            proposal_hash: None,
+            proposal_warnings: Vec::new(),
+            content_hash: None,
+            confirmed_text: None,
+            last_reason: None,
+            last_error: None,
+            attempts: 0,
+            warnings: warnings.to_vec(),
+            opened_at: ts.to_string(),
+            task,
+        }
+    }
+
+    /// Whether a confirmed answer is pasted into a worktree pane. A solution
+    /// problem's answer goes to the coordinator session instead (TS-53).
+    pub fn delivers_to_pane(&self) -> bool {
+        self.worktree.is_some() && self.origin != RequestOrigin::SolutionProblem
+    }
+}
+
 /// The request an event belongs to, if any.
 pub fn request_id_of(kind: &InboxEventKind) -> Option<&str> {
     match kind {
         InboxEventKind::RequestOpened { request_id, .. }
+        | InboxEventKind::ProblemRaised { request_id, .. }
         | InboxEventKind::Proposal { request_id, .. }
         | InboxEventKind::Advice { request_id, .. }
         | InboxEventKind::TriageFailed { request_id, .. }
@@ -372,6 +519,7 @@ mod tests {
                 body: "Which db?".into(),
                 warnings: vec![],
                 task: None,
+                origin: None,
             },
         )
     }
@@ -544,5 +692,148 @@ mod tests {
         assert_eq!(v["worktree"]["branch"], "feat-x");
         let back: InboxEvent = serde_json::from_value(v).unwrap();
         assert_eq!(back, e);
+    }
+
+    // FR-07: every factory event has a stable snake_case wire name, round-trips,
+    // and reads as `Unknown` to a binary that predates it.
+    #[test]
+    fn factory_events_have_stable_wire_names() {
+        use crate::domain::solution::*;
+        let r = RoundRef {
+            level: ReviewLevel::ProjectDesign,
+            scope: "/p@b/t".into(),
+            cycle: 1,
+            round: 2,
+        };
+        let cases = vec![
+            (
+                "note_upserted",
+                InboxEventKind::NoteUpserted {
+                    note_id: "n".into(),
+                    by: NoteAuthor::Coordinator,
+                    note_hash: "h".into(),
+                },
+            ),
+            (
+                "coordinator_turn",
+                InboxEventKind::CoordinatorTurn {
+                    turn_id: "t".into(),
+                    agent: "codex".into(),
+                    model: Some("gpt-5".into()),
+                    session_id: "s".into(),
+                    transcript_offset: 42,
+                },
+            ),
+            (
+                "solution_phase_changed",
+                InboxEventKind::SolutionPhaseChanged {
+                    phase: SolutionPhase::Reviewing,
+                },
+            ),
+            (
+                "review_cycle_started",
+                InboxEventKind::ReviewCycleStarted {
+                    level: ReviewLevel::Code,
+                    scope: "s".into(),
+                    cycle: 2,
+                },
+            ),
+            (
+                "review_round_recorded",
+                InboxEventKind::ReviewRoundRecorded {
+                    round: r.clone(),
+                    verdict: ReviewVerdict::Changes,
+                    reviewer: AgentProfile::new("claude", Some("fable")),
+                    doc_hashes: BTreeMap::from([("design.md".into(), "h".into())]),
+                    problem_ids: vec!["p1".into()],
+                },
+            ),
+            (
+                "problem_raised",
+                InboxEventKind::ProblemRaised {
+                    request_id: "r".into(),
+                    problem_id: "p".into(),
+                    round: r,
+                    title: "t".into(),
+                    detail: "d".into(),
+                    warnings: vec![],
+                },
+            ),
+            (
+                "design_approved",
+                InboxEventKind::DesignApproved {
+                    doc_hashes: BTreeMap::from([("design.md".into(), "h".into())]),
+                    credential: CredentialClass::OperatorCli,
+                },
+            ),
+            (
+                "handover_drafted",
+                InboxEventKind::HandoverDrafted {
+                    project: "/p".into(),
+                    instruction_hash: "i".into(),
+                    design_hash: "d".into(),
+                    branch: "b".into(),
+                    base: None,
+                },
+            ),
+            (
+                "handover_approved",
+                InboxEventKind::HandoverApproved {
+                    project: "/p".into(),
+                    instruction_hash: "i".into(),
+                    design_hash: "d".into(),
+                    branch: "b".into(),
+                    base: Some("main".into()),
+                    credential: CredentialClass::OperatorSession,
+                },
+            ),
+            (
+                "handover_deferred",
+                InboxEventKind::HandoverDeferred {
+                    project: "/p".into(),
+                    credential: CredentialClass::OperatorSession,
+                },
+            ),
+        ];
+        for (name, kind) in cases {
+            let e = ev("1", kind);
+            let v = serde_json::to_value(&e).unwrap();
+            assert_eq!(v["type"], name);
+            assert_eq!(
+                v["author"], "operator",
+                "{name}: the flattened kind must not shadow author"
+            );
+            let back: InboxEvent = serde_json::from_value(v.clone()).unwrap();
+            assert_eq!(back, e, "{name} round-trips");
+            // What an older binary sees: a type it does not know.
+            let mut old = v;
+            old["type"] = serde_json::json!(format!("{name}_v99"));
+            let seen: InboxEvent = serde_json::from_value(old).unwrap();
+            assert_eq!(seen.kind, InboxEventKind::Unknown);
+        }
+    }
+
+    #[test]
+    fn request_origin_defaults_to_worktree_and_round_trips() {
+        use crate::domain::solution::RequestOrigin;
+        let legacy = r#"{"schema_version":1,"event_id":"1","ts":"t","author":"worktree_agent","type":"request_opened","request_id":"r","worktree":{"project":"/p","branch":"b"},"title":"t","body":"b"}"#;
+        let e: InboxEvent = serde_json::from_str(legacy).unwrap();
+        let v = &fold_requests(std::slice::from_ref(&e))[0];
+        assert_eq!(v.origin, RequestOrigin::Worktree);
+        assert!(v.delivers_to_pane());
+        assert!(
+            !serde_json::to_string(&e).unwrap().contains("origin"),
+            "an unset origin is not written"
+        );
+
+        let mut approval = opened("2", "r2");
+        if let InboxEventKind::RequestOpened { origin, .. } = &mut approval.kind {
+            *origin = Some(RequestOrigin::Approval);
+        }
+        let json = serde_json::to_string(&approval).unwrap();
+        assert!(json.contains(r#""origin":"approval""#));
+        let v = &fold_requests(&[serde_json::from_str(&json).unwrap()])[0];
+        assert_eq!(v.origin, RequestOrigin::Approval);
+        assert_eq!(v.worktree, Some(wt()));
     }
 }

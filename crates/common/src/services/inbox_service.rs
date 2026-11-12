@@ -263,6 +263,14 @@ impl AuditRecord {
         self
     }
 
+    /// A request's worktree, which a solution problem does not have.
+    fn with_request_worktree(self, key: Option<&WorktreeKey>) -> Self {
+        match key {
+            Some(k) => self.with_worktree(k),
+            None => self,
+        }
+    }
+
     fn with_event(mut self, event: &InboxEvent) -> Self {
         self.event_id = Some(event.event_id.clone());
         self
@@ -863,7 +871,8 @@ impl InboxService {
                 (_, Some(rid)) => requests
                     .iter()
                     .find(|r| &r.request_id == rid)
-                    .map(|r| Thread::Worktree(r.worktree.clone()))
+                    .and_then(|r| r.worktree.clone())
+                    .map(Thread::Worktree)
                     .unwrap_or(Thread::Overall),
                 (_, None) => Thread::Overall,
             };
@@ -1229,6 +1238,7 @@ impl InboxService {
                 body: body.to_string(),
                 warnings: secret_warnings(&format!("{title}\n{body}")),
                 task,
+                origin: None,
             },
         )?;
         record.request_id = Some(request_id.clone());
@@ -1371,7 +1381,7 @@ impl InboxService {
             return Ok(None);
         }
         let mut record = AuditRecord::new("inbox.proposal.added", id, AuthorKind::SystemAgent)
-            .with_worktree(&view.worktree);
+            .with_request_worktree(view.worktree.as_ref());
         record.request_id = Some(request_id.to_string());
         let event = self.store.append_event(
             id,
@@ -1406,7 +1416,7 @@ impl InboxService {
         let events = self.events(id)?;
         let view = find_request(&events, request_id)?;
         let mut record = AuditRecord::new("inbox.advice.added", id, AuthorKind::SystemAgent)
-            .with_worktree(&view.worktree);
+            .with_request_worktree(view.worktree.as_ref());
         record.request_id = Some(request_id.to_string());
         let event = self.store.append_event(
             id,
@@ -1433,7 +1443,7 @@ impl InboxService {
         let events = self.events(id)?;
         let view = find_request(&events, request_id)?;
         let mut record = AuditRecord::new("inbox.triage.failed", id, AuthorKind::SystemAgent)
-            .with_worktree(&view.worktree);
+            .with_request_worktree(view.worktree.as_ref());
         record.request_id = Some(request_id.to_string());
         let event = self.store.append_event(
             id,
@@ -1511,7 +1521,7 @@ impl InboxService {
 
         let mut record = AuditRecord::new("inbox.resolution.confirmed", id, AuthorKind::Operator)
             .with_caller(&caller)
-            .with_worktree(&view.worktree);
+            .with_request_worktree(view.worktree.as_ref());
         record.request_id = Some(request_id.to_string());
         record.edited = Some(edited);
         record.attempt = Some(attempt);
@@ -1533,9 +1543,13 @@ impl InboxService {
             },
         )?;
         self.audit.record(&record.with_event(&confirmed));
+        // A solution problem's answer goes to the coordinator, not a pane.
+        let Some(worktree) = view.worktree.as_ref().filter(|_| view.delivers_to_pane()) else {
+            return self.request(id, request_id);
+        };
         self.deliver_attempt(
             id,
-            &view.worktree,
+            worktree,
             request_id,
             text,
             attempt,
@@ -1574,7 +1588,7 @@ impl InboxService {
         }
         let mut record = AuditRecord::new("inbox.request.rejected", id, AuthorKind::Operator)
             .with_caller(&caller)
-            .with_worktree(&view.worktree);
+            .with_request_worktree(view.worktree.as_ref());
         record.request_id = Some(request_id.to_string());
         let author = EventAuthor {
             caller,
@@ -1624,18 +1638,16 @@ impl InboxService {
         let attempt = view.attempts + 1;
         let mut record = AuditRecord::new("inbox.resolution.redeliver", id, AuthorKind::Operator)
             .with_caller(&caller)
-            .with_worktree(&view.worktree);
+            .with_request_worktree(view.worktree.as_ref());
         record.request_id = Some(request_id.to_string());
         record.attempt = Some(attempt);
         self.audit.record(&record);
+        // A solution problem's answer goes to the coordinator, not a pane.
+        let Some(worktree) = view.worktree.as_ref().filter(|_| view.delivers_to_pane()) else {
+            return self.request(id, request_id);
+        };
         self.deliver_attempt(
-            id,
-            &view.worktree,
-            request_id,
-            &text,
-            attempt,
-            &caller,
-            &confirmed,
+            id, worktree, request_id, &text, attempt, &caller, &confirmed,
         )?;
         self.request(id, request_id)
     }
@@ -2941,7 +2953,7 @@ mod collaboration_tests {
         let requests = f.svc.list_requests(&id).expect("requests");
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].status, RequestStatus::Open);
-        assert_eq!(requests[0].worktree, wt());
+        assert_eq!(requests[0].worktree, Some(wt()));
         assert_eq!(requests[0].title, "Need a decision");
 
         let groups = f.svc.list_comments(&id).expect("groups");
@@ -3882,7 +3894,7 @@ mod resolution_tests {
                 InboxEventKind::CommentDeliveryFailed { .. } => "comment_delivery_failed",
                 InboxEventKind::PriorityChanged { .. } => "priority_changed",
                 InboxEventKind::Redacted { .. } => "redacted",
-                InboxEventKind::Unknown => "unknown",
+                _ => "other",
             })
             .collect()
     }
@@ -4144,6 +4156,58 @@ mod resolution_tests {
             })
             .expect("confirmed");
         assert_eq!(confirm, (None, false));
+    }
+
+    // TS-53: a solution-problem request is listed with no worktree; confirming
+    // it records the decision and resolves the problem, and no pane gets text.
+    #[test]
+    fn a_solution_problem_is_confirmed_without_pane_delivery() {
+        use crate::domain::solution::*;
+        let f = fixture();
+        let id = f.svc.create("Solution").expect("create").id;
+        f.store
+            .append_event(
+                &id,
+                EventAuthor::system_agent(),
+                None,
+                InboxEventKind::ProblemRaised {
+                    request_id: "01PROB".into(),
+                    problem_id: "P-1".into(),
+                    round: RoundRef {
+                        level: ReviewLevel::Solution,
+                        scope: id.clone(),
+                        cycle: 1,
+                        round: 3,
+                    },
+                    title: "Auth model unclear".into(),
+                    detail: "Which IdP?".into(),
+                    warnings: vec![],
+                },
+            )
+            .unwrap();
+        let requests = f.svc.list_requests(&id).unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].origin, RequestOrigin::SolutionProblem);
+        assert_eq!(requests[0].worktree, None);
+
+        let text = "Use the existing OIDC provider.";
+        let r = f
+            .svc
+            .confirm_resolution(&id, "01PROB", Some(text), &content_hash(text), None)
+            .expect("confirm");
+        assert_eq!(r.status, RequestStatus::Confirmed);
+        assert!(
+            f.pane.sent().is_empty(),
+            "no pane receives a solution answer"
+        );
+        assert_eq!(kinds(&f, &id), ["other", "resolution_confirmed"]);
+        let groups = f.svc.list_comments(&id).unwrap();
+        assert!(
+            groups.worktrees.is_empty(),
+            "no worktree group for a solution problem"
+        );
+        let state = fold_solution(&id, &f.store.read_events(&id).unwrap());
+        assert_eq!(state.problems[0].status, ProblemStatus::Resolved);
     }
 
     #[test]

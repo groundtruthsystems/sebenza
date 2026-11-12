@@ -475,9 +475,14 @@ pub struct NotificationView {
 }
 
 /// Version 2 adds `priority` and `priority_source`; version 3 splits the body
-/// into typed notes ([`crate::domain::note_codec`]). Readers accept any version;
-/// the store refuses to write a draft whose version is newer than this.
-pub const INBOX_DRAFT_SCHEMA_VERSION: i32 = 3;
+/// into typed notes ([`crate::domain::note_codec`]); version 4 adds `kind` and
+/// `factory` ([`crate::domain::solution`]). Readers accept any version; the
+/// store refuses to write a draft whose version is newer than this.
+pub const INBOX_DRAFT_SCHEMA_VERSION: i32 = 4;
+
+/// The version a plain note is stamped with. v4 is stamped lazily, only on
+/// items that use a v4 field, so legacy notes stay writable by older binaries.
+pub const NOTE_DRAFT_SCHEMA_VERSION: i32 = 3;
 
 /// Inbox item priority, `P0` most urgent. Orders `P0 < P1 < P2 < P3`.
 #[derive(
@@ -546,9 +551,33 @@ pub struct InboxDraftFrontmatter {
     pub priority: Priority,
     #[serde(default)]
     pub priority_source: PrioritySource,
+    /// v4: absent means a note.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<crate::domain::solution::DraftKind>,
+    /// v4: per-item agent profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub factory: Option<crate::domain::solution::FactoryOverrides>,
     /// Keys this binary does not know, kept so a rewrite never drops them.
     #[serde(flatten, default)]
     pub extra: serde_yaml::Mapping,
+}
+
+impl InboxDraftFrontmatter {
+    pub fn kind(&self) -> crate::domain::solution::DraftKind {
+        self.kind.unwrap_or_default()
+    }
+
+    /// The lowest version that can hold this frontmatter: 4 for a solution
+    /// item or one with factory overrides, else 3.
+    pub fn required_schema_version(&self) -> i32 {
+        let solution = self.kind() == crate::domain::solution::DraftKind::Solution;
+        let overrides = self.factory.as_ref().is_some_and(|f| !f.is_empty());
+        if solution || overrides {
+            INBOX_DRAFT_SCHEMA_VERSION
+        } else {
+            NOTE_DRAFT_SCHEMA_VERSION
+        }
+    }
 }
 
 /// Inbox list order: priority (`P0` first), then newest `created_at` first.
