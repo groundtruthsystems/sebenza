@@ -106,6 +106,10 @@ impl Daemon {
         let pane = Arc::new(FakePane::default());
         inbox.set_pane_sink(pane.clone());
 
+        let factory = Arc::new(crate::operator_routes::FactorySettings::new(
+            base.join("sebenza.yaml"),
+        ));
+        let inbox_for_solution = inbox.clone();
         let state = AppState {
             manager: Arc::new(crate::services::project_manager::ProjectManager::new(
                 ProjectsRegistry::with_file(base.join("server-projects.json")),
@@ -120,8 +124,11 @@ impl Daemon {
             inbox_jobs: Arc::new(crate::services::inbox_jobs::ConversionJobManager::new()),
             system_agent,
             operator: Arc::new(crate::operator_auth::OperatorAuth::new()),
-            factory: Arc::new(crate::operator_routes::FactorySettings::new(
-                base.join("sebenza.yaml"),
+            factory: factory.clone(),
+            solution: Arc::new(crate::services::solution::SolutionService::new(
+                inbox_for_solution.clone(),
+                Arc::new(crate::services::role_runner::test_runner(&base)),
+                factory.clone(),
             )),
             frontend_dist: None,
         };

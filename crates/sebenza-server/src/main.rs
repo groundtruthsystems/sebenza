@@ -11,6 +11,9 @@ mod operator_e2e_tests;
 mod operator_routes;
 mod server;
 mod services;
+#[cfg(test)]
+mod solution_e2e_tests;
+mod solution_routes;
 
 // Reusable modules live in the `common` crate; alias them at the crate root so
 // existing `crate::config` / `crate::domain` / `crate::util` paths keep working.
@@ -178,6 +181,25 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         terminal.clone(),
     )));
 
+    let operator = Arc::new(operator_auth::OperatorAuth::new());
+    let factory = Arc::new(operator_routes::FactorySettings::new(
+        std::path::Path::new(&std::env::var("HOME").unwrap_or_default())
+            .join(".ai")
+            .join("sebenza.yaml"),
+    ));
+    let roles = Arc::new(services::role_runner::RoleRunner::new(
+        agent_stream.clone(),
+        std::env::temp_dir().join(format!("sebenza-roles-{}", std::process::id())),
+        system_agent.config().max_concurrent,
+    ));
+    if let Ok(token) = adapters::control_token::load_control_token() {
+        roles.add_known_secret(&token);
+    }
+    let solution = Arc::new(services::solution::SolutionService::new(
+        inbox.clone(),
+        roles,
+        factory.clone(),
+    ));
     let state = AppState {
         manager,
         terminal,
@@ -186,12 +208,9 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         inbox_jobs: Arc::new(services::inbox_jobs::ConversionJobManager::new()),
         inbox,
         system_agent,
-        operator: Arc::new(operator_auth::OperatorAuth::new()),
-        factory: Arc::new(operator_routes::FactorySettings::new(
-            std::path::Path::new(&std::env::var("HOME").unwrap_or_default())
-                .join(".ai")
-                .join("sebenza.yaml"),
-        )),
+        operator,
+        factory,
+        solution,
         frontend_dist,
     };
 

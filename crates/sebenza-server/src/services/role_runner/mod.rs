@@ -552,5 +552,22 @@ impl RoleRunner {
 
 #[cfg(test)]
 mod conformance_tests;
+/// A runner whose every CLI is the checked-in stub, for tests outside this
+/// module. Short timeouts; never a real CLI.
+#[cfg(test)]
+pub fn test_runner(base: &std::path::Path) -> RoleRunner {
+    let stub = format!(
+        "{}/src/services/role_runner/testdata/stub-role.sh",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let mut r = RoleRunner::new(Arc::new(AgentStreamManager::new()), base.join("roles"), 2)
+        .with_timeouts(Duration::from_secs(5), Duration::from_secs(5))
+        .with_search_path("/nonexistent");
+    for agent in ["claude", "codex", "grok"] {
+        r = r.with_binary(agent, &stub);
+    }
+    r
+}
+
 #[cfg(test)]
 mod tests;

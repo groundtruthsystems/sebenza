@@ -16,21 +16,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const TOKEN: &str = "route-test-token";
+pub(crate) const TOKEN: &str = "route-test-token";
 static SEQ: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Default)]
-struct Captured(Mutex<Vec<AuditRecord>>);
+pub(crate) struct Captured(Mutex<Vec<AuditRecord>>);
 impl AuditSink for Captured {
     fn record(&self, r: &AuditRecord) {
         self.0.lock().unwrap().push(r.clone());
     }
 }
 impl Captured {
-    fn all(&self) -> Vec<AuditRecord> {
+    pub(crate) fn all(&self) -> Vec<AuditRecord> {
         self.0.lock().unwrap().clone()
     }
-    fn with(&self, action: &str) -> Vec<AuditRecord> {
+    pub(crate) fn with(&self, action: &str) -> Vec<AuditRecord> {
         self.all()
             .into_iter()
             .filter(|r| r.action == action)
@@ -38,27 +38,27 @@ impl Captured {
     }
 }
 
-struct Daemon {
-    state: AppState,
-    store: InboxStore,
-    audit: Arc<Captured>,
-    base: PathBuf,
-    port: u16,
+pub(crate) struct Daemon {
+    pub(crate) state: AppState,
+    pub(crate) store: InboxStore,
+    pub(crate) audit: Arc<Captured>,
+    pub(crate) base: PathBuf,
+    pub(crate) port: u16,
 }
 
-struct Call<'a> {
-    method: &'a str,
-    path: String,
-    bearer: Option<String>,
-    origin: Option<String>,
-    sec_fetch_site: Option<&'a str>,
-    host: Option<String>,
-    extra: Vec<(&'a str, String)>,
-    body: Option<serde_json::Value>,
+pub(crate) struct Call<'a> {
+    pub(crate) method: &'a str,
+    pub(crate) path: String,
+    pub(crate) bearer: Option<String>,
+    pub(crate) origin: Option<String>,
+    pub(crate) sec_fetch_site: Option<&'a str>,
+    pub(crate) host: Option<String>,
+    pub(crate) extra: Vec<(&'a str, String)>,
+    pub(crate) body: Option<serde_json::Value>,
 }
 
 impl Daemon {
-    async fn start() -> Daemon {
+    pub(crate) async fn start() -> Daemon {
         crate::adapters::control_token::pin_control_token(TOKEN);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!("sebenza-op-e2e-{}-{n}", std::process::id()));
@@ -79,6 +79,10 @@ impl Daemon {
             agent_stream.clone(),
             Default::default(),
         );
+        let factory = Arc::new(crate::operator_routes::FactorySettings::new(
+            base.join("sebenza.yaml"),
+        ));
+        let inbox_for_solution = inbox.clone();
         let state = AppState {
             manager: Arc::new(crate::services::project_manager::ProjectManager::new(
                 ProjectsRegistry::with_file(base.join("server-projects.json")),
@@ -93,8 +97,11 @@ impl Daemon {
             inbox_jobs: Arc::new(crate::services::inbox_jobs::ConversionJobManager::new()),
             system_agent,
             operator: Arc::new(crate::operator_auth::OperatorAuth::new()),
-            factory: Arc::new(crate::operator_routes::FactorySettings::new(
-                base.join("sebenza.yaml"),
+            factory: factory.clone(),
+            solution: Arc::new(crate::services::solution::SolutionService::new(
+                inbox_for_solution.clone(),
+                Arc::new(crate::services::role_runner::test_runner(&base)),
+                factory.clone(),
             )),
             frontend_dist: None,
         };
@@ -118,7 +125,7 @@ impl Daemon {
     }
 
     /// A request as the SPA sends it, with `bearer`.
-    fn spa<'a>(&self, method: &'a str, path: &str, bearer: &str) -> Call<'a> {
+    pub(crate) fn spa<'a>(&self, method: &'a str, path: &str, bearer: &str) -> Call<'a> {
         Call {
             method,
             path: path.to_string(),
@@ -131,7 +138,7 @@ impl Daemon {
         }
     }
 
-    async fn send(&self, c: Call<'_>) -> (u16, serde_json::Value) {
+    pub(crate) async fn send(&self, c: Call<'_>) -> (u16, serde_json::Value) {
         let host = c.host.clone().unwrap_or_else(|| self.host());
         let payload = c.body.map(|b| b.to_string()).unwrap_or_default();
         let mut req = format!(
@@ -176,7 +183,7 @@ impl Daemon {
         (status, json)
     }
 
-    async fn operator_token(&self) -> String {
+    pub(crate) async fn operator_token(&self) -> String {
         let mut c = self.spa("POST", "/api/operator/session", "");
         c.bearer = None;
         let (code, v) = self.send(c).await;
@@ -209,7 +216,7 @@ impl Daemon {
         (id, "01PROBLEM".to_string())
     }
 
-    fn comments(&self, id: &str) -> Vec<(Option<String>, String)> {
+    pub(crate) fn comments(&self, id: &str) -> Vec<(Option<String>, String)> {
         self.store
             .read_events(id)
             .unwrap()

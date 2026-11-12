@@ -574,6 +574,25 @@ impl InboxService {
         Ok(self.store.create(title)?)
     }
 
+    /// Create a note or a solution item.
+    pub fn create_kind(
+        &self,
+        title: &str,
+        kind: crate::domain::solution::DraftKind,
+    ) -> Result<InboxDraft, InboxServiceError> {
+        Ok(self.store.create_kind(title, kind)?)
+    }
+
+    /// The store, for the solution service's documents and transcript.
+    pub fn store(&self) -> &InboxStore {
+        &self.store
+    }
+
+    /// The registered Sebenza projects (the catalogue roles design against).
+    pub fn registered_projects(&self) -> Vec<crate::adapters::projects_registry::ProjectEntry> {
+        self.projects.list()
+    }
+
     /// Replace the body, gated on the body hash the caller last read.
     pub fn save_body(
         &self,

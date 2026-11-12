@@ -65,8 +65,6 @@ pub fn load_cached(path: &Path, now: u64) -> Option<String> {
 }
 
 /// The operator token for operator-only commands, or a hint to log in.
-/// Used by the operator commands added in later phases (`factory set`).
-#[allow(dead_code)]
 pub fn operator_token() -> Result<String> {
     load_cached(&operator_token_path(), unix_now())
         .ok_or_else(|| anyhow!("not signed in as the operator: run `sebenza-cli login`"))

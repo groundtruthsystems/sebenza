@@ -126,6 +126,9 @@ pub struct DraftWire {
     pub list_hash: String,
     /// Present instead of the fields above when the file did not parse.
     pub raw: Option<RawWire>,
+    /// `solution` for a software-factory item; absent for a note.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<common::domain::solution::DraftKind>,
 }
 
 /// One note as the API shows it: the codec's fields plus its edit token.
@@ -184,6 +187,7 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
                 priority_source: d.frontmatter.priority_source,
                 conversions: d.frontmatter.conversions,
                 raw: None,
+                kind: d.frontmatter.kind,
             }
         }
         InboxDraftView::Raw {
@@ -208,6 +212,7 @@ fn to_wire(view: InboxDraftView, link: Option<ProjectLink>) -> DraftWire {
                 text: raw_text,
                 error,
             }),
+            kind: None,
         },
     }
 }
@@ -242,6 +247,12 @@ impl From<InboxServiceError> for ApiError {
             InboxServiceError::Store(
                 InboxStoreError::NoteConflict { .. } | InboxStoreError::NoteIdsDropped { .. },
             ) => ApiError::new(409, err.to_string()),
+            InboxServiceError::Store(InboxStoreError::DocConflict { .. }) => {
+                ApiError::coded(409, "doc_conflict", err.to_string())
+            }
+            InboxServiceError::Store(InboxStoreError::InvalidDocName(_)) => {
+                ApiError::new(400, err.to_string())
+            }
             InboxServiceError::Invalid(_) => ApiError::new(400, err.to_string()),
             InboxServiceError::TooLarge { .. } => ApiError::new(413, err.to_string()),
             InboxServiceError::RateLimited | InboxServiceError::TooManyOpenRequests(_) => {
@@ -586,6 +597,9 @@ pub async fn get_draft(
 #[serde(rename_all = "camelCase")]
 pub struct CreateBody {
     pub title: String,
+    /// `solution` creates a software-factory item; absent is a note.
+    #[serde(default)]
+    pub kind: Option<common::domain::solution::DraftKind>,
 }
 
 /// `POST /api/inbox` — a new, empty draft.
@@ -595,7 +609,7 @@ pub async fn create_draft(
     Json(body): Json<CreateBody>,
 ) -> Result<Json<DraftWire>, ApiError> {
     check(&headers, "POST")?;
-    let draft = inbox(&state).create(&body.title)?;
+    let draft = inbox(&state).create_kind(&body.title, body.kind.unwrap_or_default())?;
     Ok(Json(draft_to_wire(draft, None)))
 }
 
@@ -755,6 +769,16 @@ pub async fn convert_draft(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     check(&headers, "POST")?;
     let svc = inbox(&state);
+    // A solution item reaches worktrees only through approved handovers.
+    if let Ok((InboxDraftView::Parsed(d), _)) = svc.get(&id)
+        && d.frontmatter.kind() == common::domain::solution::DraftKind::Solution
+    {
+        return Err(ApiError::coded(
+            409,
+            "approval_required",
+            "A solution item is converted per project, after the operator approves the design and that project's handover.".to_string(),
+        ));
+    }
 
     // Validate before promising a job id. `convert` re-validates inside the
     // job, but a caller deserves the errors now, not by polling for them.
@@ -1896,6 +1920,10 @@ mod tests {
                 crate::services::system_agent::apply::TriageApplier::new(inbox.clone()),
             ));
         }
+        let factory = Arc::new(crate::operator_routes::FactorySettings::new(
+            base.join("sebenza.yaml"),
+        ));
+        let inbox_for_solution = inbox.clone();
         let state = AppState {
             manager: Arc::new(crate::services::project_manager::ProjectManager::new(
                 ProjectsRegistry::with_file(base.join("server-projects.json")),
@@ -1910,8 +1938,11 @@ mod tests {
             inbox_jobs: Arc::new(crate::services::inbox_jobs::ConversionJobManager::new()),
             system_agent,
             operator: Arc::new(crate::operator_auth::OperatorAuth::new()),
-            factory: Arc::new(crate::operator_routes::FactorySettings::new(
-                base.join("sebenza.yaml"),
+            factory: factory.clone(),
+            solution: Arc::new(crate::services::solution::SolutionService::new(
+                inbox_for_solution.clone(),
+                Arc::new(crate::services::role_runner::test_runner(&base)),
+                factory.clone(),
             )),
             frontend_dist: None,
         };

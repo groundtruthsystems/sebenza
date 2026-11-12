@@ -60,6 +60,8 @@ pub struct AppState {
     pub operator: Arc<crate::operator_auth::OperatorAuth>,
     /// The global `factory:` block.
     pub factory: Arc<crate::operator_routes::FactorySettings>,
+    /// The solution level: coordinator, pipeline and review gate.
+    pub solution: Arc<crate::services::solution::SolutionService>,
     pub frontend_dist: Option<PathBuf>,
 }
 
@@ -354,6 +356,42 @@ pub fn build_router(state: AppState) -> Router {
             "/api/factory/config",
             get(crate::operator_routes::get_factory_config)
                 .put(crate::operator_routes::put_factory_config),
+        )
+        .route(
+            "/api/factory/agents",
+            get(crate::solution_routes::factory_agents),
+        )
+        .route(
+            "/api/inbox/{id}/solution",
+            get(crate::solution_routes::get_solution),
+        )
+        .route(
+            "/api/inbox/{id}/coordinator/turn",
+            post(crate::solution_routes::coordinator_turn),
+        )
+        .route(
+            "/api/inbox/{id}/coordinator/transcript",
+            get(crate::solution_routes::coordinator_transcript),
+        )
+        .route(
+            "/api/inbox/{id}/coordinator/proposals/{turn}/{index}/apply",
+            post(crate::solution_routes::apply_proposal),
+        )
+        .route(
+            "/api/inbox/{id}/solution/start-design",
+            post(crate::solution_routes::start_design),
+        )
+        .route(
+            "/api/inbox/{id}/solution/review",
+            post(crate::solution_routes::review),
+        )
+        .route(
+            "/api/inbox/{id}/solution/docs/{*name}",
+            get(crate::solution_routes::get_doc).put(crate::solution_routes::put_doc),
+        )
+        .route(
+            "/api/inbox/{id}/solution/problems/{pid}/resolve",
+            post(crate::solution_routes::resolve_problem),
         )
         .route(
             "/api/inbox/{id}/factory/agents",

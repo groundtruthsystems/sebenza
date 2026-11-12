@@ -3,6 +3,7 @@
 
 mod completions;
 mod env_files;
+mod factory_cli;
 mod http;
 mod inbox;
 mod init;

@@ -628,6 +628,47 @@ impl Http {
 }
 
 impl Http {
+    /// One factory route call: the operator token for operator routes, the
+    /// control token otherwise.
+    pub async fn factory_call(&self, call: &crate::factory_cli::Call) -> Result<Value> {
+        let token = if call.operator {
+            crate::login::operator_token()?
+        } else {
+            control_token()?
+        };
+        let url = format!("{}{}", self.hub, call.path);
+        let req = match call.method {
+            "GET" => self.http.get(url),
+            "PUT" => self.http.put(url),
+            _ => self.http.post(url),
+        }
+        .bearer_auth(token);
+        let req = match &call.body {
+            Some(b) => req.json(b),
+            None => req,
+        };
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `POST /api/inbox` with a kind.
+    pub async fn inbox_create_kind(&self, title: &str, kind: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!("{}/api/inbox", self.hub))
+            .bearer_auth(control_token()?)
+            .json(&serde_json::json!({ "title": title, "kind": kind }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+}
+
+impl Http {
     /// `GET /api/inbox`
     pub async fn inbox_list(&self, search: Option<&str>, include_dropped: bool) -> Result<Value> {
         let mut url = format!("{}/api/inbox?includeDropped={include_dropped}", self.hub);

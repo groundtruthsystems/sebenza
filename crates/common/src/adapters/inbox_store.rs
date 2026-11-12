@@ -27,7 +27,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use thiserror::Error;
 
 /// Files kept beside `<id>.md`.
-const SIDECAR_SUFFIXES: [&str; 2] = ["events.jsonl", "session.json"];
+const SIDECAR_SUFFIXES: [&str; 3] = ["events.jsonl", "session.json", "coordinator.jsonl"];
 
 /// Every way a store operation can fail. `Conflict` carries both hashes so a
 /// caller can show the editor what it was racing.
@@ -62,6 +62,15 @@ pub enum InboxStoreError {
     /// A whole-body write would have removed notes the item has.
     #[error("draft {id}: the new body drops notes {dropped:?}")]
     NoteIdsDropped { id: String, dropped: Vec<String> },
+    /// A solution document write raced another (expected-hash mismatch).
+    #[error("document {name} of {id} changed")]
+    DocConflict {
+        id: String,
+        name: String,
+        current: Option<String>,
+    },
+    #[error("invalid solution document name {0:?}")]
+    InvalidDocName(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -579,6 +588,11 @@ impl InboxStore {
         }
         // Sidecars first: a crash between the two leaves an orphan the startup
         // sweep removes, never a draft whose history has vanished.
+        match fs::remove_dir_all(self.dir.join(id)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
         for suffix in SIDECAR_SUFFIXES {
             match fs::remove_file(self.sidecar(id, suffix)?) {
                 Ok(()) => {}
@@ -799,6 +813,130 @@ impl InboxStore {
         Ok(())
     }
 
+    /// `<dir>/<id>/solution`, created 0700 on demand.
+    fn solution_dir(&self, id: &str) -> Result<PathBuf, InboxStoreError> {
+        self.path_for(id)?;
+        Ok(self.dir.join(id).join("solution"))
+    }
+
+    /// The item's solution documents and their SHA-256s, by name
+    /// (`handover/<slug>.md` included).
+    pub fn solution_docs(
+        &self,
+        id: &str,
+    ) -> Result<std::collections::BTreeMap<String, String>, InboxStoreError> {
+        let dir = self.solution_dir(id)?;
+        let mut out = std::collections::BTreeMap::new();
+        for sub in ["", "handover/"] {
+            let Ok(entries) = fs::read_dir(dir.join(sub)) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let name = format!("{sub}{}", e.file_name().to_string_lossy());
+                if name.ends_with(".md") && e.path().is_file() {
+                    let text = fs::read_to_string(e.path())?;
+                    out.insert(name, crate::domain::solution::sha256_hex(&text));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// One solution document and its SHA-256, or `None`.
+    pub fn read_solution_doc(
+        &self,
+        id: &str,
+        name: &str,
+    ) -> Result<Option<(String, String)>, InboxStoreError> {
+        check_doc_name(name)?;
+        match fs::read_to_string(self.solution_dir(id)?.join(name)) {
+            Ok(text) => {
+                let h = crate::domain::solution::sha256_hex(&text);
+                Ok(Some((text, h)))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Write a solution document if its current SHA-256 is `expected`
+    /// (`None` = must not exist yet, `Some("*")` = any). Temp-then-rename,
+    /// 0600 in a 0700 tree, under the item lock. Returns the new hash.
+    pub fn write_solution_doc(
+        &self,
+        id: &str,
+        name: &str,
+        content: &str,
+        expected: Option<&str>,
+    ) -> Result<String, InboxStoreError> {
+        check_doc_name(name)?;
+        self.require_parsed(id)?;
+        self.locked(id, || {
+            let dir = self.solution_dir(id)?;
+            let path = dir.join(name);
+            let current = fs::read_to_string(&path)
+                .ok()
+                .map(|t| crate::domain::solution::sha256_hex(&t));
+            let ok = match expected {
+                Some("*") => true,
+                Some(h) => current.as_deref() == Some(h),
+                None => current.is_none(),
+            };
+            if !ok {
+                return Err(InboxStoreError::DocConflict {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    current,
+                });
+            }
+            let parent = path.parent().unwrap_or(&dir).to_path_buf();
+            fs::create_dir_all(&parent)?;
+            for d in [self.dir.join(id), dir.clone(), parent.clone()] {
+                let _ = fs::set_permissions(&d, fs::Permissions::from_mode(0o700));
+            }
+            let tmp = parent.join(format!(".{}.tmp", random_ulid()));
+            Self::write_owner_only(&tmp, content)?;
+            fs::rename(&tmp, &path)?;
+            Ok(crate::domain::solution::sha256_hex(content))
+        })
+    }
+
+    /// Append one line to `<id>.coordinator.jsonl` (0600, append-only).
+    pub fn append_transcript(
+        &self,
+        id: &str,
+        entry: &serde_json::Value,
+    ) -> Result<(), InboxStoreError> {
+        self.require_parsed(id)?;
+        let path = self.sidecar(id, "coordinator.jsonl")?;
+        let lock = path_lock(&path);
+        let _g = lock.lock().unwrap_or_else(|e| e.into_inner());
+        self.ensure_dir()?;
+        let mut line = serde_json::to_string(entry)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        line.push('\n');
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .open(&path)?;
+        f.write_all(line.as_bytes())?;
+        Ok(())
+    }
+
+    /// Every transcript line, in order; a torn line is skipped.
+    pub fn read_transcript(&self, id: &str) -> Result<Vec<serde_json::Value>, InboxStoreError> {
+        let path = self.sidecar(id, "coordinator.jsonl")?;
+        match fs::read_to_string(&path) {
+            Ok(t) => Ok(t
+                .lines()
+                .filter_map(|l| serde_json::from_str(l).ok())
+                .collect()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Remove sidecars whose draft no longer exists. Returns what was removed.
     pub fn sweep_orphans(&self) -> Result<Vec<PathBuf>, InboxStoreError> {
         let mut removed = Vec::new();
@@ -822,6 +960,22 @@ impl InboxStore {
             }
         }
         Ok(removed)
+    }
+}
+
+/// A solution document name: `<name>.md` or `handover/<slug>.md`, lowercase
+/// letters, digits and dashes only, so it cannot leave `solution/`.
+pub fn check_doc_name(name: &str) -> Result<(), InboxStoreError> {
+    let ok_stem = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 64
+            && s.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    };
+    let stem = name.strip_prefix("handover/").unwrap_or(name);
+    match stem.strip_suffix(".md") {
+        Some(s) if ok_stem(s) => Ok(()),
+        _ => Err(InboxStoreError::InvalidDocName(name.to_string())),
     }
 }
 
@@ -1740,6 +1894,68 @@ mod tests {
             .count();
         assert_eq!(appended, 1);
         assert_eq!(s.read_events(&id).unwrap().len(), 1);
+    }
+
+    // TS-06 (documents): a stale expected hash is a conflict and nothing is
+    // overwritten; names cannot escape solution/; delete removes the tree.
+    #[test]
+    fn solution_docs_are_hash_gated_and_confined() {
+        let s = store();
+        let id = s.create("S").unwrap().id;
+        let h1 = s
+            .write_solution_doc(&id, "requirements.md", "v1", None)
+            .unwrap();
+        assert!(matches!(
+            s.write_solution_doc(&id, "requirements.md", "again", None),
+            Err(InboxStoreError::DocConflict { .. })
+        ));
+        let h2 = s
+            .write_solution_doc(&id, "requirements.md", "v2", Some(&h1))
+            .unwrap();
+        let err = s
+            .write_solution_doc(&id, "requirements.md", "stale", Some(&h1))
+            .unwrap_err();
+        assert!(
+            matches!(err, InboxStoreError::DocConflict { current: Some(ref c), .. } if *c == h2)
+        );
+        assert_eq!(
+            s.read_solution_doc(&id, "requirements.md")
+                .unwrap()
+                .unwrap()
+                .0,
+            "v2"
+        );
+        s.write_solution_doc(&id, "handover/acme-billing.md", "do x", None)
+            .unwrap();
+        let docs = s.solution_docs(&id).unwrap();
+        assert_eq!(docs.len(), 2);
+        assert_eq!(docs["requirements.md"], h2);
+        for bad in [
+            "../x.md",
+            "handover/../../x.md",
+            "x.txt",
+            "UP.md",
+            "a/b.md",
+            "",
+        ] {
+            assert!(
+                s.write_solution_doc(&id, bad, "x", Some("*")).is_err(),
+                "{bad}"
+            );
+        }
+        let doc = s.dir().join(&id).join("solution/requirements.md");
+        assert_eq!(mode(&doc), 0o600);
+        assert_eq!(mode(&s.dir().join(&id).join("solution")), 0o700);
+        s.append_transcript(&id, &serde_json::json!({"kind": "operator", "text": "hi"}))
+            .unwrap();
+        assert_eq!(s.read_transcript(&id).unwrap().len(), 1);
+        assert_eq!(
+            mode(&s.dir().join(format!("{id}.coordinator.jsonl"))),
+            0o600
+        );
+        s.delete(&id).unwrap();
+        assert!(!s.dir().join(&id).exists());
+        assert!(!s.dir().join(format!("{id}.coordinator.jsonl")).exists());
     }
 
     // TS-54: Drop keeps sidecars, Delete removes them, the sweep clears orphans.

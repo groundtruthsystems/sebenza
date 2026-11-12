@@ -6,6 +6,8 @@
 #   STUB-MODE: reply | hang | exit | write | slow   (default reply)
 #   STUB-REPLY: <file>  the assistant's final text
 #   STUB-REPAIR: <file> the reply to a repair retry
+#   STUB-REPLY-<role>[-<round>]: <file>  per role (and review round), from the
+#                       daemon's ROLE: and ROUND: header lines
 # The CLI flavour comes from argv: codex starts with `exec`; claude is
 # `-p --verbose` with the prompt on stdin; grok is `-p <prompt>`.
 if [ "$1" = "exec" ]; then
@@ -21,7 +23,13 @@ fi
 field() { printf '%s\n' "$prompt" | sed -n "s/^$1: //p" | head -n 1; }
 log=$(field STUB-LOG)
 mode=$(field STUB-MODE)
-reply=$(field STUB-REPLY)
+[ -n "$(field STUB-HANG-ROLE)" ] && [ "$(field STUB-HANG-ROLE)" = "$(field ROLE)" ] && mode=hang
+role=$(field ROLE)
+round=$(field ROUND)
+# Most specific first: per role and round, per role, then the default.
+reply=$(field "STUB-REPLY-$role-$round")
+[ -z "$reply" ] && reply=$(field "STUB-REPLY-$role")
+[ -z "$reply" ] && reply=$(field STUB-REPLY)
 # A repair retry (the runner's second attempt) answers from STUB-REPAIR.
 case "$prompt" in
   *"could not be used"*) r=$(field STUB-REPAIR); [ -n "$r" ] && reply="$r" ;;
@@ -33,9 +41,9 @@ if [ -n "$log" ]; then
   pwd > "$log/cwd.$$"
   touch "$log/running.$$"
   ls "$log" | grep -c '^running\.' >> "$log/peaks"
-  echo "$$" >> "$log/order"
+  echo "$role $round" >> "$log/order"
 fi
-finish() { [ -n "$log" ] && rm -f "$log/running.$$"; }
+finish() { if [ -n "$log" ]; then rm -f "$log/running.$$"; fi; }
 case "$mode" in
   hang) sleep 300 & wait ;;
   exit) finish; echo "stub failing on purpose" >&2; exit 3 ;;
@@ -52,3 +60,4 @@ else
   printf '{"type":"result","subtype":"success","is_error":false,"result":%s,"session_id":"stub-session"}\n' "$text"
 fi
 finish
+exit 0

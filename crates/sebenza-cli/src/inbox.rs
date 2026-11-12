@@ -26,6 +26,10 @@ enum InboxCommand {
     /// Print the item's worktree/track/task graph (JSON).
     Graph(String),
     New(String),
+    /// `new <title> --kind solution`.
+    NewKind(String, String),
+    /// `solution|coordinator|factory …`, mapped by [`crate::factory_cli`].
+    Factory(Vec<String>),
     Edit(String),
     Link {
         id: String,
@@ -114,6 +118,7 @@ fn usage() -> String {
         "  sebenza-cli inbox notes <id>                   Print a draft's notes (JSON)",
         "  sebenza-cli inbox graph <id>                   Print a draft's worktree/task graph (JSON)",
         "  sebenza-cli inbox new <title>                  Create an empty draft",
+        crate::factory_cli::usage(),
         "  sebenza-cli inbox edit <id>                    Open the draft in $EDITOR and save",
         "  sebenza-cli inbox link <id> <path>             Link the draft to a project",
         "  sebenza-cli inbox unlink <id>                  Remove the project link",
@@ -224,6 +229,7 @@ fn positional(args: &[String]) -> Vec<String> {
             || a == "--body"
             || a == "--instruction"
             || a == "--system"
+            || a == "--kind"
         {
             skip_next = true;
             continue;
@@ -253,7 +259,14 @@ fn parse(args: &[String]) -> Result<Option<InboxCommand>> {
         "show" | "cat" => Ok(Some(InboxCommand::Show(need(0, "draft id")?))),
         "notes" => Ok(Some(InboxCommand::Notes(need(0, "draft id")?))),
         "graph" => Ok(Some(InboxCommand::Graph(need(0, "draft id")?))),
-        "new" => Ok(Some(InboxCommand::New(need(0, "title")?))),
+        "new" => match opt(args, "--kind") {
+            Some(kind) => Ok(Some(InboxCommand::NewKind(need(0, "title")?, kind))),
+            None => Ok(Some(InboxCommand::New(need(0, "title")?))),
+        },
+        "solution" | "coordinator" | "factory" => {
+            crate::factory_cli::parse(args, Some(&serde_json::json!({})))?;
+            Ok(Some(InboxCommand::Factory(args.to_vec())))
+        }
         "edit" => Ok(Some(InboxCommand::Edit(need(0, "draft id")?))),
         "link" => Ok(Some(InboxCommand::Link {
             id: need(0, "draft id")?,
@@ -888,6 +901,27 @@ pub async fn run(args: &[String], port: u16) -> i32 {
             InboxCommand::New(title) => {
                 let d = http.inbox_create(&title).await?;
                 println!("{}", d.get("id").and_then(Value::as_str).unwrap_or(""));
+            }
+            InboxCommand::NewKind(title, kind) => {
+                let d = http.inbox_create_kind(&title, &kind).await?;
+                println!("{}", d.get("id").and_then(Value::as_str).unwrap_or(""));
+            }
+            InboxCommand::Factory(args) => {
+                let current = match crate::factory_cli::current_for(&args) {
+                    Some(path) => Some(
+                        http.factory_call(&crate::factory_cli::Call {
+                            method: "GET",
+                            path,
+                            body: None,
+                            operator: false,
+                        })
+                        .await?,
+                    ),
+                    None => None,
+                };
+                let call = crate::factory_cli::parse(&args, current.as_ref())?;
+                let v = http.factory_call(&call).await?;
+                println!("{}", serde_json::to_string_pretty(&v)?);
             }
             InboxCommand::Edit(id) => edit_draft(&http, &id).await?,
             InboxCommand::Link { id, path } => {
