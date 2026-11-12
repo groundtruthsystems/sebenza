@@ -297,7 +297,7 @@
     {
       "id": "phase-5",
       "name": "Coordinator chat and solution pipeline",
-      "status": "backlog",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -370,9 +370,11 @@
           "id": "phase-5-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "cbd93c7"
         }
-      ]
+      ],
+      "checkpoint_sha": "cbd93c7"
     },
     {
       "id": "phase-6",
