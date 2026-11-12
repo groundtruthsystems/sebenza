@@ -12,43 +12,47 @@
           "id": "phase-1-task-1",
           "name": "Write tests for agentctl review and project ReviewGate",
           "description": "Write failing e2e tests for the review job, snapshot contents, tamper voiding, scope-key round cap and reviewer resolution.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "software_factory_20261111/phase-4-task-6"
-          ]
+          ],
+          "commit_sha": "574f835"
         },
         {
           "id": "phase-1-task-2",
           "name": "Implement /api/runtime/review and agentctl review",
           "description": "Add the review job route, polling, and the agentctl review subcommand with round_limit and not_independent exit codes.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-1-task-1"
-          ]
+          ],
+          "commit_sha": "574f835"
         },
         {
           "id": "phase-1-task-3",
           "name": "Implement reviewer snapshot and tamper check",
           "description": "Build the read-only snapshot with exclusions and hooks disabled, and void the round on any post-run change.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-1-task-1"
-          ]
+          ],
+          "commit_sha": "574f835"
         },
         {
           "id": "phase-1-task-4",
           "name": "Add the project-reviewer agent prompt",
           "description": "Add skills/agents/project-reviewer.md for design and code levels and embed it in the server.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-1-task-1"
-          ]
+          ],
+          "commit_sha": "6ea1ed5"
         },
         {
           "id": "phase-1-task-5",
           "name": "Execute test scenarios TS-17, TS-26, TS-40, TS-42, TS-54, TS-57, TS-59",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-17",
             "TS-26",
@@ -57,7 +61,8 @@
             "TS-54",
             "TS-57",
             "TS-59"
-          ]
+          ],
+          "commit_sha": "574f835"
         },
         {
           "id": "phase-1-task-6",

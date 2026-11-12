@@ -516,8 +516,8 @@
     {
       "id": "phase-8",
       "name": "Final verification",
-      "status": "blocked",
-      "blocked_reason": "Final operator sign-off pending.",
+      "status": "doing",
+      "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-8-task-1",
@@ -586,7 +586,12 @@
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md, including operator sign-off of TS-36 and TS-51.",
           "status": "blocked",
-          "blocked_reason": "Waiting for the operator's final verification and sign-off (TS-36, TS-51), as the operator asked to do it themselves."
+          "blocked_reason": "Waiting for the operator's final verification and sign-off (TS-36, TS-51), as the operator asked to do it themselves.",
+          "request": {
+            "request_id": "01M770PN5DVS82XSSV77C6B0MW",
+            "status": "open",
+            "raised_at": "2026-11-12T04:36:51Z"
+          }
         }
       ]
     }
