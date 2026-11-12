@@ -84,41 +84,45 @@
           "id": "phase-2-task-1",
           "name": "Write skill structure and inbox.py tests",
           "description": "Write failing unittests for architect ordering, the review and approval commands, and the unlinked fallback.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "software_factory_20261111/phase-1-task-6",
             "phase-1-task-6"
-          ]
+          ],
+          "commit_sha": "30ec562"
         },
         {
           "id": "phase-2-task-2",
           "name": "Extend sebenza-architect ordering and design review",
           "description": "Make the architect run business, then application and data, then technical and security, then test, and call agentctl review.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-2-task-1"
-          ]
+          ],
+          "commit_sha": "e9111e0"
         },
         {
           "id": "phase-2-task-3",
           "name": "Add inbox.py approval and review commands",
           "description": "Add approval and review subcommands, the local not-independent round record, and the implement-skill refusal.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-2-task-1"
-          ]
+          ],
+          "commit_sha": "e9111e0"
         },
         {
           "id": "phase-2-task-4",
           "name": "Execute test scenarios TS-25, TS-27, TS-28, TS-29",
           "description": "Run this phase's test-plan scenarios and record the evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-25",
             "TS-27",
             "TS-28",
             "TS-29"
-          ]
+          ],
+          "commit_sha": "e9111e0"
         },
         {
           "id": "phase-2-task-5",

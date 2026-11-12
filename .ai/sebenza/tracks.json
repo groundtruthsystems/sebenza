@@ -154,7 +154,7 @@
       "description": "Sebenza Software Factory project level: ordered architects, independent daemon-run reviewer with 3-round cap, approval gate before implementation, code-review rounds and final verification",
       "status": "doing",
       "created_at": "2026-11-11T23:02:32Z",
-      "updated_at": "2026-11-12T04:46:49Z",
+      "updated_at": "2026-11-12T04:51:52Z",
       "design_path": "./tracks/software_factory_20261111/design.md",
       "test_plan_path": "./tracks/software_factory_20261111/test-plan.md",
       "origin": {
@@ -190,8 +190,8 @@
       ],
       "progress": {
         "total_tasks": 18,
-        "completed_tasks": 6,
-        "percentage": 33
+        "completed_tasks": 10,
+        "percentage": 56
       },
       "spec_path": "./tracks/factory_project_level_20261111/spec.md",
       "plan_path": "./tracks/factory_project_level_20261111/plan.json",
