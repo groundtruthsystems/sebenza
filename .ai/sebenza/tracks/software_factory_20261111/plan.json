@@ -72,7 +72,7 @@
     {
       "id": "phase-2",
       "name": "Factory domain, store and config",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -131,9 +131,16 @@
           "id": "phase-2-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "request": {
+            "request_id": "01M76VHYGFTT2QS8FPFAC15VMM",
+            "status": "resolved",
+            "raised_at": "2026-11-12T03:06:54Z"
+          },
+          "commit_sha": "3be7c69"
         }
-      ]
+      ],
+      "checkpoint_sha": "3be7c69"
     },
     {
       "id": "phase-3",
