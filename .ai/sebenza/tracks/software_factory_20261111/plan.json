@@ -172,10 +172,11 @@
           "id": "phase-3-task-3",
           "name": "Implement CLI operator login confirmed in the UI",
           "description": "Add a sebenza-cli login that the operator confirms in the SPA, caching a 0600 TTL token.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-3-task-1"
-          ]
+          ],
+          "commit_sha": "b07b9ff"
         },
         {
           "id": "phase-3-task-4",
