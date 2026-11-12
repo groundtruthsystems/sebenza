@@ -137,7 +137,7 @@
     {
       "id": "phase-3",
       "name": "Code review rounds and final verification",
-      "status": "backlog",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -187,9 +187,11 @@
           "id": "phase-3-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "6fd8e1d"
         }
-      ]
+      ],
+      "checkpoint_sha": "6fd8e1d"
     },
     {
       "id": "phase-4",
