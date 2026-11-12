@@ -304,37 +304,41 @@
           "id": "phase-5-task-1",
           "name": "Write tests for coordinator chat and pipeline",
           "description": "Write failing e2e tests for chat streaming, note proposals, operator-only start, ordering, round cap and escalation.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-4-task-6"
-          ]
+          ],
+          "commit_sha": "cbd93c7"
         },
         {
           "id": "phase-5-task-2",
           "name": "Implement CoordinatorService and routes",
           "description": "Add per-turn coordinator runs streamed on the item socket with a persisted transcript, NoteUpserted proposals and CLI parity.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-5-task-1"
-          ]
+          ],
+          "commit_sha": "cbd93c7"
         },
         {
           "id": "phase-5-task-3",
           "name": "Implement SolutionPipeline and ReviewGate",
           "description": "Run analyst then architect on operator start, validate affected projects, run up to 3 review rounds and refuse round 4.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-5-task-1"
-          ]
+          ],
+          "commit_sha": "cbd93c7"
         },
         {
           "id": "phase-5-task-4",
           "name": "Implement escalation and problem resolution",
           "description": "Raise one request per problem after round 3, resolve via confirmed coordinator proposals or hand edit, and post the coordinator report.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-5-task-1"
-          ]
+          ],
+          "commit_sha": "cbd93c7"
         },
         {
           "id": "phase-5-task-5",
