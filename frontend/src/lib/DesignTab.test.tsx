@@ -45,7 +45,10 @@ describe("DesignTab", () => {
     });
     render(<DesignTab draftId="01ID" api={api} pollMs={60_000} />);
     await userEvent.click(await screen.findByRole("button", { name: "solution-design.md" }));
-    const article = await screen.findByRole("article", { name: "Document solution-design.md" });
+    // The article mounts only after renderDraftMarkdown finishes, and the
+    // mermaid fence forces a cold lazy import("mermaid") - well over the
+    // 1s findBy default on a fresh CI runner.
+    const article = await screen.findByRole("article", { name: "Document solution-design.md" }, { timeout: 10_000 });
     await waitFor(() => expect(article.querySelector("h1")).not.toBeNull());
     expect(article.querySelector("script")).toBeNull();
     expect(article.querySelector("[onerror]")).toBeNull();
