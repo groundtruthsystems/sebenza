@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import InboxRequestCard from "./InboxRequestCard";
-import type { InboxRequest } from "./api-contract";
+import { InboxRequestSchema, type InboxRequest } from "./api-contract";
 
 const request = (over: Partial<InboxRequest> = {}): InboxRequest => ({
   requestId: "R1",
@@ -188,5 +188,26 @@ describe("InboxRequestCard", () => {
     });
     await user.click(screen.getByRole("button", { name: "Confirm" }));
     expect(await screen.findByText(/changed since you opened it/i)).toBeInTheDocument();
+  });
+
+  // TS-53 (client half): a solution problem has no worktree; it parses and
+  // renders, and a legacy request without `origin` still parses.
+  it("parses and shows a solution problem with no worktree", () => {
+    const { worktree: _wt, ...wire } = request();
+    const parsed = InboxRequestSchema.parse({
+      ...wire,
+      origin: "solution_problem",
+      problemId: "P-1",
+    });
+    expect(parsed.worktree).toBeUndefined();
+    expect(parsed.origin).toBe("solution_problem");
+    setup(parsed);
+    expect(screen.getByText("solution problem")).toBeInTheDocument();
+
+    const legacy = InboxRequestSchema.parse(request());
+    expect(legacy.origin).toBeUndefined();
+    expect(legacy.worktree).toEqual({ project: "/code/acme", branch: "fix-x" });
+    expect(InboxRequestSchema.parse({ ...request(), origin: "from_the_future" }).origin)
+      .toBeUndefined();
   });
 });

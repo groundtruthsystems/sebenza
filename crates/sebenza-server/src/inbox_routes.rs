@@ -2640,6 +2640,94 @@ mod tests {
         assert!(v["listHash"].is_string());
     }
 
+    // TS-06 (software factory): on a v4 solution item, a note write with a
+    // stale expected hash is a 409 carrying the current note; the stored note
+    // keeps the first write and the item stays a v4 solution item.
+    #[tokio::test]
+    async fn a_stale_note_write_on_a_solution_item_is_a_409() {
+        use common::domain::solution::DraftKind;
+        let f = fixture();
+        let id = f
+            .store
+            .create_kind("Solution", DraftKind::Solution)
+            .expect("create")
+            .id;
+        let n1 = notes_of(&f, &id).await["notes"][0].clone();
+        let (code, _) = edit(
+            &f,
+            &id,
+            "n1",
+            serde_json::json!({"body": "brief v1", "expectedHash": n1["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::OK);
+        let (code, v) = edit(
+            &f,
+            &id,
+            "n1",
+            serde_json::json!({"body": "brief v2 (stale)", "expectedHash": n1["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::CONFLICT);
+        assert_eq!(
+            v["current"]["body"], "brief v1",
+            "the 409 carries the stored version"
+        );
+        let stored = notes_of(&f, &id).await;
+        assert_eq!(
+            stored["notes"][0]["body"], "brief v1",
+            "nothing was overwritten"
+        );
+        let common::domain::model::InboxDraftView::Parsed(d) = f.store.get(&id).unwrap() else {
+            panic!("unparsed");
+        };
+        assert_eq!(d.frontmatter.schema_version, 4);
+        assert_eq!(d.frontmatter.kind(), DraftKind::Solution);
+    }
+
+    // TS-02 (route half): a v3 draft from an older binary opens with its
+    // notes, carries no v4 keys on the wire, stays v3 when written, and its
+    // requests list as before.
+    #[tokio::test]
+    async fn a_v3_draft_opens_and_writes_as_before() {
+        let f = fixture();
+        let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        std::fs::create_dir_all(f.store.dir()).unwrap();
+        std::fs::write(
+            f.store.dir().join(format!("{id}.md")),
+            "---\nschema_version: 3\ntitle: Legacy\nstatus: Draft\ncreated_at: a\nupdated_at: a\nconversions: []\n---\nOld brief\n",
+        )
+        .unwrap();
+        let Json(item) = get_draft(State(f.state.clone()), Path(id.to_string()))
+            .await
+            .expect("get");
+        let item = serde_json::to_value(item).unwrap();
+        assert_eq!(item["notes"][0]["body"], "Old brief\n");
+        let wire = item.to_string();
+        assert!(!wire.contains("\"kind\""), "no v4 key on a note: {wire}");
+        assert!(!wire.contains("\"factory\""));
+
+        let n1 = notes_of(&f, id).await["notes"][0].clone();
+        let (code, _) = edit(
+            &f,
+            id,
+            n1["id"].as_str().unwrap(),
+            serde_json::json!({"body": "New brief", "expectedHash": n1["hash"]}),
+        )
+        .await
+        .unwrap();
+        assert_eq!(code, StatusCode::OK);
+        let text = std::fs::read_to_string(f.store.dir().join(format!("{id}.md"))).unwrap();
+        assert!(text.contains("schema_version: 3"), "still v3:\n{text}");
+
+        let Json(list) = list_requests(State(f.state.clone()), Path(id.to_string()))
+            .await
+            .expect("requests");
+        assert_eq!(list["requests"], serde_json::json!([]));
+    }
+
     // TS-22 / TS-23 / TS-24 / TS-25 / TS-26 / TS-57: structural changes need
     // the current list hash; reorder needs a permutation; the last note is
     // cleared.

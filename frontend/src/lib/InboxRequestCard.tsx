@@ -136,9 +136,13 @@ export default function InboxRequestCard({
           <span className="px-1 rounded border border-danger text-danger">flagged</span>
         )}
         {triaging && <span className="text-accent">triaging…</span>}
-        <span title={`${r.worktree.project} · ${r.worktree.branch}`}>
-          {worktreeLabel(r.worktree)}
-        </span>
+        {r.worktree ? (
+          <span title={`${r.worktree.project} · ${r.worktree.branch}`}>
+            {worktreeLabel(r.worktree)}
+          </span>
+        ) : (
+          <span>solution problem</span>
+        )}
         <WarningBadges warnings={r.warnings} />
         <span className="ml-auto">{r.openedAt.replace("T", " ").slice(0, 16)}</span>
       </header>
