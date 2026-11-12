@@ -231,7 +231,12 @@
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
           "status": "blocked",
-          "blocked_reason": "Waiting for the operator's own final verification and sign-off."
+          "blocked_reason": "Waiting for the operator's own final verification and sign-off.",
+          "request": {
+            "request_id": "01M77289FZCJTAJBEBRF8QTW2S",
+            "status": "open",
+            "raised_at": "2026-11-12T05:03:57Z"
+          }
         }
       ]
     }
