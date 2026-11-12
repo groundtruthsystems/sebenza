@@ -102,6 +102,7 @@ agents/solution-coordinator.md
 agents/solution-reviewer.md
 agents/solutions-architect.md
 agents/system-analyst.md
+scripts/test_factory.py
 scripts/test_migration.py
 ```
 
@@ -111,4 +112,7 @@ Newest first. Each row is a change made here after the move.
 
 | Date | Track / task | Change |
 |---|---|---|
+| 2026-11-11 | factory_project_level_20261111 / phase-2-task-2, -3 | `sebenza-architect` §4 runs three waves (business; application ∥ data with the business document and `solution-handover.md`; technical ∥ security) and gains §7a, independent design review (≤3 rounds) then the approval request. `sebenza-implement` gains §3a, the approval gate. `inbox.py` gains `approval` and `review` (exit codes 7-10; `--local` not-independent rounds in `reviews.json`); `shared/inbox.md` documents them. Tests: `scripts/test_factory.py`; `inbox_testkit.py`'s fake agentctl answers `review`. |
+| 2026-11-11 | factory_project_level_20261111 / phase-1-task-4 | Added `agents/project-reviewer.md` (design and code levels), embedded in the server. |
+| 2026-11-11 | software_factory_20261111 / phase-4-task-3 | Added `agents/solution-coordinator.md`, `system-analyst.md`, `solutions-architect.md` and `solution-reviewer.md`, embedded in the server. |
 | 2026-11-11 | software_factory_20261111 / phase-1-task-2 | Moved the plugin unchanged. Added this record and `scripts/test_migration.py` (marketplace, layout, hook supply-chain checks). Outside `skills/`, the host repo's `.gitignore` now ignores the inbox copies, which `test_skill_docs.py` (TS-55) expects of the host repository. |

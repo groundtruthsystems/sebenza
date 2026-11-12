@@ -68,6 +68,26 @@ Before choosing any work, pick up what the operator has said. This follows the w
    of truth for the task lifecycle** (TDD steps, coverage, commit rules, checkpoints).
 3. If any file fails to load, halt and report.
 
+## 3a. Approval gate (feature tracks)
+
+A feature track's design must be **approved by the operator** before any implementation task starts.
+Before §4, for a track that has a `design.md`, run:
+
+```bash
+python3 "<sebenza>/scripts/inbox.py" approval --track <track_id>
+```
+
+- Exit `0` with `"approved": true` — approved; continue. (The helper mirrors the approval into the
+  track's `metadata.json`.)
+- Exit `7` — not approved yet. **Do not start or implement any task of this track.** If the output
+  says `"status": "missing"`, run it again with `--raise` to file the request. Then follow the
+  blocked protocol for the track: tell the user, switch to other ready work, or HALT. The operator's
+  answer unblocks it.
+- `"linked": false` — no inbox: ask the user in chat for an explicit approval of the design, and do
+  not start until they give it.
+
+Bugs, chores and refactors have no design and skip this gate.
+
 ## 4. Begin work — set status to `doing`
 
 Before executing tasks, set the track `status` to `"doing"` in `tracks.json` (refresh `updated_at`).

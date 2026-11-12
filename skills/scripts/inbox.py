@@ -513,6 +513,139 @@ def raise_request(link, title, body, item):
             "request_id": request_id, "item": item.ref if item else None}
 
 
+# --- approval gate and project review (software factory, project level) --------
+
+#: Exit code when the design is not (yet) approved: implementation must wait.
+NOT_APPROVED = 7
+#: inbox.py's own review exit codes (agentctl's 3-6 mean other things here).
+ROUND_LIMIT, NOT_INDEPENDENT, VOIDED = 8, 9, 10
+#: agentctl review exit code -> inbox.py exit code. Unlinked is NOT_LINKED.
+AGENTCTL_REVIEW = {3: ROUND_LIMIT, 4: NOT_INDEPENDENT, 5: VOIDED, 6: NOT_LINKED}
+MAX_REVIEW_ROUNDS = 3
+TRACK_ID = re.compile(r"^[a-z0-9_]+_[0-9]{8}$")
+DESIGN_DOCS = ("design.md", "business-architecture.md", "application-architecture.md",
+               "data-architecture.md", "technical-architecture.md", "security-architecture.md",
+               "test-plan.md")
+
+
+def approval_title(track):
+    return f"[{track}/approval] Approve the design of {track} for implementation"
+
+
+def design_hash(track_dir):
+    """SHA-256 over the track's design documents, as approved."""
+    h = hashlib.sha256()
+    for name in DESIGN_DOCS:
+        path = os.path.join(track_dir, name)
+        if regular_file(path):
+            with open(path, "rb") as fh:
+                h.update(name.encode() + b"\0" + fh.read() + b"\0")
+    return h.hexdigest()
+
+
+def track_dir(ws, track):
+    if not TRACK_ID.match(track or ""):
+        raise InboxError(USAGE, f"--track must be a track id, got {track!r}")
+    path = os.path.join(ws.dir, "tracks", track)
+    if not os.path.isdir(path):
+        raise InboxError(USAGE, f"no track directory for {track}")
+    return path
+
+
+def cmd_approval(args, stdin, cwd):
+    """Is this track's design approved for implementation by the operator?
+
+    Linked: the answer is the track's `[<track>/approval]` request; `--raise`
+    files it when there is none. Approved only once the operator answers it.
+    Unlinked: there is no inbox, so the skill asks the user in chat.
+    """
+    ws = Workspace.find(cwd)
+    tdir = track_dir(ws, args.track)
+    try:
+        link = Link(cwd)
+    except InboxError:
+        return {"ok": True, "linked": False, "approved": None,
+                "hint": "No inbox link: ask the user in chat to approve the design before implementing."}
+    title = approval_title(args.track)
+    reqs = Daemon(link).mine(Daemon(link).requests())
+    match = latest_match(reqs, title)
+    if match and match.get("status") in ("confirmed", "resolved") and match.get("confirmedText"):
+        meta_path = os.path.join(tdir, "metadata.json")
+        meta = read_json(meta_path) if regular_file(meta_path) else {}
+        meta["design_approved"] = {"at": now_iso(), "request_id": match.get("requestId"),
+                                   "design_hash": design_hash(tdir)}
+        write_json_atomic(meta_path, meta)
+        return {"ok": True, "linked": True, "approved": True, "request_id": match.get("requestId"),
+                "answer": sanitise(match.get("confirmedText"))}
+    if not match and args.raise_request:
+        body = (f"The design of {args.track} passed design review and is ready for implementation.\n"
+                f"Approve it to let implementation start, or say what to change. Implementation "
+                f"waits for your answer.\nDesign hash: {design_hash(tdir)}")
+        raised = raise_request(link, title, body, None)
+        raise InboxError(NOT_APPROVED, "the design is waiting for the operator's approval",
+                         approved=False, status="open", request_id=raised.get("request_id"))
+    raise InboxError(NOT_APPROVED, "the design is not approved yet", approved=False,
+                     status=(match or {}).get("status", "missing"),
+                     request_id=(match or {}).get("requestId"))
+
+
+def local_reviews_path(tdir):
+    return os.path.join(tdir, "reviews.json")
+
+
+def record_local_round(tdir, level, verdict, findings):
+    """An unlinked worktree's review, run in-session: recorded here, flagged
+    not independent, and capped like the daemon's."""
+    path = local_reviews_path(tdir)
+    data = read_json(path) if regular_file(path) else {"rounds": []}
+    rounds = [r for r in data.get("rounds", []) if r.get("level") == level]
+    if len(rounds) >= MAX_REVIEW_ROUNDS:
+        raise InboxError(ROUND_LIMIT, f"{level} review round {MAX_REVIEW_ROUNDS} of "
+                         f"{MAX_REVIEW_ROUNDS} is done", round_limit=True)
+    entry = {"level": level, "round": len(rounds) + 1, "of": MAX_REVIEW_ROUNDS,
+             "verdict": verdict, "findings": findings, "independent": False, "at": now_iso()}
+    data.setdefault("rounds", []).append(entry)
+    write_json_atomic(path, data)
+    return entry
+
+
+def cmd_review(args, stdin, cwd):
+    """Ask for an independent review (linked), or record an in-session one."""
+    ws = Workspace.find(cwd)
+    tdir = track_dir(ws, args.track)
+    if args.local:
+        if args.verdict not in ("agreed", "changes"):
+            raise InboxError(USAGE, "--local needs --verdict agreed|changes")
+        findings = json.loads(stdin.read() or "[]") if args.findings == "-" else []
+        entry = record_local_round(tdir, args.level, args.verdict, findings)
+        return {"ok": True, "status": "succeeded", "independent": False, **entry}
+    try:
+        link = Link(cwd)
+    except InboxError:
+        raise InboxError(NOT_LINKED, "no inbox link: review in-session, then record "
+                         "the round with --local (it is flagged not independent)", independent=False)
+    env = clean_env()
+    env["SEBENZA_WORKTREE_PATH"] = link.ws.root
+    try:
+        res = subprocess.run([link.agentctl, "review", "--level", args.level, "--track", args.track],
+                             capture_output=True, text=True, env=env, cwd=link.ws.root,
+                             timeout=args.timeout + 30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise InboxError(UNREACHABLE, f"agentctl review failed: {type(exc).__name__}")
+    try:
+        job = json.loads(res.stdout or "{}")
+    except ValueError:
+        job = {"status": "failed", "error": "agentctl printed no JSON"}
+    if res.returncode == 0:
+        return {"ok": True, "independent": True, **job}
+    if res.returncode == 6:
+        raise InboxError(NOT_LINKED, "no inbox link: review in-session and record it "
+                         "with --local", independent=False)
+    raise InboxError(AGENTCTL_REVIEW.get(res.returncode, REJECTED),
+                     job.get("error") or "the review did not complete",
+                     reason=job.get("code") or job.get("status"), review=job)
+
+
 # --- feedback -------------------------------------------------------------------
 
 def label_for(author):
@@ -891,6 +1024,20 @@ def build_parser():
 
     sub.add_parser("check-blocked", help="blocked items that have no inbox request")
 
+    a = sub.add_parser("approval", help="is this track's design approved for implementation?")
+    a.add_argument("--track", required=True)
+    a.add_argument("--raise", dest="raise_request", action="store_true",
+                   help="file the approval request if there is none")
+
+    v = sub.add_parser("review", help="independent design or code review of this worktree")
+    v.add_argument("--level", choices=["design", "code"], required=True)
+    v.add_argument("--track", required=True)
+    v.add_argument("--timeout", type=int, default=900)
+    v.add_argument("--local", action="store_true",
+                   help="record an in-session review (unlinked worktree; not independent)")
+    v.add_argument("--verdict", help="with --local: agreed or changes")
+    v.add_argument("--findings", help="with --local: - to read a JSON list of findings on stdin")
+
     sub.add_parser("notes", help="every note of the inbox item (inbox-notes.json, else inbox-note.md)")
 
     h = sub.add_parser("hook", help="Claude Code hook entry point; reads the hook JSON on stdin")
@@ -899,7 +1046,7 @@ def build_parser():
 
 
 COMMANDS = {"request": cmd_request, "feedback": cmd_feedback, "check-blocked": cmd_check_blocked,
-            "notes": cmd_notes}
+            "notes": cmd_notes, "approval": cmd_approval, "review": cmd_review}
 
 
 def emit(payload):

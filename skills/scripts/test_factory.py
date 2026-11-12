@@ -75,7 +75,7 @@ class ImplementWaitsForApproval(unittest.TestCase):
 
     def test_the_protocol_documents_the_new_commands_and_codes(self):
         doc = read("shared", "inbox.md")
-        for needle in ("approval --track", "review --level", "--local", "| 7 ", "| 8 ", "| 9 ", "| 10 "):
+        for needle in ("approval --track", "review --level", "--local", "| `7` |", "| `8` |", "| `9` |", "| `10` |"):
             self.assertIn(needle, doc, needle)
 
 
