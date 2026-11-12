@@ -230,37 +230,41 @@
           "id": "phase-4-task-1",
           "name": "Write tests for role jobs with stub agents",
           "description": "Write failing tests using stub agents for read-only profiles, schema-validated output, injection inertness, scanning, limits and parsers.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-3-task-6"
-          ]
+          ],
+          "commit_sha": "561789c"
         },
         {
           "id": "phase-4-task-2",
           "name": "Generalise the system agent to role jobs",
           "description": "Extend SystemAgentKind to Claude, Codex and Grok with per-CLI read-only profiles, lanes, timeouts and the conformance-backed enable table.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-4-task-1"
-          ]
+          ],
+          "commit_sha": "561789c"
         },
         {
           "id": "phase-4-task-3",
           "name": "Add role agents and embed their prompts",
           "description": "Add solution-coordinator, system-analyst, solutions-architect and solution-reviewer to skills/agents and embed all role prompts via include_str.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-4-task-1"
-          ]
+          ],
+          "commit_sha": "35d751a"
         },
         {
           "id": "phase-4-task-4",
           "name": "Scan agent output and add conformance tests",
           "description": "Reject or redact secret/PHI in agent output before persisting and add opt-in real-CLI conformance tests.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-4-task-1"
-          ]
+          ],
+          "commit_sha": "561789c"
         },
         {
           "id": "phase-4-task-5",
