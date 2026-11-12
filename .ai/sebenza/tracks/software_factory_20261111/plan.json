@@ -516,14 +516,14 @@
     {
       "id": "phase-8",
       "name": "Final verification",
-      "status": "backlog",
-      "blocked_reason": null,
+      "status": "blocked",
+      "blocked_reason": "Final operator sign-off pending.",
       "tasks": [
         {
           "id": "phase-8-task-1",
           "name": "Re-run this track's full test plan",
           "description": "Re-run every scenario this track claims against the finished feature and close traceability gaps.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-01",
             "TS-02",
@@ -578,13 +578,15 @@
           ],
           "depends_on": [
             "phase-7-task-6"
-          ]
+          ],
+          "commit_sha": "0062de9"
         },
         {
           "id": "phase-8-task-2",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md, including operator sign-off of TS-36 and TS-51.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "Waiting for the operator's final verification and sign-off (TS-36, TS-51), as the operator asked to do it themselves."
         }
       ]
     }
