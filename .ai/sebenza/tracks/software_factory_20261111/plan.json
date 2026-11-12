@@ -447,37 +447,41 @@
           "id": "phase-7-task-1",
           "name": "Write frontend tests for tabs, picker and Design tab",
           "description": "Write failing vitest tests for the three tabs, agent picker with Grok badge, chat, Design tab, settings and safe rendering.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-6-task-5"
-          ]
+          ],
+          "commit_sha": "407442c"
         },
         {
           "id": "phase-7-task-2",
           "name": "Implement tabs and Coordinator chat UI",
           "description": "Replace Notes/Graph with Coordinator, Design and Graph tabs, reusing the conversation panel and NotesPanel in the left column.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-7-task-1"
-          ]
+          ],
+          "commit_sha": "407442c"
         },
         {
           "id": "phase-7-task-3",
           "name": "Implement Design tab and reviewer settings",
           "description": "Show documents, round n of 3, problems and handover cards with approve/defer, and global and per-item reviewer settings.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-7-task-1"
-          ]
+          ],
+          "commit_sha": "407442c"
         },
         {
           "id": "phase-7-task-4",
           "name": "Document the known limitation for users",
           "description": "State in the README that outside lxc or Apple sandboxes the operator gates only deter and leave an audit trail.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-7-task-1"
-          ]
+          ],
+          "commit_sha": "2e3fb9a"
         },
         {
           "id": "phase-7-task-5",
