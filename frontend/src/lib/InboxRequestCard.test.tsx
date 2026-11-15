@@ -22,6 +22,12 @@ const request = (over: Partial<InboxRequest> = {}): InboxRequest => ({
   attempts: 0,
   warnings: [],
   openedAt: "2026-09-30T10:00:00Z",
+  archivedAt: null,
+  archivedBy: null,
+  dismissedAt: null,
+  dismissedBy: null,
+  summary: { request: "fix-x: Which loader?", result: "Answer proposed" },
+  notice: null,
   ...over,
 });
 
@@ -31,6 +37,17 @@ function setup(r: InboxRequest, over: Record<string, unknown> = {}) {
     onreject: vi.fn().mockResolvedValue(undefined),
     onredeliver: vi.fn().mockResolvedValue(undefined),
     onretry: vi.fn().mockResolvedValue(undefined),
+    ondismiss: vi.fn().mockResolvedValue(undefined),
+    onarchive: vi.fn().mockResolvedValue(undefined),
+    onretrynotice: vi.fn().mockResolvedValue(undefined),
+    onhistory: vi.fn().mockResolvedValue({
+      request: r,
+      answers: [{ kind: "confirmed", text: "use A", at: "2026-09-30T11:00:00Z" }],
+      events: [
+        { kind: "created", from: null, to: "open", actor: "worktree_agent", at: "2026-09-30T10:00:00Z" },
+        { kind: "dismissed", from: "open", to: "dismissed", actor: "operator:operator_session", at: "2026-09-30T12:00:00Z" },
+      ],
+    }),
     ...over,
   };
   render(<InboxRequestCard request={r} {...props} />);
@@ -209,5 +226,109 @@ describe("InboxRequestCard", () => {
     expect(legacy.worktree).toEqual({ project: "/code/acme", branch: "fix-x" });
     expect(InboxRequestSchema.parse({ ...request(), origin: "from_the_future" }).origin)
       .toBeUndefined();
+  });
+});
+
+// --- Requests-tab management (track sebenza_polishing, phase 2) ----------
+
+describe("InboxRequestCard lifecycle", () => {
+  // TS-37: the summary of the request and its result is shown, archived too.
+  it("shows the template summary, also once archived", () => {
+    setup(
+      request({
+        status: "resolved",
+        archivedAt: "2026-10-01T00:00:00Z",
+        archivedBy: "operator_session",
+        summary: { request: "fix-x: Which loader?", result: "Answer delivered" },
+      }),
+    );
+    const summary = screen.getByLabelText("Summary");
+    expect(summary).toHaveTextContent("fix-x: Which loader?");
+    expect(summary).toHaveTextContent("Answer delivered");
+    expect(screen.getByText("archived")).toBeInTheDocument();
+  });
+
+  it("dismisses an unanswered request", async () => {
+    const user = userEvent.setup();
+    const { ondismiss } = setup(request({ status: "open" }));
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(ondismiss).toHaveBeenCalled();
+  });
+
+  it("offers no Dismiss once answered or dismissed", () => {
+    setup(request({ status: "resolved" }));
+    expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+  });
+
+  // TS-35: Archive is a native button, disabled unless confirmed or resolved.
+  it("enables Archive only for confirmed or resolved requests", async () => {
+    const user = userEvent.setup();
+    const { onarchive } = setup(request({ status: "resolved" }));
+    const archive = screen.getByRole("button", { name: "Archive" });
+    expect(archive).toBeEnabled();
+    await user.click(archive);
+    expect(onarchive).toHaveBeenCalled();
+  });
+
+  it("shows Archive disabled for unanswered and already archived requests", () => {
+    setup(request({ status: "open" }));
+    expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled();
+  });
+
+  it("shows Archive disabled once archived", () => {
+    setup(request({ status: "confirmed", archivedAt: "2026-10-01T00:00:00Z" }));
+    expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled();
+  });
+
+  it("marks a dismissed request and its pending notice", () => {
+    setup(
+      request({
+        status: "dismissed",
+        notice: { key: "R1:dismissal", state: "pending", failures: 0, lastAttempt: 0, lastAttemptAt: null, lastError: null },
+      }),
+    );
+    expect(screen.getByText("dismissed")).toBeInTheDocument();
+    expect(screen.queryByText("notice not delivered")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry notice" })).toBeNull();
+  });
+
+  it("shows the notice-not-delivered badge with Retry notice", async () => {
+    const user = userEvent.setup();
+    const { onretrynotice } = setup(
+      request({
+        status: "dismissed",
+        notice: { key: "R1:dismissal", state: "failed", failures: 6, lastAttempt: 6, lastAttemptAt: "t", lastError: "pane gone" },
+      }),
+    );
+    expect(screen.getByText("notice not delivered")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry notice" }));
+    expect(onretrynotice).toHaveBeenCalled();
+  });
+
+  // TS-38 (UI): the history view lists every event with its actor.
+  it("opens the history with every event and answer", async () => {
+    const user = userEvent.setup();
+    const { onhistory } = setup(request({ status: "dismissed" }));
+    const toggle = screen.getByRole("button", { name: "History" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggle);
+    expect(onhistory).toHaveBeenCalled();
+    const list = await screen.findByRole("list", { name: "Request history" });
+    const rows = within(list).getAllByRole("listitem");
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toHaveTextContent("dismissed");
+    expect(rows[1]).toHaveTextContent("operator:operator_session");
+    expect(screen.getByText("use A")).toBeInTheDocument();
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+  });
+
+  // NFR-04: the new controls are keyboard operable.
+  it("operates Dismiss from the keyboard", async () => {
+    const user = userEvent.setup();
+    const { ondismiss } = setup(request({ status: "open" }));
+    const dismiss = screen.getByRole("button", { name: "Dismiss" });
+    dismiss.focus();
+    await user.keyboard("{Enter}");
+    expect(ondismiss).toHaveBeenCalled();
   });
 });

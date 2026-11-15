@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { initContract } from "@ts-rest/core";
 import {
+  InboxRequestFilterSchema,
+  InboxRequestHistorySchema,
   AgentsSendMessageRequestSchema,
   AgentsUiInterruptResponseSchema,
   AgentsUiSendMessageResponseSchema,
@@ -164,6 +166,10 @@ export const apiPaths = {
   rejectInboxRequest: "/api/inbox/:id/requests/:rid/reject",
   redeliverInboxRequest: "/api/inbox/:id/requests/:rid/redeliver",
   retryInboxTriage: "/api/inbox/:id/requests/:rid/retry-triage",
+  dismissInboxRequest: "/api/inbox/:id/requests/:rid/dismiss",
+  archiveInboxRequest: "/api/inbox/:id/requests/:rid/archive",
+  retryInboxNotice: "/api/inbox/:id/requests/:rid/notice/retry",
+  fetchInboxRequestHistory: "/api/inbox/:id/requests/:rid/history",
   fetchInboxAgentJob: "/api/inbox/:id/agent/jobs/:jobId",
   streamInboxAgent: "/api/inbox/:id/agent/stream",
   requestInboxDraftHelp: "/api/inbox/:id/agent/draft-help",
@@ -800,6 +806,7 @@ export const apiContract = c.router(
     fetchInboxRequests: {
       method: "GET",
       path: apiPaths.fetchInboxRequests,
+      query: z.object({ filter: InboxRequestFilterSchema.optional() }).optional(),
       responses: {
         200: InboxRequestListSchema,
         400: ErrorResponseSchema,
@@ -833,6 +840,34 @@ export const apiContract = c.router(
       responses: {
         200: InboxRequestResponseSchema,
         ...inboxDecisionErrors,
+      },
+    },
+    dismissInboxRequest: {
+      method: "POST",
+      path: apiPaths.dismissInboxRequest,
+      body: z.object({}).optional(),
+      responses: { 200: InboxRequestResponseSchema, ...inboxDecisionErrors },
+    },
+    archiveInboxRequest: {
+      method: "POST",
+      path: apiPaths.archiveInboxRequest,
+      body: z.object({}).optional(),
+      responses: { 200: InboxRequestResponseSchema, ...inboxDecisionErrors },
+    },
+    retryInboxNotice: {
+      method: "POST",
+      path: apiPaths.retryInboxNotice,
+      body: z.object({}).optional(),
+      responses: { 200: InboxRequestResponseSchema, ...inboxDecisionErrors },
+    },
+    fetchInboxRequestHistory: {
+      method: "GET",
+      path: apiPaths.fetchInboxRequestHistory,
+      responses: {
+        200: InboxRequestHistorySchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        500: ErrorResponseSchema,
       },
     },
     retryInboxTriage: {

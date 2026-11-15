@@ -71,7 +71,31 @@ enum InboxCommand {
         worktree: Option<(String, String)>,
     },
     Comments(String),
-    Requests(String),
+    /// `--filter unanswered|answered|dismissed|all` (default all).
+    Requests {
+        id: String,
+        filter: Option<String>,
+    },
+    /// Operator only: dismiss an open, proposed or delivery_failed request.
+    Dismiss {
+        id: String,
+        request_id: String,
+    },
+    /// Operator only: archive a confirmed or resolved request.
+    Archive {
+        id: String,
+        request_id: String,
+    },
+    /// Operator only: one manual attempt at a failed dismissal notice.
+    NoticeRetry {
+        id: String,
+        request_id: String,
+    },
+    /// The request, its answers and its ordered events.
+    History {
+        id: String,
+        request_id: String,
+    },
     /// Confirm a request's proposal, or (`--body`) an edited or authored
     /// resolution, and deliver it.
     Confirm {
@@ -135,7 +159,12 @@ fn usage() -> String {
         "  sebenza-cli inbox comment <id> [--worktree project:branch] <text>",
         "                                                 Comment overall or on one worktree",
         "  sebenza-cli inbox comments <id>                Show the overall and worktree threads",
-        "  sebenza-cli inbox requests <id>                List requests worktree agents raised",
+        "  sebenza-cli inbox requests <id> [--filter unanswered|answered|dismissed|all]",
+        "                                                 List requests worktree agents raised",
+        "  sebenza-cli inbox dismiss <id> <request-id>    Dismiss an unanswered request (operator)",
+        "  sebenza-cli inbox archive <id> <request-id>    Archive a confirmed or resolved request",
+        "  sebenza-cli inbox notice-retry <id> <request-id>  Retry a failed dismissal notice",
+        "  sebenza-cli inbox history <id> <request-id>    Show a request's answers and events",
         "  sebenza-cli inbox confirm <id> <request-id> [--body TEXT]",
         "                                                 Confirm the proposal (or, with --body, an",
         "                                                 edit or your own resolution) and paste it",
@@ -230,6 +259,7 @@ fn positional(args: &[String]) -> Vec<String> {
             || a == "--instruction"
             || a == "--system"
             || a == "--kind"
+            || a == "--filter"
         {
             skip_next = true;
             continue;
@@ -328,7 +358,36 @@ fn parse(args: &[String]) -> Result<Option<InboxCommand>> {
             Ok(Some(InboxCommand::Comment { id, body, worktree }))
         }
         "comments" => Ok(Some(InboxCommand::Comments(need(0, "draft id")?))),
-        "requests" => Ok(Some(InboxCommand::Requests(need(0, "draft id")?))),
+        "requests" => {
+            let filter = opt(args, "--filter");
+            if let Some(f) = &filter
+                && !["unanswered", "answered", "dismissed", "all"].contains(&f.as_str())
+            {
+                return Err(anyhow!(
+                    "--filter must be unanswered, answered, dismissed or all"
+                ));
+            }
+            Ok(Some(InboxCommand::Requests {
+                id: need(0, "draft id")?,
+                filter,
+            }))
+        }
+        "dismiss" => Ok(Some(InboxCommand::Dismiss {
+            id: need(0, "draft id")?,
+            request_id: need(1, "request id")?,
+        })),
+        "archive" => Ok(Some(InboxCommand::Archive {
+            id: need(0, "draft id")?,
+            request_id: need(1, "request id")?,
+        })),
+        "notice-retry" => Ok(Some(InboxCommand::NoticeRetry {
+            id: need(0, "draft id")?,
+            request_id: need(1, "request id")?,
+        })),
+        "history" => Ok(Some(InboxCommand::History {
+            id: need(0, "draft id")?,
+            request_id: need(1, "request id")?,
+        })),
         "confirm" => Ok(Some(InboxCommand::Confirm {
             id: need(0, "draft id")?,
             request_id: need(1, "request id")?,
@@ -483,7 +542,63 @@ fn print_requests(body: &Value) {
         let wt = r.get("worktree").cloned().unwrap_or(Value::Null);
         let branch = wt.get("branch").and_then(Value::as_str).unwrap_or("");
         let title = r.get("title").and_then(Value::as_str).unwrap_or("");
-        println!("{id}  {status:<15}{flagged} [{branch}] {title}");
+        let archived = if r.get("archivedAt").is_some_and(|v| !v.is_null()) {
+            " (archived)"
+        } else {
+            ""
+        };
+        let notice = match r.pointer("/notice/state").and_then(Value::as_str) {
+            Some("failed") => " (notice not delivered)",
+            _ => "",
+        };
+        println!("{id}  {status:<15}{flagged}{archived}{notice} [{branch}] {title}");
+        if let Some(result) = r.pointer("/summary/result").and_then(Value::as_str) {
+            println!("    {result}");
+        }
+    }
+}
+
+/// A request's history: one line per event, then its answers.
+fn print_history(body: &Value) {
+    let h = body.get("history").cloned().unwrap_or(Value::Null);
+    let title = h
+        .pointer("/request/title")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    println!("{title}");
+    for e in h
+        .get("events")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let s = |k: &str| e.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+        let change = match (s("from").as_str(), s("to").as_str()) {
+            ("", _) | (_, "") => String::new(),
+            (f, t) if f == t => String::new(),
+            (f, t) => format!(" {f} -> {t}"),
+        };
+        let detail = e
+            .get("detail")
+            .and_then(Value::as_str)
+            .map(|d| format!(" ({d})"))
+            .unwrap_or_default();
+        println!(
+            "  {}  {}{change}{detail}  by {}",
+            s("at"),
+            s("kind"),
+            s("actor")
+        );
+    }
+    for a in h
+        .get("answers")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let kind = a.get("kind").and_then(Value::as_str).unwrap_or("");
+        let text = a.get("text").and_then(Value::as_str).unwrap_or("");
+        println!("  [{kind}] {text}");
     }
 }
 
@@ -1024,7 +1139,27 @@ pub async fn run(args: &[String], port: u16) -> i32 {
                 println!("Commented on {id}.");
             }
             InboxCommand::Comments(id) => print_comments(&http.inbox_comments(&id).await?),
-            InboxCommand::Requests(id) => print_requests(&http.inbox_requests(&id).await?),
+            InboxCommand::Requests { id, filter } => {
+                print_requests(&http.inbox_requests_filtered(&id, filter.as_deref()).await?)
+            }
+            InboxCommand::Dismiss { id, request_id } => print_request(
+                &http
+                    .inbox_operator_decision(&id, &request_id, "dismiss")
+                    .await?,
+            ),
+            InboxCommand::Archive { id, request_id } => print_request(
+                &http
+                    .inbox_operator_decision(&id, &request_id, "archive")
+                    .await?,
+            ),
+            InboxCommand::NoticeRetry { id, request_id } => print_request(
+                &http
+                    .inbox_operator_decision(&id, &request_id, "notice/retry")
+                    .await?,
+            ),
+            InboxCommand::History { id, request_id } => {
+                print_history(&http.inbox_request_history(&id, &request_id).await?)
+            }
             InboxCommand::Confirm {
                 id,
                 request_id,
@@ -1389,7 +1524,7 @@ mod tests {
         ));
         assert!(matches!(
             parse(&a(&["requests", "01ARZ3NDEKTSV4RRFFQ69G5FAV"])).unwrap(),
-            Some(InboxCommand::Requests(_))
+            Some(InboxCommand::Requests { filter: None, .. })
         ));
         assert!(parse(&a(&["requests"])).is_err());
     }
@@ -1609,5 +1744,40 @@ mod tests {
             common::domain::inbox_events::content_hash("authored")
         );
         assert!(confirm_hash(&open, None).is_err());
+    }
+
+    // TS-45 (parity): every new request route has a CLI command.
+    #[test]
+    fn request_lifecycle_commands_parse() {
+        let id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        match parse(&a(&["requests", id, "--filter", "dismissed"])).unwrap() {
+            Some(InboxCommand::Requests { id: got, filter }) => {
+                assert_eq!(got, id);
+                assert_eq!(filter.as_deref(), Some("dismissed"));
+            }
+            _ => panic!("expected requests with a filter"),
+        }
+        assert!(parse(&a(&["requests", id, "--filter", "archived"])).is_err());
+        assert!(matches!(
+            parse(&a(&["dismiss", id, "R1"])).unwrap(),
+            Some(InboxCommand::Dismiss { .. })
+        ));
+        assert!(matches!(
+            parse(&a(&["archive", id, "R1"])).unwrap(),
+            Some(InboxCommand::Archive { .. })
+        ));
+        assert!(matches!(
+            parse(&a(&["notice-retry", id, "R1"])).unwrap(),
+            Some(InboxCommand::NoticeRetry { .. })
+        ));
+        assert!(matches!(
+            parse(&a(&["history", id, "R1"])).unwrap(),
+            Some(InboxCommand::History { .. })
+        ));
+        assert!(parse(&a(&["dismiss", id])).is_err());
+        let u = usage();
+        for cmd in ["dismiss", "archive", "notice-retry", "history", "--filter"] {
+            assert!(u.contains(cmd), "usage lists {cmd}");
+        }
     }
 }

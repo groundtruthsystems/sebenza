@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  archiveInboxRequest,
   confirmInboxRequest,
+  dismissInboxRequest,
+  fetchInboxRequestHistory,
+  retryInboxNotice,
   fetchInboxComments,
   fetchInboxRequests,
   postInboxComment,
@@ -14,6 +18,7 @@ import type {
   InboxAgentJob,
   InboxCommentGroups,
   InboxRequest,
+  InboxRequestFilter,
 } from "./api-contract";
 import { isStale, type WorktreeRef } from "./inbox-collab";
 import InboxComments from "./InboxComments";
@@ -22,6 +27,14 @@ import InboxRequestCard from "./InboxRequestCard";
 type Tab = "requests" | "comments";
 
 const EMPTY: InboxCommentGroups = { overall: [], worktrees: [] };
+
+/** The Requests-tab filters, in display order (FR-05). No Archived filter. */
+const FILTERS: { id: InboxRequestFilter; label: string }[] = [
+  { id: "unanswered", label: "Unanswered" },
+  { id: "answered", label: "Answered" },
+  { id: "dismissed", label: "Dismissed" },
+  { id: "all", label: "All" },
+];
 
 /**
  * The open item's requests and comment threads, side by side with the
@@ -44,6 +57,7 @@ export default function InboxActivity({
   const [tab, setTab] = useState<Tab>("requests");
   const [groups, setGroups] = useState<InboxCommentGroups>(EMPTY);
   const [requests, setRequests] = useState<InboxRequest[]>([]);
+  const [filter, setFilter] = useState<InboxRequestFilter>("all");
   const [error, setError] = useState("");
   /** Requests with a triage job queued or running. */
   const [triaging, setTriaging] = useState<Set<string>>(new Set());
@@ -54,13 +68,13 @@ export default function InboxActivity({
   const load = useCallback(async () => {
     const [c, r] = await Promise.allSettled([
       fetchInboxComments(draftId),
-      fetchInboxRequests(draftId),
+      fetchInboxRequests(draftId, filter),
     ]);
     if (c.status === "fulfilled") setGroups(c.value);
     if (r.status === "fulfilled") setRequests(r.value.requests);
     const failed = [c, r].find((x) => x.status === "rejected");
     setError(failed ? ((failed as PromiseRejectedResult).reason as Error).message : "");
-  }, [draftId]);
+  }, [draftId, filter]);
 
   useEffect(() => {
     setGroups(EMPTY);
@@ -147,10 +161,33 @@ export default function InboxActivity({
       )}
       {tab === "requests" ? (
         <div className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
+          <div role="group" aria-label="Filter requests" className="flex gap-1">
+            {FILTERS.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                aria-pressed={filter === f.id}
+                onClick={() => setFilter(f.id)}
+                className={`h-6 px-2 rounded-md border text-[11px] cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${
+                  filter === f.id
+                    ? "border-accent text-accent bg-accent/10"
+                    : "border-edge text-muted hover:text-primary"
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
           {requests.length === 0 && (
             <p className="m-0 text-[11px] text-muted">
-              No requests. Worktree agents raise them with{" "}
-              <code>sebenza-agentctl request</code>.
+              {filter === "all" ? (
+                <>
+                  No requests. Worktree agents raise them with{" "}
+                  <code>sebenza-agentctl request</code>.
+                </>
+              ) : (
+                "No requests match this filter."
+              )}
             </p>
           )}
           {requests.map((r) => (
@@ -173,6 +210,10 @@ export default function InboxActivity({
                   setTriaging((prev) => new Set(prev).add(r.requestId));
                 })
               }
+              ondismiss={() => decide(() => dismissInboxRequest(draftId, r.requestId))}
+              onarchive={() => decide(() => archiveInboxRequest(draftId, r.requestId))}
+              onretrynotice={() => decide(() => retryInboxNotice(draftId, r.requestId))}
+              onhistory={() => fetchInboxRequestHistory(draftId, r.requestId)}
             />
           ))}
         </div>
