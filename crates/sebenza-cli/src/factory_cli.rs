@@ -71,6 +71,8 @@ pub fn usage() -> &'static str {
   sebenza-cli inbox solution review <id> [--new-cycle]   Next review round (operator)
   sebenza-cli inbox solution doc <id> <name>       Print a solution document
   sebenza-cli inbox solution resolve <id> <problem> [note]   Resolve a problem by hand (operator)
+  sebenza-cli inbox solution reject <id> <project> <wrong_project|other> <comment>
+                                                   Reject a handover awaiting review (operator)
   sebenza-cli inbox coordinator say <id> <message> [--confirm]   Chat with the coordinator (operator)
   sebenza-cli inbox coordinator log <id>           Print the coordinator transcript
   sebenza-cli inbox factory get                    Global role profiles
@@ -118,6 +120,29 @@ pub fn parse(args: &[String], current: Option<&Value>) -> Result<Call> {
             ),
             json!({"note": a(4, "note").unwrap_or_default()}),
         )),
+        ("solution", "reject") => {
+            let id = a(2, "item id")?;
+            let project = a(3, "project")?;
+            let reason = a(4, "reason (wrong_project or other)")?;
+            if reason != "wrong_project" && reason != "other" {
+                return Err(anyhow!("reason must be wrong_project or other"));
+            }
+            let comment: Vec<String> = args
+                .iter()
+                .filter(|s| !s.starts_with("--"))
+                .skip(5)
+                .cloned()
+                .collect();
+            let comment = comment.join(" ");
+            if comment.trim().is_empty() {
+                return Err(anyhow!("Missing a comment for the rejection"));
+            }
+            Ok(op(
+                "POST",
+                format!("/api/inbox/{id}/handover/{project}/reject"),
+                json!({"reason": reason, "comment": comment}),
+            ))
+        }
         ("coordinator", "say") => Ok(op(
             "POST",
             format!("/api/inbox/{}/coordinator/turn", a(2, "item id")?),
@@ -251,5 +276,40 @@ mod tests {
             "/api/inbox/01ID/solution/docs/handover/acme.md"
         );
         assert!(parse(&v(&["solution", "explode", "01ID"]), None).is_err());
+    }
+
+    // TS-45 (parity): handover reject from the CLI, operator token, comment required.
+    #[test]
+    fn solution_reject_maps_to_the_operator_route() {
+        let c = parse(
+            &v(&[
+                "solution",
+                "reject",
+                "01ID",
+                "portal",
+                "wrong_project",
+                "not",
+                "affected",
+            ]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            (c.method, c.path.as_str(), c.operator),
+            ("POST", "/api/inbox/01ID/handover/portal/reject", true)
+        );
+        assert_eq!(
+            c.body.unwrap(),
+            json!({"reason": "wrong_project", "comment": "not affected"})
+        );
+        assert!(parse(&v(&["solution", "reject", "01ID", "portal", "other"]), None).is_err());
+        assert!(
+            parse(
+                &v(&["solution", "reject", "01ID", "portal", "nope", "x"]),
+                None
+            )
+            .is_err()
+        );
+        assert!(usage().contains("solution reject"));
     }
 }

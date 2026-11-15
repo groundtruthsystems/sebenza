@@ -1311,3 +1311,198 @@ async fn ts23_approval_routes_refuse_the_shared_token() {
         );
     }
 }
+
+// --- Handover reject (track sebenza_polishing, phase 3) -------------------
+
+async fn drafted_item(d: &Daemon) -> Item {
+    let it = agreed_item(d).await;
+    assert_eq!(
+        it.post(d, "solution/approve-design", serde_json::json!({}))
+            .await
+            .0,
+        200
+    );
+    assert_eq!(
+        it.post(d, "handover/draft", serde_json::json!({})).await.0,
+        202
+    );
+    assert_eq!(it.settle(d).await["state"]["phase"], "handover");
+    it
+}
+
+fn handover<'a>(v: &'a serde_json::Value, slug: &str) -> &'a serde_json::Value {
+    v["handovers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["slug"] == slug)
+        .unwrap()
+}
+
+// TS-06 / TS-59 / TS-08 / TS-52: reason=other records only the rejection;
+// the comment is required; a second reject is 409; a rejected handover can
+// never be approved and no worktree is created; the other project is untouched.
+#[tokio::test]
+async fn reject_other_records_only_the_rejection_and_blocks_approval() {
+    let d = daemon().await;
+    let it = drafted_item(&d).await;
+    let (code, v) = it
+        .post(
+            &d,
+            "handover/portal/reject",
+            serde_json::json!({"reason": "other", "comment": "  "}),
+        )
+        .await;
+    assert_eq!(code, 400, "comment required: {v}");
+    let (code, v) = it
+        .post(
+            &d,
+            "handover/portal/reject",
+            serde_json::json!({"reason": "other", "comment": "not now"}),
+        )
+        .await;
+    assert_eq!(code, 200, "{v}");
+    let v = it.settle(&d).await;
+    let portal = handover(&v, "portal");
+    assert_eq!(portal["status"], "rejected");
+    assert_eq!(portal["rejection"]["reason"], "other");
+    assert_eq!(portal["rejection"]["comment"], "not now");
+    assert_eq!(portal["rejection"]["by"], "operator_session");
+    assert_eq!(
+        handover(&v, "acme-billing")["status"],
+        "drafted",
+        "sibling untouched"
+    );
+    assert_eq!(v["state"]["phase"], "handover", "other: no design revision");
+    assert!(v["state"]["revisionRequested"].is_null());
+
+    // TS-08: rejecting again is 409.
+    let (code, v) = it
+        .post(
+            &d,
+            "handover/portal/reject",
+            serde_json::json!({"reason": "other", "comment": "x"}),
+        )
+        .await;
+    assert_eq!((code, v["code"].as_str()), (409, Some("handover_state")));
+    // TS-52: approve is refused and nothing is converted.
+    let hash = handover(&it.settle(&d).await, "portal")["instructionHash"].clone();
+    let (code, v) = it
+        .post(
+            &d,
+            "handover/portal/approve",
+            serde_json::json!({"instructionHash": hash}),
+        )
+        .await;
+    assert_eq!(
+        (code, v["code"].as_str()),
+        (409, Some("handover_state")),
+        "{v}"
+    );
+    assert!(!worktree(&d, "portal").exists());
+    // Defer does not resurrect it either.
+    assert_eq!(
+        it.post(&d, "handover/portal/defer", serde_json::json!({}))
+            .await
+            .0,
+        409
+    );
+    // Sibling still approvable.
+    let acme_hash = handover(&it.settle(&d).await, "acme-billing")["instructionHash"].clone();
+    let (code, v) = it
+        .post(
+            &d,
+            "handover/acme-billing/approve",
+            serde_json::json!({"instructionHash": acme_hash}),
+        )
+        .await;
+    assert_eq!(code, 200, "{v}");
+}
+
+// TS-07: wrong_project rejects and requests a design revision in one line;
+// the phase moves to Revising; no project is removed from the design.
+#[tokio::test]
+async fn reject_wrong_project_requests_a_revision_in_one_line() {
+    let d = daemon().await;
+    let it = drafted_item(&d).await;
+    let before = d.store.read_events(&it.id).unwrap().len();
+    let (code, v) = it
+        .post(
+            &d,
+            "handover/acme-billing/reject",
+            serde_json::json!({"reason": "wrong_project", "comment": "billing is not affected"}),
+        )
+        .await;
+    assert_eq!(code, 200, "{v}");
+    let events = d.store.read_events(&it.id).unwrap();
+    let new: Vec<_> = events[before..]
+        .iter()
+        .filter(|e| !matches!(e.kind, InboxEventKind::Comment { .. }))
+        .collect();
+    assert_eq!(new.len(), 1, "one line: {new:?}");
+    match &new[0].kind {
+        InboxEventKind::HandoverRejected { revision, .. } => {
+            let r = revision.as_ref().expect("revision on wrong_project");
+            assert_eq!(r.project, "/code/acme-billing");
+        }
+        other => panic!("{other:?}"),
+    }
+    let v = it.settle(&d).await;
+    assert_eq!(v["state"]["phase"], "revising");
+    assert_eq!(
+        v["state"]["revisionRequested"]["project"],
+        "/code/acme-billing"
+    );
+    assert_eq!(v["state"]["revisionRequested"]["reason"], "wrong_project");
+    assert_eq!(handover(&v, "portal")["status"], "drafted");
+    assert_eq!(
+        v["handovers"].as_array().unwrap().len(),
+        2,
+        "no project removed"
+    );
+}
+
+// TS-09: a failed write leaves handover and design unchanged.
+#[tokio::test]
+async fn a_failed_reject_write_changes_nothing() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = daemon().await;
+    let it = drafted_item(&d).await;
+    let log = d.store.dir().join(format!("{}.events.jsonl", it.id));
+    let before = std::fs::read_to_string(&log).unwrap();
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o400)).unwrap();
+    let (code, _) = it
+        .post(
+            &d,
+            "handover/portal/reject",
+            serde_json::json!({"reason": "wrong_project", "comment": "x"}),
+        )
+        .await;
+    std::fs::set_permissions(&log, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(code >= 500, "write failed: {code}");
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), before);
+    let v = it.settle(&d).await;
+    assert_eq!(handover(&v, "portal")["status"], "drafted");
+    assert_eq!(v["state"]["phase"], "handover");
+}
+
+// TS-53 / TS-15: reject needs an operator credential from the same origin.
+#[tokio::test]
+async fn reject_refuses_the_control_token_and_foreign_origins() {
+    let d = daemon().await;
+    let it = drafted_item(&d).await;
+    let path = format!("/api/inbox/{}/handover/portal/reject", it.id);
+    let body = serde_json::json!({"reason": "other", "comment": "x"});
+    let mut c = d.spa("POST", &path, TOKEN);
+    c.body = Some(body.clone());
+    assert_eq!(d.send(c).await.0, 403, "control token");
+    let mut c = d.spa("POST", &path, &it.op);
+    c.origin = Some("http://evil.test".into());
+    c.sec_fetch_site = Some("cross-site");
+    c.body = Some(body);
+    assert_eq!(d.send(c).await.0, 403, "foreign origin");
+    assert_eq!(
+        handover(&it.settle(&d).await, "portal")["status"],
+        "drafted"
+    );
+}

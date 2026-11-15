@@ -420,6 +420,10 @@ pub fn build_router(state: AppState) -> Router {
             post(crate::solution_routes::defer_handover),
         )
         .route(
+            "/api/inbox/{id}/handover/{project}/reject",
+            post(crate::solution_routes::reject_handover),
+        )
+        .route(
             "/api/inbox/{id}/solution/problems/{pid}/resolve",
             post(crate::solution_routes::resolve_problem),
         )

@@ -346,6 +346,59 @@ pub enum HandoverStatus {
     Approved,
     Deferred,
     Converted,
+    /// Rejected by the operator: never approved or converted as it stands.
+    Rejected,
+}
+
+impl HandoverStatus {
+    /// Awaiting the operator's review: the only states Reject accepts.
+    pub fn awaiting_review(self) -> bool {
+        matches!(self, HandoverStatus::Drafted | HandoverStatus::Deferred)
+    }
+}
+
+/// Why a handover was rejected.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoverRejectReason {
+    /// The decision to change this project was wrong.
+    WrongProject,
+    Other,
+}
+
+/// A request to revise the solution design, carried on a `wrong_project`
+/// reject. Records which project and why; the revision step makes the change.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DesignRevisionRequest {
+    pub project: String,
+    pub reason: HandoverRejectReason,
+}
+
+/// The single branch deciding whether a reject reason revises the design.
+/// Only `wrong_project` does (pending the operator's confirmation that it
+/// should mean `needs_revision`); change it here and nowhere else.
+pub fn design_revision_for(
+    reason: HandoverRejectReason,
+    project: &str,
+) -> Option<DesignRevisionRequest> {
+    match reason {
+        HandoverRejectReason::WrongProject => Some(DesignRevisionRequest {
+            project: project.to_string(),
+            reason,
+        }),
+        HandoverRejectReason::Other => None,
+    }
+}
+
+/// A recorded rejection, shown on the handover card.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoverRejection {
+    pub reason: HandoverRejectReason,
+    pub comment: String,
+    pub by: CredentialClass,
+    pub at: String,
 }
 
 /// One affected project's handover instruction.
@@ -361,6 +414,8 @@ pub struct HandoverView {
     /// The hash the operator approved, kept after a re-draft so a stale
     /// approval can be shown as void.
     pub approved_hash: Option<String>,
+    /// Set while the handover is rejected; cleared by a re-draft.
+    pub rejection: Option<HandoverRejection>,
 }
 
 /// The solution level's current state, folded from the event log.
@@ -381,6 +436,8 @@ pub struct SolutionState {
     /// note id -> hash of the coordinator's latest write of that note. The
     /// `coordinator` badge shows while the note still has this hash.
     pub coordinator_notes: BTreeMap<String, String>,
+    /// The latest `wrong_project` revision request, if any.
+    pub revision_requested: Option<DesignRevisionRequest>,
 }
 
 impl SolutionState {
@@ -494,6 +551,8 @@ pub fn fold_solution(item_id: &str, events: &[InboxEvent]) -> SolutionState {
                 h.design_hash = design_hash.clone();
                 h.branch = branch.clone();
                 h.base = base.clone();
+                // A re-draft is a new text to review: any rejection is history.
+                h.rejection = None;
                 // A re-draft with new text voids an earlier approval of other text.
                 h.status = if h.approved_hash.as_deref() == Some(instruction_hash.as_str()) {
                     HandoverStatus::Approved
@@ -510,6 +569,10 @@ pub fn fold_solution(item_id: &str, events: &[InboxEvent]) -> SolutionState {
                 ..
             } => {
                 let h = handover_mut(&mut s.handovers, project);
+                // A rejected handover is never approved as it stands (FR-14).
+                if h.status == HandoverStatus::Rejected {
+                    continue;
+                }
                 h.instruction_hash = instruction_hash.clone();
                 h.design_hash = design_hash.clone();
                 h.branch = branch.clone();
@@ -519,8 +582,36 @@ pub fn fold_solution(item_id: &str, events: &[InboxEvent]) -> SolutionState {
             }
             InboxEventKind::HandoverDeferred { project, .. } => {
                 let h = handover_mut(&mut s.handovers, project);
-                h.status = HandoverStatus::Deferred;
+                if h.status != HandoverStatus::Rejected {
+                    h.status = HandoverStatus::Deferred;
+                    h.approved_hash = None;
+                }
+            }
+            InboxEventKind::HandoverRejected {
+                project,
+                reason,
+                comment,
+                credential,
+                revision,
+            } => {
+                let h = handover_mut(&mut s.handovers, project);
+                if !h.status.awaiting_review() {
+                    continue;
+                }
+                h.status = HandoverStatus::Rejected;
                 h.approved_hash = None;
+                h.rejection = Some(HandoverRejection {
+                    reason: *reason,
+                    comment: comment.clone(),
+                    by: *credential,
+                    at: e.ts.clone(),
+                });
+                if let Some(rev) = revision
+                    && s.phase.can_move_to(SolutionPhase::Revising)
+                {
+                    s.phase = SolutionPhase::Revising;
+                    s.revision_requested = Some(rev.clone());
+                }
             }
             _ => {}
         }
@@ -563,6 +654,7 @@ fn handover_mut<'a>(list: &'a mut Vec<HandoverView>, project: &str) -> &'a mut H
         design_hash: String::new(),
         status: HandoverStatus::Drafted,
         approved_hash: None,
+        rejection: None,
     });
     list.last_mut().expect("just pushed")
 }

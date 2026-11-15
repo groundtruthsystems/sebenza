@@ -242,6 +242,18 @@ pub enum InboxEventKind {
         request_id: String,
         status: RequestStatus,
     },
+    /// Operator only: reject one project's handover while it awaits review
+    /// (drafted or deferred). `revision` is set only for `wrong_project`: it
+    /// sends the solution design back to Revising in this same line, naming
+    /// the project and reason; nothing is removed from the design here.
+    HandoverRejected {
+        project: String,
+        reason: super::solution::HandoverRejectReason,
+        comment: String,
+        credential: CredentialClass,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        revision: Option<super::solution::DesignRevisionRequest>,
+    },
     /// An event type written by a newer binary. Kept out of every fold.
     #[serde(other)]
     Unknown,

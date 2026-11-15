@@ -31,6 +31,10 @@ impl From<SolutionError> for ApiError {
             SolutionError::AlreadyConverted(_) => {
                 ApiError::coded(409, "already_converted", e.to_string())
             }
+            SolutionError::HandoverState(_) => {
+                ApiError::coded(409, "handover_state", e.to_string())
+            }
+            SolutionError::Invalid(_) => ApiError::new(400, e.to_string()),
             SolutionError::Agent(RoleJobError::Refused(_)) => {
                 ApiError::coded(422, "agent_refused", e.to_string())
             }
@@ -281,6 +285,34 @@ pub async fn approve_handover(
     Ok(Json(
         tokio::task::spawn_blocking(move || {
             svc.approve_handover(&id, &project, &body.instruction_hash, class)
+        })
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".into()))??,
+    ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectHandoverBody {
+    pub reason: common::domain::solution::HandoverRejectReason,
+    #[serde(default)]
+    pub comment: String,
+}
+
+/// `POST /api/inbox/{id}/handover/{project}/reject` — operator only. The
+/// actor is the presented credential; `reason` is `wrong_project | other`
+/// and `comment` is required.
+pub async fn reject_handover(
+    State(state): State<AppState>,
+    Path((id, project)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<RejectHandoverBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let class = require_operator(&state, &headers, "solution.handover.rejected", Some(&id))?;
+    let svc = state.solution.clone();
+    Ok(Json(
+        tokio::task::spawn_blocking(move || {
+            svc.reject_handover(&id, &project, body.reason, &body.comment, class)
         })
         .await
         .map_err(|_| ApiError::new(500, "task panicked".into()))??,
