@@ -1,0 +1,471 @@
+{
+  "$schema": "sebenza-plan-v1",
+  "track_id": "sebenza_polishing_20261114",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Request lifecycle, outbox and Requests API (daemon)",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-1-task-1",
+          "name": "Entry check: solution-design.md",
+          "description": "Re-check for .ai/sebenza/solution-design.md and, if present, compare the approved JSONL mapping against it before any code.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-2",
+          "name": "Write tests for durable append and request fold",
+          "description": "Write failing tests for the fsync'd single-write append, torn-line tolerance, Dismissed status, archive flags, summaries and history projection.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-1-task-1"
+          ]
+        },
+        {
+          "id": "phase-1-task-3",
+          "name": "Implement durable append, event kinds and fold",
+          "description": "Add the new event kinds, durable append for them, and fold support for dismissed, archived, notice state, summaries and history.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-1-task-2"
+          ]
+        },
+        {
+          "id": "phase-1-task-4",
+          "name": "Write tests for dismiss, archive and lock",
+          "description": "Write failing tests for dismiss/archive transitions, 409s, redelivery cancel, existing-route 409s on dismissed and the per-item lock race.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-1-task-3"
+          ]
+        },
+        {
+          "id": "phase-1-task-5",
+          "name": "Implement InboxService dismiss, archive, filter and history",
+          "description": "Implement validate-then-append under the item lock, RequestFilter, history projection and 409 guards on existing request actions.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-1-task-4"
+          ]
+        },
+        {
+          "id": "phase-1-task-6",
+          "name": "Write tests for notice dispatcher and backfill",
+          "description": "Write failing tests for outbox rebuild, backoff, crash-after-commit, interrupted retry, manual Retry and idempotent double-start backfill.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-1-task-5"
+          ]
+        },
+        {
+          "id": "phase-1-task-7",
+          "name": "Implement notice dispatcher, backfill and NotifyConfig",
+          "description": "Implement the startup backfill, the dispatcher task with backoff and embedded key, the retry action, and NotifyConfig defaults.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-1-task-6"
+          ]
+        },
+        {
+          "id": "phase-1-task-8",
+          "name": "Write tests and implement request routes",
+          "description": "Add dismiss, archive, notice/retry, filtered list and history routes behind require_operator with actor from the credential.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-1-task-7"
+          ]
+        },
+        {
+          "id": "phase-1-task-9",
+          "name": "Execute test scenarios for phase 1",
+          "description": "Run the phase-1 scenarios and record evidence.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-15",
+            "TS-25",
+            "TS-26",
+            "TS-27",
+            "TS-28",
+            "TS-29",
+            "TS-30",
+            "TS-31",
+            "TS-32",
+            "TS-33",
+            "TS-34",
+            "TS-38",
+            "TS-39",
+            "TS-40",
+            "TS-41",
+            "TS-42",
+            "TS-43",
+            "TS-44",
+            "TS-46",
+            "TS-51",
+            "TS-54",
+            "TS-55",
+            "TS-56",
+            "TS-57",
+            "TS-58",
+            "TS-60"
+          ],
+          "depends_on": [
+            "phase-1-task-8"
+          ]
+        },
+        {
+          "id": "phase-1-task-10",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Requests tab UI and CLI",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-2-task-1",
+          "name": "Write tests for Requests tab",
+          "description": "Write failing component tests for filters, Dismiss/Archive actions, disabled Archive, summary row, history view and notice badge with Retry.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-2",
+          "name": "Implement Requests tab and contract",
+          "description": "Add contract and api.ts entries and extend InboxActivity and InboxRequestCard with actions, filters, summaries, history and notice badge.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-2-task-1"
+          ]
+        },
+        {
+          "id": "phase-2-task-3",
+          "name": "Implement sebenza-cli request commands",
+          "description": "Add CLI commands for filtered list, dismiss, archive, history and notice retry.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-2-task-2"
+          ]
+        },
+        {
+          "id": "phase-2-task-4",
+          "name": "Execute test scenarios for phase 2",
+          "description": "Run the phase-2 scenarios and record evidence.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-35",
+            "TS-36",
+            "TS-37"
+          ],
+          "depends_on": [
+            "phase-2-task-3"
+          ]
+        },
+        {
+          "id": "phase-2-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "Shared review controls, handover reject, full screen and Esc",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-3-task-1",
+          "name": "Write tests for handover reject",
+          "description": "Write failing tests for reject from Drafted/Deferred, 409s, reason=other, wrong_project revision branch, atomicity and approve/convert refusal.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-2",
+          "name": "Implement reject_handover and route",
+          "description": "Add HandoverStatus::Rejected, reject_handover under the item lock with an isolated wrong_project branch, the reject route, contract and CLI command.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-3-task-1"
+          ]
+        },
+        {
+          "id": "phase-3-task-3",
+          "name": "Write tests for shared controls, full screen and Esc",
+          "description": "Write failing component tests for ReviewControls parity, full-screen enter/exit, state and scroll persistence, and the layered Esc stack.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-3-task-2"
+          ]
+        },
+        {
+          "id": "phase-3-task-4",
+          "name": "Implement ReviewControls, reviewStore, full screen and useEscStack",
+          "description": "Extract ReviewControls with Reject, add the reviewStore slice, the full-screen mode flag and the useEscStack layer manager with BaseDialog registration.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-3-task-3"
+          ]
+        },
+        {
+          "id": "phase-3-task-5",
+          "name": "Execute test scenarios for phase 3",
+          "description": "Run the phase-3 scenarios and record evidence.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-01",
+            "TS-02",
+            "TS-03",
+            "TS-04",
+            "TS-05",
+            "TS-06",
+            "TS-07",
+            "TS-08",
+            "TS-09",
+            "TS-52",
+            "TS-53",
+            "TS-59"
+          ],
+          "depends_on": [
+            "phase-3-task-4"
+          ]
+        },
+        {
+          "id": "phase-3-task-6",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "Zero-tool probe, gate and runtime guard",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-4-task-1",
+          "name": "Entry check: claude CLI capabilities",
+          "description": "Confirm the pinned claude CLI supports --tools \"\", reports tools in init and honours disableAllHooks, and raise a request if not.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-2",
+          "name": "Write tests for zero-tool constructor, probe and guard",
+          "description": "Write failing tests for the chat argv/env, byte-identical role-agent argv, probe pass/fail cases, version-change re-probe and injected tool_use guard.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-4-task-1"
+          ]
+        },
+        {
+          "id": "phase-4-task-3",
+          "name": "Implement ToolPolicy field, ChatGate probe and ChatGuard",
+          "description": "Add the optional --tools field, the pinned zero-tool StartRunInput builder, ChatGate with version re-probe and the stream guard that disables chat.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-4-task-2"
+          ]
+        },
+        {
+          "id": "phase-4-task-4",
+          "name": "Execute test scenarios for phase 4",
+          "description": "Run the phase-4 scenarios and record evidence.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-12",
+            "TS-14",
+            "TS-19",
+            "TS-20",
+            "TS-21",
+            "TS-49",
+            "TS-50"
+          ],
+          "depends_on": [
+            "phase-4-task-3"
+          ]
+        },
+        {
+          "id": "phase-4-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "Handover chat service, API, panel and adversarial harness",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-5-task-1",
+          "name": "Write tests for chat service and API",
+          "description": "Write failing tests for thread storage, access re-check, isolation, budgets, serialisation, hash stamping and 503 when disabled.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-2",
+          "name": "Implement ChatService, chat routes and CLI",
+          "description": "Implement the chat sidecar, stateless turn assembly with fenced handover, the two chat routes, contract entries and CLI command.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-5-task-1"
+          ]
+        },
+        {
+          "id": "phase-5-task-3",
+          "name": "Write tests and implement ChatPanel",
+          "description": "Build the ChatPanel in both modes with plain-text rendering, chat status, not-part-of-review-record label and Esc layer.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-5-task-2"
+          ]
+        },
+        {
+          "id": "phase-5-task-4",
+          "name": "Build adversarial 60x3 harness",
+          "description": "Add the 60-case corpus, scoring harness, replay fixtures in cargo test and the env-gated live runner.",
+          "status": "backlog",
+          "depends_on": [
+            "phase-5-task-2"
+          ]
+        },
+        {
+          "id": "phase-5-task-5",
+          "name": "Execute test scenarios for phase 5",
+          "description": "Run the phase-5 scenarios and record evidence.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-10",
+            "TS-11",
+            "TS-13",
+            "TS-15",
+            "TS-16",
+            "TS-17",
+            "TS-22",
+            "TS-23",
+            "TS-24",
+            "TS-47"
+          ],
+          "depends_on": [
+            "phase-5-task-3",
+            "phase-5-task-4"
+          ]
+        },
+        {
+          "id": "phase-5-task-6",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md.",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-6",
+      "name": "Final verification and release gates",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-6-task-1",
+          "name": "Re-run the full test plan",
+          "description": "Re-run every scenario against the finished feature, close any traceability gap and confirm coverage above 80%.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-01",
+            "TS-02",
+            "TS-03",
+            "TS-04",
+            "TS-05",
+            "TS-06",
+            "TS-07",
+            "TS-08",
+            "TS-09",
+            "TS-10",
+            "TS-11",
+            "TS-12",
+            "TS-13",
+            "TS-14",
+            "TS-15",
+            "TS-16",
+            "TS-17",
+            "TS-19",
+            "TS-20",
+            "TS-21",
+            "TS-22",
+            "TS-23",
+            "TS-24",
+            "TS-25",
+            "TS-26",
+            "TS-27",
+            "TS-28",
+            "TS-29",
+            "TS-30",
+            "TS-31",
+            "TS-32",
+            "TS-33",
+            "TS-34",
+            "TS-35",
+            "TS-36",
+            "TS-37",
+            "TS-38",
+            "TS-39",
+            "TS-40",
+            "TS-41",
+            "TS-42",
+            "TS-43",
+            "TS-44",
+            "TS-46",
+            "TS-47",
+            "TS-49",
+            "TS-50",
+            "TS-51",
+            "TS-52",
+            "TS-53",
+            "TS-54",
+            "TS-55",
+            "TS-56",
+            "TS-57",
+            "TS-58",
+            "TS-59",
+            "TS-60"
+          ]
+        },
+        {
+          "id": "phase-6-task-2",
+          "name": "CLI/UI parity and UAT",
+          "description": "Verify every new route has a matching CLI command and walk the inbox AC 1-10 UAT checklist.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-45",
+            "TS-48"
+          ]
+        },
+        {
+          "id": "phase-6-task-3",
+          "name": "Live adversarial run (chat release gate)",
+          "description": "Run the live 60x3 suite once AC-07a/b is approved, and keep chat unreleased until it passes.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-18"
+          ]
+        },
+        {
+          "id": "phase-6-task-4",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md.",
+          "status": "backlog"
+        }
+      ]
+    }
+  ]
+}
