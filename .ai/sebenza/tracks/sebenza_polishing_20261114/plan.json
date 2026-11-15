@@ -5,83 +5,91 @@
     {
       "id": "phase-1",
       "name": "Request lifecycle, outbox and Requests API (daemon)",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-1-task-1",
           "name": "Entry check: solution-design.md",
           "description": "Re-check for .ai/sebenza/solution-design.md and, if present, compare the approved JSONL mapping against it before any code.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "42ba019"
         },
         {
           "id": "phase-1-task-2",
           "name": "Write tests for durable append and request fold",
           "description": "Write failing tests for the fsync'd single-write append, torn-line tolerance, Dismissed status, archive flags, summaries and history projection.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-1-task-1"
-          ]
+          ],
+          "commit_sha": "42ba019"
         },
         {
           "id": "phase-1-task-3",
           "name": "Implement durable append, event kinds and fold",
           "description": "Add the new event kinds, durable append for them, and fold support for dismissed, archived, notice state, summaries and history.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-1-task-2"
-          ]
+          ],
+          "commit_sha": "42ba019"
         },
         {
           "id": "phase-1-task-4",
           "name": "Write tests for dismiss, archive and lock",
           "description": "Write failing tests for dismiss/archive transitions, 409s, redelivery cancel, existing-route 409s on dismissed and the per-item lock race.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-1-task-3"
-          ]
+          ],
+          "commit_sha": "42ba019"
         },
         {
           "id": "phase-1-task-5",
           "name": "Implement InboxService dismiss, archive, filter and history",
           "description": "Implement validate-then-append under the item lock, RequestFilter, history projection and 409 guards on existing request actions.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-1-task-4"
-          ]
+          ],
+          "commit_sha": "42ba019"
         },
         {
           "id": "phase-1-task-6",
           "name": "Write tests for notice dispatcher and backfill",
           "description": "Write failing tests for outbox rebuild, backoff, crash-after-commit, interrupted retry, manual Retry and idempotent double-start backfill.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-1-task-5"
-          ]
+          ],
+          "commit_sha": "42ba019"
         },
         {
           "id": "phase-1-task-7",
           "name": "Implement notice dispatcher, backfill and NotifyConfig",
           "description": "Implement the startup backfill, the dispatcher task with backoff and embedded key, the retry action, and NotifyConfig defaults.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-1-task-6"
-          ]
+          ],
+          "commit_sha": "42ba019"
         },
         {
           "id": "phase-1-task-8",
           "name": "Write tests and implement request routes",
           "description": "Add dismiss, archive, notice/retry, filtered list and history routes behind require_operator with actor from the credential.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-1-task-7"
-          ]
+          ],
+          "commit_sha": "42ba019"
         },
         {
           "id": "phase-1-task-9",
           "name": "Execute test scenarios for phase 1",
           "description": "Run the phase-1 scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-15",
             "TS-25",
@@ -112,13 +120,20 @@
           ],
           "depends_on": [
             "phase-1-task-8"
-          ]
+          ],
+          "commit_sha": "42ba019"
         },
         {
           "id": "phase-1-task-10",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "blocked",
+          "request": {
+            "request_id": "01M7EQ08MCZQ04KCACE7GG99G6",
+            "status": "open",
+            "raised_at": "2026-11-15T04:21:16Z"
+          },
+          "blocked_reason": "Awaiting operator confirmation of the phase 1 manual verification"
         }
       ]
     },
