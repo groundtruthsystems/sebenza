@@ -9,6 +9,7 @@ pub use common::services::{
 
 pub mod active_worktrees;
 pub mod agent_stream;
+pub mod chat;
 pub mod inbox_graph;
 pub mod inbox_jobs;
 pub mod notice_dispatcher;

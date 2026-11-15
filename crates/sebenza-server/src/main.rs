@@ -197,6 +197,14 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         terminal.clone(),
     )));
 
+    // Handover chat: no `enabled` switch exists; the zero-tool probe below is
+    // the only thing that turns it on, and anything it cannot prove keeps it off.
+    let chat_config = common::config::load_chat_config()
+        .map_err(|e| anyhow::anyhow!("invalid ~/.ai/sebenza.yaml: {e}"))?;
+    let chat_gate = Arc::new(services::chat::gate::ChatGate::new(
+        chat_config,
+        std::env::temp_dir().join(format!("sebenza-chat-{}", std::process::id())),
+    ));
     let operator = Arc::new(operator_auth::OperatorAuth::new());
     let factory = Arc::new(operator_routes::FactorySettings::new(
         std::path::Path::new(&std::env::var("HOME").unwrap_or_default())
@@ -234,6 +242,7 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         factory,
         solution,
         reviews,
+        chat_gate: chat_gate.clone(),
         frontend_dist,
     };
 
@@ -245,6 +254,13 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
     server::spawn_background_loops(state.clone());
     // Dismissal notices: rebuilt from the log now, then retried on a timer.
     services::notice_dispatcher::spawn(state.inbox.clone(), notify_config.poll_secs);
+    // The capability probe runs in the background; chat answers 503 until it passes.
+    {
+        let gate = chat_gate.clone();
+        tokio::spawn(async move {
+            gate.probe().await;
+        });
+    }
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(

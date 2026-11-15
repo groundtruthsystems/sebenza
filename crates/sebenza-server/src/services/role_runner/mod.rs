@@ -262,6 +262,7 @@ pub fn tool_policy(agent: &str) -> ToolPolicy {
                 .to_string(),
             ),
             max_turns: None,
+            builtin: None,
         },
         "grok" => ToolPolicy {
             allowed: ["read_file", "list_dir", "grep"].map(String::from).to_vec(),
@@ -282,6 +283,7 @@ pub fn tool_policy(agent: &str) -> ToolPolicy {
             strict_mcp: false,
             settings: None,
             max_turns: Some(12),
+            builtin: None,
         },
         // codex has no tool list; `tools: Some(..)` switches it to the
         // read-only, ephemeral `exec` profile.

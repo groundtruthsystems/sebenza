@@ -64,6 +64,8 @@ pub struct AppState {
     pub solution: Arc<crate::services::solution::SolutionService>,
     /// Project design and code reviews requested by worktrees.
     pub reviews: Arc<crate::services::project_review::ProjectReviewService>,
+    /// The handover-chat zero-tool gate: off until its probe passes.
+    pub chat_gate: Arc<crate::services::chat::gate::ChatGate>,
     pub frontend_dist: Option<PathBuf>,
 }
 

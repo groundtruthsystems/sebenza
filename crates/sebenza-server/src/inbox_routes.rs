@@ -2035,6 +2035,10 @@ mod tests {
                 factory.clone(),
                 base.join("snapshots"),
             )),
+            chat_gate: Arc::new(crate::services::chat::gate::ChatGate::new(
+                Default::default(),
+                std::env::temp_dir().join(format!("sebenza-chat-test-{}", std::process::id())),
+            )),
             frontend_dist: None,
         };
         Fixture {

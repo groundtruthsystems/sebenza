@@ -131,6 +131,10 @@ pub struct ToolPolicy {
     pub settings: Option<String>,
     /// grok only: `--max-turns`.
     pub max_turns: Option<u32>,
+    /// claude only: `--tools <value>`, the built-in tool set. `Some("")`
+    /// disables every built-in tool (the handover chat). `None` (every other
+    /// caller) emits nothing, so their argv is unchanged.
+    pub builtin: Option<String>,
 }
 
 /// How a run ended, for callers that await it rather than stream it.
@@ -547,6 +551,10 @@ pub fn claude_args(input: &StartRunInput) -> Vec<String> {
         args.push(model.clone());
     }
     if let Some(tools) = &input.tools {
+        if let Some(builtin) = &tools.builtin {
+            args.push("--tools".into());
+            args.push(builtin.clone());
+        }
         if tools.strict_mcp {
             args.push("--strict-mcp-config".into());
         }

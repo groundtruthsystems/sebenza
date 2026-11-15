@@ -571,6 +571,31 @@ pub fn load_system_agent_config_from(
     parse_system_agent_config(doc.as_mapping().and_then(|m| m.get("systemAgent")))
 }
 
+/// The machine-wide `chat:` block from `~/.ai/sebenza.yaml`. An `enabled`
+/// key is rejected: no config value can turn chat on.
+pub fn load_chat_config() -> std::result::Result<crate::domain::config::ChatConfig, String> {
+    load_chat_config_from(&global_config_path())
+}
+
+pub fn load_chat_config_from(
+    path: &Path,
+) -> std::result::Result<crate::domain::config::ChatConfig, String> {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
+    let doc: serde_yaml::Value =
+        serde_yaml::from_str(&content).map_err(|e| format!("not valid YAML: {e}"))?;
+    let Some(block) = doc.as_mapping().and_then(|m| m.get("chat")) else {
+        return Ok(Default::default());
+    };
+    if block.get("enabled").is_some() {
+        return Err("chat: there is no enabled key; the capability probe decides".to_string());
+    }
+    serde_yaml::from_value(block.clone()).map_err(|e| format!("chat: {e}"))
+}
+
 /// The machine-wide `notify:` block from `~/.ai/sebenza.yaml`. Missing file
 /// or block is the default; a block of the wrong shape is an error.
 pub fn load_notify_config() -> std::result::Result<crate::domain::config::NotifyConfig, String> {
@@ -975,5 +1000,30 @@ mod notify_config_tests {
         assert_eq!((c.max_attempts, c.base_delay_secs, c.poll_secs), (3, 5, 30));
         fs::write(&path, "notify:\n  maxAttempts: 0\n").unwrap();
         assert!(load_notify_config_from(&path).is_err());
+    }
+}
+
+#[cfg(test)]
+mod chat_config_tests {
+    use super::*;
+
+    // TS-49 (config side): no config value can turn chat on.
+    #[test]
+    fn chat_block_has_no_enabled_switch() {
+        let dir = std::env::temp_dir().join(format!("sebenza-chatcfg-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("sebenza.yaml");
+        let _ = fs::remove_file(&path);
+        assert_eq!(
+            load_chat_config_from(&path).unwrap().max_handover_tokens,
+            60_000
+        );
+        fs::write(&path, "chat:\n  maxTranscriptTokens: 100\n").unwrap();
+        assert_eq!(
+            load_chat_config_from(&path).unwrap().max_transcript_tokens,
+            100
+        );
+        fs::write(&path, "chat:\n  enabled: true\n").unwrap();
+        assert!(load_chat_config_from(&path).is_err());
     }
 }
