@@ -283,38 +283,41 @@
     {
       "id": "phase-4",
       "name": "Zero-tool probe, gate and runtime guard",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-4-task-1",
           "name": "Entry check: claude CLI capabilities",
           "description": "Confirm the pinned claude CLI supports --tools \"\", reports tools in init and honours disableAllHooks, and raise a request if not.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "50eed25"
         },
         {
           "id": "phase-4-task-2",
           "name": "Write tests for zero-tool constructor, probe and guard",
           "description": "Write failing tests for the chat argv/env, byte-identical role-agent argv, probe pass/fail cases, version-change re-probe and injected tool_use guard.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-4-task-1"
-          ]
+          ],
+          "commit_sha": "50eed25"
         },
         {
           "id": "phase-4-task-3",
           "name": "Implement ToolPolicy field, ChatGate probe and ChatGuard",
           "description": "Add the optional --tools field, the pinned zero-tool StartRunInput builder, ChatGate with version re-probe and the stream guard that disables chat.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-4-task-2"
-          ]
+          ],
+          "commit_sha": "50eed25"
         },
         {
           "id": "phase-4-task-4",
           "name": "Execute test scenarios for phase 4",
           "description": "Run the phase-4 scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-12",
             "TS-14",
@@ -326,13 +329,20 @@
           ],
           "depends_on": [
             "phase-4-task-3"
-          ]
+          ],
+          "commit_sha": "50eed25"
         },
         {
           "id": "phase-4-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "Awaiting operator confirmation of the phase 4 manual verification",
+          "request": {
+            "request_id": "01M7EQZNK5A19YYXGB26MJWH6R",
+            "status": "open",
+            "raised_at": "2026-11-15T04:38:25Z"
+          }
         }
       ]
     },
