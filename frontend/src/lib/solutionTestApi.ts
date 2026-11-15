@@ -43,6 +43,7 @@ export function fakeApi(over: Partial<Record<keyof SolutionApi, unknown>> = {}):
     editHandover: vi.fn().mockResolvedValue({ instructionHash: "ih2" }),
     approveHandover: vi.fn().mockResolvedValue({}),
     deferHandover: vi.fn().mockResolvedValue({}),
+    rejectHandover: vi.fn().mockResolvedValue({}),
     agents: vi.fn().mockResolvedValue({
       agents: [
         { agent: "claude", installed: true, enforcement: "verified", canReview: true },
