@@ -522,15 +522,22 @@ fn print_comments(groups: &Value) {
 }
 
 fn print_requests(body: &Value) {
+    for line in request_lines(body) {
+        println!("{line}");
+    }
+}
+
+/// The `requests` listing: one line per request, then its result summary.
+fn request_lines(body: &Value) -> Vec<String> {
     let requests = body
         .get("requests")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     if requests.is_empty() {
-        println!("No requests.");
-        return;
+        return vec!["No requests.".into()];
     }
+    let mut out = Vec::new();
     for r in requests {
         let id = r.get("requestId").and_then(Value::as_str).unwrap_or("");
         let status = r.get("status").and_then(Value::as_str).unwrap_or("");
@@ -551,21 +558,31 @@ fn print_requests(body: &Value) {
             Some("failed") => " (notice not delivered)",
             _ => "",
         };
-        println!("{id}  {status:<15}{flagged}{archived}{notice} [{branch}] {title}");
+        out.push(format!(
+            "{id}  {status:<15}{flagged}{archived}{notice} [{branch}] {title}"
+        ));
         if let Some(result) = r.pointer("/summary/result").and_then(Value::as_str) {
-            println!("    {result}");
+            out.push(format!("    {result}"));
         }
     }
+    out
 }
 
 /// A request's history: one line per event, then its answers.
 fn print_history(body: &Value) {
+    for line in history_lines(body) {
+        println!("{line}");
+    }
+}
+
+fn history_lines(body: &Value) -> Vec<String> {
+    let mut out = Vec::new();
     let h = body.get("history").cloned().unwrap_or(Value::Null);
     let title = h
         .pointer("/request/title")
         .and_then(Value::as_str)
         .unwrap_or("");
-    println!("{title}");
+    out.push(title.to_string());
     for e in h
         .get("events")
         .and_then(Value::as_array)
@@ -583,12 +600,12 @@ fn print_history(body: &Value) {
             .and_then(Value::as_str)
             .map(|d| format!(" ({d})"))
             .unwrap_or_default();
-        println!(
+        out.push(format!(
             "  {}  {}{change}{detail}  by {}",
             s("at"),
             s("kind"),
             s("actor")
-        );
+        ));
     }
     for a in h
         .get("answers")
@@ -598,8 +615,9 @@ fn print_history(body: &Value) {
     {
         let kind = a.get("kind").and_then(Value::as_str).unwrap_or("");
         let text = a.get("text").and_then(Value::as_str).unwrap_or("");
-        println!("  [{kind}] {text}");
+        out.push(format!("  [{kind}] {text}"));
     }
+    out
 }
 
 /// Expand a leading `~` so `inbox link <id> ~/code/x` stores an absolute path,
@@ -1527,6 +1545,57 @@ mod tests {
             Some(InboxCommand::Requests { filter: None, .. })
         ));
         assert!(parse(&a(&["requests"])).is_err());
+    }
+
+    #[test]
+    fn request_lines_show_archive_notice_and_summary() {
+        assert_eq!(
+            request_lines(&json!({ "requests": [] })),
+            vec!["No requests."]
+        );
+        let lines = request_lines(&json!({ "requests": [
+            { "requestId": "R1", "status": "dismissed", "flagged": true,
+              "worktree": { "branch": "fix-x" }, "title": "Which DB?",
+              "archivedAt": null, "notice": { "state": "failed" },
+              "summary": { "result": "Dismissed by operator" } },
+            { "requestId": "R2", "status": "resolved", "flagged": false,
+              "worktree": { "branch": "fix-y" }, "title": "Port?",
+              "archivedAt": "2026-11-01T00:00:00Z", "notice": null,
+              "summary": { "result": null } }
+        ]}));
+        assert_eq!(
+            lines,
+            vec![
+                "R1  dismissed       (flagged) (notice not delivered) [fix-x] Which DB?",
+                "    Dismissed by operator",
+                "R2  resolved        (archived) [fix-y] Port?",
+            ]
+        );
+    }
+
+    #[test]
+    fn history_lines_list_events_then_answers() {
+        let lines = history_lines(&json!({ "history": {
+            "request": { "title": "Which DB?" },
+            "events": [
+                { "at": "t1", "kind": "request_raised", "actor": "agent" },
+                { "at": "t2", "kind": "request_dismissed", "from": "open", "to": "dismissed",
+                  "detail": "notice queued", "actor": "operator_session" },
+                { "at": "t3", "kind": "request_archived", "from": "resolved", "to": "resolved",
+                  "actor": "operator_cli" }
+            ],
+            "answers": [ { "kind": "resolution", "text": "Use Postgres" } ]
+        }}));
+        assert_eq!(
+            lines,
+            vec![
+                "Which DB?",
+                "  t1  request_raised  by agent",
+                "  t2  request_dismissed open -> dismissed (notice queued)  by operator_session",
+                "  t3  request_archived  by operator_cli",
+                "  [resolution] Use Postgres",
+            ]
+        );
     }
 
     // FR-33: the CLI reaches every new route.

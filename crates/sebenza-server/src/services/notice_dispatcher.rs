@@ -38,3 +38,47 @@ pub fn spawn(inbox: Arc<InboxService>, poll_secs: u64) {
         }
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::inbox_store::InboxStore;
+    use crate::adapters::projects_registry::ProjectsRegistry;
+
+    fn service(dir: &std::path::Path) -> Arc<InboxService> {
+        Arc::new(InboxService::new(
+            InboxStore::with_dir(dir.join("inbox")),
+            ProjectsRegistry::with_file(dir.join("projects.json")),
+        ))
+    }
+
+    fn temp(tag: &str) -> std::path::PathBuf {
+        let d =
+            std::env::temp_dir().join(format!("sebenza-dispatcher-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    // A pass with nothing pending, and a pass over an unreadable store, both
+    // return quietly: the loop logs and keeps ticking, it never panics.
+    #[tokio::test]
+    async fn passes_survive_an_empty_and_a_broken_store() {
+        let empty = temp("empty");
+        let inbox = service(&empty);
+        pass(&inbox);
+        assert_eq!(inbox.pending_notice_count(), 0);
+
+        let broken = temp("broken");
+        std::fs::write(broken.join("inbox"), "not a directory").unwrap();
+        let inbox = service(&broken);
+        pass(&inbox);
+
+        // The loop's first tick is immediate (the startup rebuild); kick runs
+        // one pass off the runtime. Neither may take the runtime down.
+        spawn(inbox.clone(), 1);
+        kick(inbox.clone());
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(inbox.pending_notice_count(), 0);
+    }
+}
