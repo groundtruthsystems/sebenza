@@ -65,6 +65,22 @@ export interface HandoverCard {
   rejection?: HandoverRejection | null;
 }
 
+/** One handover-chat message, rendered only as plain text. */
+export interface ChatMessage {
+  messageId: string;
+  ts: string;
+  author: string;
+  role: "reviewer" | "agent" | "aborted";
+  text: string;
+  instructionHash: string;
+}
+
+export interface ChatThread {
+  chatId: string;
+  notice: string;
+  messages: ChatMessage[];
+}
+
 export interface SolutionView {
   kind: string;
   state: {
@@ -162,6 +178,12 @@ export const solutionApi = {
   approveHandover: (id: string, slug: string, instructionHash: string) =>
     call("POST", `${item(id)}/handover/${slug}/approve`, { instructionHash }, true),
   deferHandover: (id: string, slug: string) => call("POST", `${item(id)}/handover/${slug}/defer`, {}, true),
+  /** A handover's chat thread; 503 (`chat_unavailable`) while chat is off. */
+  chat: (id: string, slug: string) =>
+    call<{ chat: ChatThread }>("GET", `${item(id)}/handover/${slug}/chat`, undefined, true),
+  /** Ask the handover chat one question. */
+  ask: (id: string, slug: string, text: string) =>
+    call<{ chat: ChatThread }>("POST", `${item(id)}/handover/${slug}/chat/messages`, { text }, true),
   /** Reject a handover awaiting review; `comment` is required. */
   rejectHandover: (id: string, slug: string, reason: "wrong_project" | "other", comment: string) =>
     call("POST", `${item(id)}/handover/${slug}/reject`, { reason, comment }, true),

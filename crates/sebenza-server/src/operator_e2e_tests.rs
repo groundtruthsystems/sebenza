@@ -59,6 +59,11 @@ pub(crate) struct Call<'a> {
 
 impl Daemon {
     pub(crate) async fn start() -> Daemon {
+        Self::start_with_chat(Default::default()).await
+    }
+
+    /// A daemon whose chat gate uses `chat` (tests point `binary` at a stub).
+    pub(crate) async fn start_with_chat(chat: common::domain::config::ChatConfig) -> Daemon {
         crate::adapters::control_token::pin_control_token(TOKEN);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!("sebenza-op-e2e-{}-{n}", std::process::id()));
@@ -110,8 +115,8 @@ impl Daemon {
                 base.join("snapshots"),
             )),
             chat_gate: Arc::new(crate::services::chat::gate::ChatGate::new(
-                Default::default(),
-                std::env::temp_dir().join(format!("sebenza-chat-test-{}", std::process::id())),
+                chat,
+                base.join("chat-scratch"),
             )),
             frontend_dist: None,
         };

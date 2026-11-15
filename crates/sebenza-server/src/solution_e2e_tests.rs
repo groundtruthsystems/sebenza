@@ -1506,3 +1506,308 @@ async fn reject_refuses_the_control_token_and_foreign_origins() {
         "drafted"
     );
 }
+
+// --- Handover chat (track sebenza_polishing, phase 5) ---------------------
+
+const C_INIT: &str =
+    r#"{"type":"system","subtype":"init","session_id":"s","tools":[],"mcp_servers":[]}"#;
+const C_RESULT: &str =
+    r#"{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"s"}"#;
+const C_TOOL: &str = r#"{"type":"assistant","message":{"id":"m2","role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]},"session_id":"s"}"#;
+
+fn c_text(text: &str) -> String {
+    serde_json::json!({"type":"assistant","message":{"id":"m1","role":"assistant","content":[{"type":"text","text": text}]},"session_id":"s"}).to_string()
+}
+
+/// A stub `claude`: `--version` prints 2.1.0; a run saves its stdin (the
+/// prompt) to `<dir>/prompt-<n>`, counts itself in `<dir>/calls`, sleeps
+/// `<dir>/sleep` seconds if present, and prints `<dir>/out.jsonl`.
+fn stub_claude(dir: &std::path::Path, out: &[String]) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("out.jsonl"), out.join("\n") + "\n").unwrap();
+    let script = dir.join("claude");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nD='{}'\nif [ \"$1\" = \"--version\" ]; then echo 2.1.0; exit 0; fi\necho run >> \"$D/calls\"\nN=$(wc -l < \"$D/calls\")\ncat > \"$D/prompt-$N\"\n[ -f \"$D/sleep\" ] && sleep $(cat \"$D/sleep\")\ncat \"$D/out.jsonl\"\n",
+            dir.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script.to_string_lossy().to_string()
+}
+
+struct ChatFixture {
+    d: Daemon,
+    it: Item,
+    stub: std::path::PathBuf,
+}
+
+async fn chat_fixture(cfg: impl FnOnce(&mut common::domain::config::ChatConfig)) -> ChatFixture {
+    let stub = std::env::temp_dir().join(format!(
+        "sebenza-chat-stub-{}-{}",
+        std::process::id(),
+        common::util::id::random_ulid()
+    ));
+    let bin = stub_claude(
+        &stub,
+        &[
+            C_INIT.into(),
+            c_text("The handover builds invoices."),
+            C_RESULT.into(),
+        ],
+    );
+    let mut c = common::domain::config::ChatConfig {
+        binary: Some(bin),
+        ..Default::default()
+    };
+    cfg(&mut c);
+    let d = Daemon::start_with_chat(c).await;
+    configure(&d, serde_json::json!({"agent": "codex"})).await;
+    register(&d, "acme-billing");
+    let it = drafted_item(&d).await;
+    assert!(d.state.chat_gate.probe().await, "stub probe passes");
+    ChatFixture { d, it, stub }
+}
+
+impl ChatFixture {
+    fn url(&self, slug: &str) -> String {
+        format!("/api/inbox/{}/handover/{slug}/chat", self.it.id)
+    }
+    async fn ask(&self, slug: &str, text: &str) -> (u16, serde_json::Value) {
+        let mut c = self
+            .d
+            .spa("POST", &format!("{}/messages", self.url(slug)), &self.it.op);
+        c.body = Some(serde_json::json!({ "text": text }));
+        self.d.send(c).await
+    }
+    async fn read(&self, slug: &str) -> (u16, serde_json::Value) {
+        self.d
+            .send(self.d.spa("GET", &self.url(slug), &self.it.op))
+            .await
+    }
+    fn prompt(&self, n: usize) -> String {
+        std::fs::read_to_string(self.stub.join(format!("prompt-{n}"))).unwrap_or_default()
+    }
+    fn calls(&self) -> usize {
+        std::fs::read_to_string(self.stub.join("calls"))
+            .unwrap_or_default()
+            .lines()
+            .count()
+    }
+}
+
+// TS-10 / TS-24: the agent answers with this handover as context; each turn
+// reads the stored text and stamps its hash; authors are recorded.
+#[tokio::test]
+async fn chat_answers_with_the_handover_as_context() {
+    let f = chat_fixture(|_| {}).await;
+    let (code, v) = f.ask("acme-billing", "What does this build?").await;
+    assert_eq!(code, 200, "{v}");
+    let msgs = v["chat"]["messages"].as_array().unwrap().clone();
+    assert_eq!(msgs.len(), 2);
+    assert_eq!(msgs[0]["role"], "reviewer");
+    assert_eq!(msgs[0]["author"], "operator_session");
+    assert_eq!(msgs[1]["role"], "agent");
+    assert_eq!(msgs[1]["text"], "The handover builds invoices.");
+    assert_eq!(
+        v["chat"]["notice"],
+        "Chat is not part of the review record."
+    );
+    assert_eq!(
+        v["chat"]["chatId"],
+        format!("chat:{}:acme-billing", f.it.id)
+    );
+    // The probe was call 1; this turn is call 2.
+    let p = f.prompt(2);
+    assert!(
+        p.contains("Build invoices."),
+        "full handover in the prompt: {p}"
+    );
+    assert!(p.contains("What does this build?"));
+    assert!(!p.contains("Show invoices."), "never another handover");
+    let h1 = msgs[1]["instructionHash"].as_str().unwrap().to_string();
+
+    // Edit the handover: the next turn reads the stored text and the new hash.
+    let (_, doc) =
+        f.d.send(f.d.spa(
+            "GET",
+            &format!(
+                "/api/inbox/{}/solution/docs/handover/acme-billing.md",
+                f.it.id
+            ),
+            TOKEN,
+        ))
+        .await;
+    let mut c = f.d.spa(
+        "PUT",
+        &format!("/api/inbox/{}/handover/acme-billing", f.it.id),
+        &f.it.op,
+    );
+    c.body = Some(
+        serde_json::json!({"content": "# Billing\nBuild credit notes.", "expectedHash": doc["hash"]}),
+    );
+    assert_eq!(f.d.send(c).await.0, 200);
+    let (code, v) = f.ask("acme-billing", "And now?").await;
+    assert_eq!(code, 200, "{v}");
+    assert!(f.prompt(3).contains("Build credit notes."));
+    assert!(
+        f.prompt(3).contains("[reviewer] What does this build?"),
+        "transcript sent"
+    );
+    assert_ne!(
+        v["chat"]["messages"][3]["instructionHash"]
+            .as_str()
+            .unwrap(),
+        h1
+    );
+    // Nothing outside the chat changed.
+    let s = f.it.settle(&f.d).await;
+    assert_eq!(handover(&s, "acme-billing")["status"], "drafted");
+}
+
+// TS-11: one handover's chat is never shown for another; a crafted slug is refused.
+#[tokio::test]
+async fn chats_are_isolated_per_handover() {
+    let f = chat_fixture(|_| {}).await;
+    assert_eq!(f.ask("acme-billing", "acme question").await.0, 200);
+    let (code, v) = f.read("portal").await;
+    assert_eq!(code, 200, "{v}");
+    assert!(v["chat"]["messages"].as_array().unwrap().is_empty());
+    assert!(!v.to_string().contains("acme question"));
+    let (code, _) = f.read("..%2Facme-billing").await;
+    assert!(code == 400 || code == 404, "traversal refused: {code}");
+}
+
+// TS-12: chat off means 503 on every chat route.
+#[tokio::test]
+async fn chat_off_answers_503() {
+    let f = chat_fixture(|_| {}).await;
+    f.d.state.chat_gate.disable("test");
+    let (code, v) = f.read("acme-billing").await;
+    assert_eq!(
+        (code, v["code"].as_str()),
+        (503, Some("chat_unavailable")),
+        "{v}"
+    );
+    let (code, _) = f.ask("acme-billing", "hi").await;
+    assert_eq!(code, 503);
+}
+
+// TS-13: an oversized handover is refused, never truncated; a full
+// transcript is 413 chat full; the CLI is not called for either.
+#[tokio::test]
+async fn budgets_refuse_rather_than_truncate() {
+    let f = chat_fixture(|c| c.max_handover_tokens = 3).await;
+    let before = f.calls();
+    let (code, v) = f.ask("acme-billing", "q").await;
+    assert_eq!(
+        (code, v["code"].as_str()),
+        (413, Some("handover_too_large")),
+        "{v}"
+    );
+    assert_eq!(f.calls(), before, "no run");
+
+    let f = chat_fixture(|c| c.max_transcript_tokens = 20).await;
+    assert_eq!(f.ask("acme-billing", "short").await.0, 200);
+    let before = f.calls();
+    let (code, v) = f
+        .ask(
+            "acme-billing",
+            "a question long enough to go over the budget",
+        )
+        .await;
+    assert_eq!((code, v["code"].as_str()), (413, Some("chat_full")), "{v}");
+    assert_eq!(f.calls(), before);
+}
+
+// TS-15 / TS-16: no session, the control token, a foreign handover, and a
+// revoked session are all refused.
+#[tokio::test]
+async fn chat_rechecks_access_on_every_call() {
+    let f = chat_fixture(|_| {}).await;
+    let mut none = f.d.spa("GET", &f.url("acme-billing"), "");
+    none.bearer = None;
+    assert_eq!(f.d.send(none).await.0, 401);
+    assert_eq!(
+        f.d.send(f.d.spa("GET", &f.url("acme-billing"), TOKEN))
+            .await
+            .0,
+        403
+    );
+    assert_eq!(
+        f.read("not-a-project").await.0,
+        404,
+        "no such handover on this item"
+    );
+    assert_eq!(f.ask("acme-billing", "first").await.0, 200);
+    f.d.state.operator.revoke_all();
+    assert_eq!(f.read("acme-billing").await.0, 401, "revoked mid-chat");
+    assert_eq!(f.ask("acme-billing", "second").await.0, 401);
+}
+
+// TS-14 (route): tool activity in a turn: 503, output discarded, chat off.
+#[tokio::test]
+async fn a_tool_call_in_a_turn_turns_chat_off() {
+    let f = chat_fixture(|_| {}).await;
+    std::fs::write(
+        f.stub.join("out.jsonl"),
+        [
+            C_INIT.to_string(),
+            c_text("SECRET-OUTPUT"),
+            C_TOOL.into(),
+            C_RESULT.into(),
+        ]
+        .join("\n"),
+    )
+    .unwrap();
+    let (code, _) = f.ask("acme-billing", "list files").await;
+    assert_eq!(code, 503);
+    assert!(!f.d.state.chat_gate.enabled());
+    let log = std::fs::read_to_string(
+        f.d.store
+            .dir()
+            .join(format!("{}.chat.acme-billing.jsonl", f.it.id)),
+    )
+    .unwrap();
+    assert!(!log.contains("SECRET-OUTPUT"), "output discarded");
+    assert!(log.contains("\"role\":\"aborted\""));
+    assert_eq!(f.read("acme-billing").await.0, 503);
+}
+
+// TS-23: concurrent questions on one thread run one at a time, in order.
+#[tokio::test]
+async fn turns_on_one_thread_are_serialised() {
+    let f = chat_fixture(|_| {}).await;
+    std::fs::write(f.stub.join("sleep"), "0.3").unwrap();
+    let (a, b) = tokio::join!(f.ask("acme-billing", "one"), f.ask("acme-billing", "two"));
+    assert_eq!((a.0, b.0), (200, 200));
+    let (_, v) = f.read("acme-billing").await;
+    let roles: Vec<_> = v["chat"]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["role"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(roles, ["reviewer", "agent", "reviewer", "agent"]);
+}
+
+// TS-49 (routes): the chat API is exactly a thread GET and a message POST.
+#[test]
+fn the_chat_api_has_no_mutation_route() {
+    let src = include_str!("server.rs");
+    let chat: Vec<&str> = src
+        .lines()
+        .filter(|l| l.contains("\"/api/") && l.contains("/chat"))
+        .collect();
+    assert_eq!(chat.len(), 2, "{chat:?}");
+    assert!(chat[0].trim().ends_with("/chat\","));
+    assert!(chat[1].trim().ends_with("/chat/messages\","));
+    let handlers: Vec<&str> = src
+        .lines()
+        .filter(|l| l.contains("get_chat") || l.contains("post_chat_message"))
+        .collect();
+    assert_eq!(handlers.len(), 2);
+}

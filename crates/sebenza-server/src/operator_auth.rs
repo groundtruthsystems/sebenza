@@ -165,6 +165,13 @@ impl OperatorAuth {
             .then_some(CredentialClass::OperatorCli)
     }
 
+    /// Void every operator token (tests: access revoked mid-chat).
+    #[cfg(test)]
+    pub fn revoke_all(&self) {
+        *self.session.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.cli.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+
     pub fn classify(&self, token: &str) -> Option<CredentialClass> {
         self.classify_at(token, SystemTime::now())
     }

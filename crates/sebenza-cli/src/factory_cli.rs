@@ -73,6 +73,8 @@ pub fn usage() -> &'static str {
   sebenza-cli inbox solution resolve <id> <problem> [note]   Resolve a problem by hand (operator)
   sebenza-cli inbox solution reject <id> <project> <wrong_project|other> <comment>
                                                    Reject a handover awaiting review (operator)
+  sebenza-cli inbox solution chat <id> <project> [question]
+                                                   Read a handover's chat, or ask it (operator)
   sebenza-cli inbox coordinator say <id> <message> [--confirm]   Chat with the coordinator (operator)
   sebenza-cli inbox coordinator log <id>           Print the coordinator transcript
   sebenza-cli inbox factory get                    Global role profiles
@@ -142,6 +144,29 @@ pub fn parse(args: &[String], current: Option<&Value>) -> Result<Call> {
                 format!("/api/inbox/{id}/handover/{project}/reject"),
                 json!({"reason": reason, "comment": comment}),
             ))
+        }
+        ("solution", "chat") => {
+            let id = a(2, "item id")?;
+            let project = a(3, "project")?;
+            let question: Vec<String> = args
+                .iter()
+                .filter(|s| !s.starts_with("--"))
+                .skip(4)
+                .cloned()
+                .collect();
+            let url = format!("/api/inbox/{id}/handover/{project}/chat");
+            if question.is_empty() {
+                Ok(Call {
+                    operator: true,
+                    ..get(url)
+                })
+            } else {
+                Ok(op(
+                    "POST",
+                    format!("{url}/messages"),
+                    json!({"text": question.join(" ")}),
+                ))
+            }
         }
         ("coordinator", "say") => Ok(op(
             "POST",
@@ -311,5 +336,29 @@ mod tests {
             .is_err()
         );
         assert!(usage().contains("solution reject"));
+    }
+
+    // TS-45 (parity): the chat is reachable from the CLI with the operator token.
+    #[test]
+    fn solution_chat_reads_or_asks() {
+        let c = parse(&v(&["solution", "chat", "01ID", "portal"]), None).unwrap();
+        assert_eq!(
+            (c.method, c.path.as_str(), c.operator),
+            ("GET", "/api/inbox/01ID/handover/portal/chat", true)
+        );
+        let c = parse(
+            &v(&["solution", "chat", "01ID", "portal", "what", "changes?"]),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            (c.method, c.path.as_str(), c.operator),
+            (
+                "POST",
+                "/api/inbox/01ID/handover/portal/chat/messages",
+                true
+            )
+        );
+        assert_eq!(c.body.unwrap(), json!({"text": "what changes?"}));
     }
 }

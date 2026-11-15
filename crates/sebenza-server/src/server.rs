@@ -425,6 +425,15 @@ pub fn build_router(state: AppState) -> Router {
             "/api/inbox/{id}/handover/{project}/reject",
             post(crate::solution_routes::reject_handover),
         )
+        // Handover chat: these two routes and no other (AC-07a).
+        .route(
+            "/api/inbox/{id}/handover/{project}/chat",
+            get(crate::solution_routes::get_chat),
+        )
+        .route(
+            "/api/inbox/{id}/handover/{project}/chat/messages",
+            post(crate::solution_routes::post_chat_message),
+        )
         .route(
             "/api/inbox/{id}/solution/problems/{pid}/resolve",
             post(crate::solution_routes::resolve_problem),

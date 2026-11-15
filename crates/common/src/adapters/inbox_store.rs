@@ -901,6 +901,68 @@ impl InboxStore {
         Ok(event)
     }
 
+    /// `<id>.chat.<slug>.jsonl`: one handover's chat thread (track
+    /// sebenza_polishing). Kept outside the solution documents, so it is never
+    /// part of an approval hash or the review record, and never deleted.
+    fn chat_path(&self, id: &str, slug: &str) -> Result<PathBuf, InboxStoreError> {
+        let ok = !slug.is_empty()
+            && slug.len() <= 64
+            && slug
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+        if !ok {
+            return Err(InboxStoreError::InvalidId(format!("chat slug {slug:?}")));
+        }
+        self.sidecar(id, &format!("chat.{slug}.jsonl"))
+    }
+
+    /// Append one chat message durably (one write, then fsync), owner-only.
+    pub fn append_chat(
+        &self,
+        id: &str,
+        slug: &str,
+        message: &serde_json::Value,
+    ) -> Result<(), InboxStoreError> {
+        if !self.path_for(id)?.is_file() {
+            return Err(InboxStoreError::NotFound(id.to_string()));
+        }
+        let path = self.chat_path(id, slug)?;
+        let lock = path_lock(&path);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut line = serde_json::to_string(message)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        line.push('\n');
+        if path.exists() && !ends_with_newline(&path)? {
+            line.insert(0, '\n');
+        }
+        self.ensure_dir()?;
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .open(&path)?;
+        write_durably(&mut f, line.as_bytes())?;
+        Ok(())
+    }
+
+    /// Every parseable chat message of one handover, in order.
+    pub fn read_chat(
+        &self,
+        id: &str,
+        slug: &str,
+    ) -> Result<Vec<serde_json::Value>, InboxStoreError> {
+        let path = self.chat_path(id, slug)?;
+        let text = match fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        Ok(text
+            .lines()
+            .filter_map(|l| serde_json::from_str(l).ok())
+            .collect())
+    }
+
     /// Every parseable event, in append order. A torn or foreign line is skipped.
     pub fn read_events(&self, id: &str) -> Result<Vec<InboxEvent>, InboxStoreError> {
         let path = self.sidecar(id, "events.jsonl")?;
@@ -2191,5 +2253,31 @@ mod durable_tests {
             serde_json::from_str::<InboxEvent>(&partial).is_err(),
             "partial line never parses"
         );
+    }
+
+    // TS-11 (store side): chat slugs cannot climb out of the store.
+    #[test]
+    fn chat_slugs_are_validated() {
+        let dir = std::env::temp_dir().join(format!("sebenza-chat-store-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let store = InboxStore::with_dir(dir.clone());
+        let id = store.create("x").unwrap().id;
+        for bad in ["../x", "a/b", "", "A", "a.b"] {
+            assert!(
+                store.append_chat(&id, bad, &serde_json::json!({})).is_err(),
+                "{bad}"
+            );
+        }
+        store
+            .append_chat(&id, "acme-billing", &serde_json::json!({"text": "hi"}))
+            .unwrap();
+        assert_eq!(store.read_chat(&id, "acme-billing").unwrap().len(), 1);
+        assert!(store.read_chat(&id, "portal").unwrap().is_empty());
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(dir.join(format!("{id}.chat.acme-billing.jsonl")))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 }

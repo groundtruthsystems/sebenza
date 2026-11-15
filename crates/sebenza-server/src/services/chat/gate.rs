@@ -220,13 +220,16 @@ pub struct ChatGate {
     inner: RwLock<Inner>,
     /// One probe at a time; turns that find it held get 503.
     probing: tokio::sync::Mutex<()>,
+    /// Chat turns running at once across every handover.
+    turn_slots: tokio::sync::Semaphore,
+    /// One turn at a time per handover thread.
+    threads: std::sync::Mutex<HashMap<String, std::sync::Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl ChatGate {
     /// Off until a probe passes (TS-49).
     pub fn new(cfg: ChatConfig, scratch_root: PathBuf) -> Self {
         Self {
-            cfg,
             scratch_root,
             inner: RwLock::new(Inner {
                 status: GateStatus {
@@ -239,7 +242,30 @@ impl ChatGate {
                 version_checked: None,
             }),
             probing: tokio::sync::Mutex::new(()),
+            turn_slots: tokio::sync::Semaphore::new(cfg.max_concurrent_turns.max(1)),
+            threads: std::sync::Mutex::new(HashMap::new()),
+            cfg,
         }
+    }
+
+    /// Hold one global turn slot and the thread's lock for the turn.
+    pub async fn turn_guard(
+        &self,
+        thread: &str,
+    ) -> (
+        tokio::sync::SemaphorePermit<'_>,
+        tokio::sync::OwnedMutexGuard<()>,
+    ) {
+        let lock = self
+            .threads
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(thread.to_string())
+            .or_default()
+            .clone();
+        let held = lock.lock_owned().await;
+        let permit = self.turn_slots.acquire().await.expect("never closed");
+        (permit, held)
     }
 
     pub fn config(&self) -> &ChatConfig {

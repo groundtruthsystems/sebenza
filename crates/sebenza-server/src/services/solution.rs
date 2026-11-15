@@ -1570,6 +1570,30 @@ impl SolutionService {
         }))
     }
 
+    /// One handover as the chat reads it: the stored text and its hash, read
+    /// fresh on every turn (FR-20). Fails when the item is not a solution, the
+    /// slug names no registered project, or no handover is drafted for it.
+    pub fn handover_for_chat(
+        &self,
+        id: &str,
+        slug: &str,
+    ) -> Result<(String, String), SolutionError> {
+        self.require_solution(id)?;
+        let project = self.project_for_slug(slug)?;
+        let state = self.state_now(id)?;
+        if !state.handovers.iter().any(|h| h.project == project.path) {
+            return Err(SolutionError::NotFound(format!(
+                "no handover drafted for {slug}"
+            )));
+        }
+        let (text, hash) = self
+            .inbox
+            .store()
+            .read_solution_doc(id, &format!("handover/{slug}.md"))?
+            .ok_or_else(|| SolutionError::NotFound(format!("no handover document for {slug}")))?;
+        Ok((text, hash))
+    }
+
     pub fn defer_handover(
         &self,
         id: &str,

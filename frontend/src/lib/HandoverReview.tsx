@@ -4,11 +4,12 @@
 // form and the reading position carry across. Leaving full screen is a
 // visible button or Esc (after any open dialog).
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import ChatPanel from "./ChatPanel";
 import { useEscLayer } from "./escStack";
 import { renderDraftMarkdown } from "./inboxMarkdown";
 import ReviewControls, { focusRing } from "./ReviewControls";
 import { useHandoverReview } from "./reviewStore";
-import { ApiRefusal, type HandoverCard, type SolutionApi } from "./solutionApi";
+import { ApiRefusal, type ChatThread, type HandoverCard, type SolutionApi } from "./solutionApi";
 
 function message(e: unknown): string {
   if (e instanceof ApiRefusal) return e.code ? `${e.message} (${e.code})` : e.message;
@@ -33,6 +34,21 @@ export default function HandoverReview({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const full = review.fullscreen;
+  /** The chat thread, or null while chat is unavailable (503): no entry point. */
+  const [chat, setChat] = useState<ChatThread | null>(null);
+  const [chatChecked, setChatChecked] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .chat(draftId, h.slug)
+      .then((r) => live && setChat(r.chat))
+      .catch(() => live && setChat(null))
+      .finally(() => live && setChatChecked(true));
+    return () => {
+      live = false;
+    };
+  }, [api, draftId, h.slug]);
   useEscLayer("fullscreen", full, () => patch({ fullscreen: false }));
 
   /** Load the instruction. A pending edit is kept unless `fresh` (after a
@@ -83,6 +99,32 @@ export default function HandoverReview({
           () => patch({ rejectOpen: false, comment: "" }),
         )
       }
+    />
+  );
+
+  const chatButton = chat ? (
+    <button
+      type="button"
+      className={`px-2 py-0.5 rounded border border-edge ${focusRing}`}
+      aria-expanded={review.chatOpen}
+      onClick={() => patch({ chatOpen: !review.chatOpen })}
+    >
+      Chat
+    </button>
+  ) : chatChecked ? (
+    <span className="text-muted" title="The zero-tool check has not passed, so chat is off">
+      Chat unavailable
+    </span>
+  ) : null;
+
+  const chatPanel = chat && review.chatOpen && (
+    <ChatPanel
+      draftId={draftId}
+      slug={h.slug}
+      api={api}
+      thread={chat}
+      onthread={setChat}
+      onclose={() => patch({ chatOpen: false })}
     />
   );
 
@@ -140,6 +182,7 @@ export default function HandoverReview({
                   Review
                 </button>
                 {fullButton}
+                {chatButton}
                 {controls}
               </>
             )}
@@ -147,6 +190,7 @@ export default function HandoverReview({
           </div>
         </div>
         {!full && error && <p role="alert" className="m-0 text-danger">{error}</p>}
+        {!full && chatPanel}
         {!full && body}
       </div>
       {full && (
@@ -159,11 +203,15 @@ export default function HandoverReview({
             {status}
             <div className="ml-auto flex flex-wrap gap-2">
               {fullButton}
+              {chatButton}
               {controls}
             </div>
           </div>
           {error && <p role="alert" className="m-0 text-danger">{error}</p>}
-          <div className="flex-1 min-h-0 flex flex-col">{body}</div>
+          <div className="flex-1 min-h-0 flex gap-3">
+            <div className="flex-1 min-h-0 flex flex-col">{body}</div>
+            {chatPanel && <div className="w-[28rem] shrink-0 overflow-y-auto">{chatPanel}</div>}
+          </div>
         </div>
       )}
     </>
