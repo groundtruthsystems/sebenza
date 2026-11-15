@@ -140,38 +140,41 @@
     {
       "id": "phase-2",
       "name": "Requests tab UI and CLI",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for Requests tab",
           "description": "Write failing component tests for filters, Dismiss/Archive actions, disabled Archive, summary row, history view and notice badge with Retry.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "dd73e3c"
         },
         {
           "id": "phase-2-task-2",
           "name": "Implement Requests tab and contract",
           "description": "Add contract and api.ts entries and extend InboxActivity and InboxRequestCard with actions, filters, summaries, history and notice badge.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-2-task-1"
-          ]
+          ],
+          "commit_sha": "dd73e3c"
         },
         {
           "id": "phase-2-task-3",
           "name": "Implement sebenza-cli request commands",
           "description": "Add CLI commands for filtered list, dismiss, archive, history and notice retry.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-2-task-2"
-          ]
+          ],
+          "commit_sha": "dd73e3c"
         },
         {
           "id": "phase-2-task-4",
           "name": "Execute test scenarios for phase 2",
           "description": "Run the phase-2 scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-35",
             "TS-36",
@@ -179,13 +182,20 @@
           ],
           "depends_on": [
             "phase-2-task-3"
-          ]
+          ],
+          "commit_sha": "dd73e3c"
         },
         {
           "id": "phase-2-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "blocked",
+          "request": {
+            "request_id": "01M7EQ8NHZHCKF42T9N7HKWE3E",
+            "status": "open",
+            "raised_at": "2026-11-15T04:25:51Z"
+          },
+          "blocked_reason": "Awaiting operator confirmation of the phase 2 manual verification"
         }
       ]
     },
