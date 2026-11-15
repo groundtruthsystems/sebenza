@@ -202,47 +202,51 @@
     {
       "id": "phase-3",
       "name": "Shared review controls, handover reject, full screen and Esc",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Write tests for handover reject",
           "description": "Write failing tests for reject from Drafted/Deferred, 409s, reason=other, wrong_project revision branch, atomicity and approve/convert refusal.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "4906c4f"
         },
         {
           "id": "phase-3-task-2",
           "name": "Implement reject_handover and route",
           "description": "Add HandoverStatus::Rejected, reject_handover under the item lock with an isolated wrong_project branch, the reject route, contract and CLI command.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-3-task-1"
-          ]
+          ],
+          "commit_sha": "4906c4f"
         },
         {
           "id": "phase-3-task-3",
           "name": "Write tests for shared controls, full screen and Esc",
           "description": "Write failing component tests for ReviewControls parity, full-screen enter/exit, state and scroll persistence, and the layered Esc stack.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-3-task-2"
-          ]
+          ],
+          "commit_sha": "0b92dfb"
         },
         {
           "id": "phase-3-task-4",
           "name": "Implement ReviewControls, reviewStore, full screen and useEscStack",
           "description": "Extract ReviewControls with Reject, add the reviewStore slice, the full-screen mode flag and the useEscStack layer manager with BaseDialog registration.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-3-task-3"
-          ]
+          ],
+          "commit_sha": "0b92dfb"
         },
         {
           "id": "phase-3-task-5",
           "name": "Execute test scenarios for phase 3",
           "description": "Run the phase-3 scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-01",
             "TS-02",
@@ -259,13 +263,20 @@
           ],
           "depends_on": [
             "phase-3-task-4"
-          ]
+          ],
+          "commit_sha": "0b92dfb"
         },
         {
           "id": "phase-3-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "Awaiting operator confirmation of the phase 3 manual verification",
+          "request": {
+            "request_id": "01M7EQMZEHMXPX4990YQXBCTS2",
+            "status": "open",
+            "raised_at": "2026-11-15T04:32:34Z"
+          }
         }
       ]
     },
