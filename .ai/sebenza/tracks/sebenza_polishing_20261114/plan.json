@@ -349,47 +349,51 @@
     {
       "id": "phase-5",
       "name": "Handover chat service, API, panel and adversarial harness",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-5-task-1",
           "name": "Write tests for chat service and API",
           "description": "Write failing tests for thread storage, access re-check, isolation, budgets, serialisation, hash stamping and 503 when disabled.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "7c9a9ba"
         },
         {
           "id": "phase-5-task-2",
           "name": "Implement ChatService, chat routes and CLI",
           "description": "Implement the chat sidecar, stateless turn assembly with fenced handover, the two chat routes, contract entries and CLI command.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-5-task-1"
-          ]
+          ],
+          "commit_sha": "7c9a9ba"
         },
         {
           "id": "phase-5-task-3",
           "name": "Write tests and implement ChatPanel",
           "description": "Build the ChatPanel in both modes with plain-text rendering, chat status, not-part-of-review-record label and Esc layer.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-5-task-2"
-          ]
+          ],
+          "commit_sha": "7c9a9ba"
         },
         {
           "id": "phase-5-task-4",
           "name": "Build adversarial 60x3 harness",
           "description": "Add the 60-case corpus, scoring harness, replay fixtures in cargo test and the env-gated live runner.",
-          "status": "backlog",
+          "status": "done",
           "depends_on": [
             "phase-5-task-2"
-          ]
+          ],
+          "commit_sha": "7c9a9ba"
         },
         {
           "id": "phase-5-task-5",
           "name": "Execute test scenarios for phase 5",
           "description": "Run the phase-5 scenarios and record evidence.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-10",
             "TS-11",
@@ -405,27 +409,34 @@
           "depends_on": [
             "phase-5-task-3",
             "phase-5-task-4"
-          ]
+          ],
+          "commit_sha": "7c9a9ba"
         },
         {
           "id": "phase-5-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "blocked",
+          "blocked_reason": "Checkpoint awaits the operator's end-of-work verification (user: 'do it all I will verify at the end').",
+          "request": {
+            "request_id": "01M7FP3TSVWTK6QK3MTQBZXGFV",
+            "status": "open",
+            "raised_at": "2026-11-15T13:24:58Z"
+          }
         }
       ]
     },
     {
       "id": "phase-6",
       "name": "Final verification and release gates",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-6-task-1",
           "name": "Re-run the full test plan",
           "description": "Re-run every scenario against the finished feature, close any traceability gap and confirm coverage above 80%.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-01",
             "TS-02",
@@ -484,26 +495,39 @@
             "TS-58",
             "TS-59",
             "TS-60"
-          ]
+          ],
+          "commit_sha": "fd7a16a"
         },
         {
           "id": "phase-6-task-2",
           "name": "CLI/UI parity and UAT",
           "description": "Verify every new route has a matching CLI command and walk the inbox AC 1-10 UAT checklist.",
-          "status": "backlog",
+          "status": "blocked",
           "test_scenarios": [
             "TS-45",
             "TS-48"
-          ]
+          ],
+          "blocked_reason": "TS-45 passed (fd7a16a). TS-48 manual UAT awaits the operator's end-of-work verification.",
+          "request": {
+            "request_id": "01M7FPCCC043DC3XEAK29TQPTG",
+            "status": "open",
+            "raised_at": "2026-11-15T13:29:38Z"
+          }
         },
         {
           "id": "phase-6-task-3",
           "name": "Live adversarial run (chat release gate)",
           "description": "Run the live 60x3 suite once AC-07a/b is approved, and keep chat unreleased until it passes.",
-          "status": "backlog",
+          "status": "blocked",
           "test_scenarios": [
             "TS-18"
-          ]
+          ],
+          "blocked_reason": "TS-18 live adversarial run is the chat release gate; it waits on the operator approving the AC-07a/b amendment (handover section 6).",
+          "request": {
+            "request_id": "01M7FPCCH974KEK6E51ZC629TM",
+            "status": "open",
+            "raised_at": "2026-11-15T13:29:39Z"
+          }
         },
         {
           "id": "phase-6-task-4",
