@@ -261,6 +261,28 @@ impl Default for SystemAgentConfig {
     }
 }
 
+/// `notify:` in `~/.ai/sebenza.yaml`: the dismissal-notice dispatcher.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotifyConfig {
+    /// Dispatcher attempts before a notice is `failed` (then manual Retry).
+    pub max_attempts: u32,
+    /// First backoff; doubles per failure, capped at 15 minutes.
+    pub base_delay_secs: u64,
+    /// How often the dispatcher looks for due notices.
+    pub poll_secs: u64,
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 6,
+            base_delay_secs: 5,
+            poll_secs: 30,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OneshotConfig {

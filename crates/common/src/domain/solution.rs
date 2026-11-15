@@ -234,6 +234,19 @@ pub fn idempotency_key(kind: &InboxEventKind) -> Option<String> {
             instruction_hash,
             ..
         } => Some(format!("handover:{project}:{instruction_hash}")),
+        InboxEventKind::RequestDismissed { request_id, .. } => {
+            Some(format!("{request_id}:dismissal"))
+        }
+        InboxEventKind::RequestArchived { request_id, .. } => Some(format!("archive:{request_id}")),
+        InboxEventKind::RequestMigrated { request_id, .. } => {
+            Some(format!("migrated:{request_id}"))
+        }
+        InboxEventKind::NoticeAttempt {
+            request_id,
+            attempt,
+            outcome,
+            ..
+        } => Some(format!("notice:{request_id}:{attempt}:{outcome:?}")),
         _ => None,
     }
 }

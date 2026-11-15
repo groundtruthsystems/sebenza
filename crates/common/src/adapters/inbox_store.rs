@@ -167,6 +167,30 @@ fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// Where a durable append writes: one `write` of the whole line, then a data
+/// sync. A trait so a test can see the calls and fail a write midway.
+pub(crate) trait DurableSink {
+    fn write_once(&mut self, buf: &[u8]) -> std::io::Result<()>;
+    fn sync(&mut self) -> std::io::Result<()>;
+}
+
+impl DurableSink for fs::File {
+    fn write_once(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.write_all(buf)
+    }
+    fn sync(&mut self) -> std::io::Result<()> {
+        self.sync_data()
+    }
+}
+
+/// Write `line` in one call and fsync it. An error from either step is
+/// returned; whatever partial line a failed write left is ignored by every
+/// reader, because only whole parseable lines are events.
+pub(crate) fn write_durably(sink: &mut impl DurableSink, line: &[u8]) -> std::io::Result<()> {
+    sink.write_once(line)?;
+    sink.sync()
+}
+
 impl InboxStore {
     /// A store over `~/.ai/sebenza/inbox/`, the global location.
     pub fn new() -> Self {
@@ -501,6 +525,25 @@ impl InboxStore {
     /// Every draft in the directory, newest ULID first. Non-`.md` files and
     /// non-ULID names are skipped; one bad draft never hides the rest, and a
     /// missing directory lists empty.
+    /// Every item id in the store, sorted (ULIDs sort by creation time).
+    pub fn ids(&self) -> Result<Vec<String>, InboxStoreError> {
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.into()),
+        };
+        let mut ids: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                let id = name.strip_suffix(".md")?.to_string();
+                is_ulid(&id).then_some(id)
+            })
+            .collect();
+        ids.sort();
+        Ok(ids)
+    }
+
     pub fn list(&self) -> Result<Vec<InboxDraftView>, InboxStoreError> {
         let mut out = Vec::new();
         let entries = match fs::read_dir(&self.dir) {
@@ -740,6 +783,88 @@ impl InboxStore {
             self.append_unlocked(&path, author, parent_event_id, kind)?,
             true,
         ))
+    }
+
+    /// Validate against the current log and append, as one step under the
+    /// log's lock, durably (one write, then fsync). `check` sees every
+    /// parseable event and returns the event to append, or an error that
+    /// appends nothing. Two racing callers therefore cannot both pass a
+    /// check the other's event would fail (operator rule 2a). A torn final
+    /// line is skipped by [`Self::read_events`], so a crash mid-write counts
+    /// as nothing written (rule 2b).
+    pub fn append_event_checked<E: From<InboxStoreError>>(
+        &self,
+        id: &str,
+        author: EventAuthor,
+        parent_event_id: Option<String>,
+        check: impl FnOnce(&[InboxEvent]) -> Result<InboxEventKind, E>,
+    ) -> Result<(InboxEvent, bool), E> {
+        if !self.path_for(id)?.is_file() {
+            return Err(InboxStoreError::NotFound(id.to_string()).into());
+        }
+        let path = self.sidecar(id, "events.jsonl")?;
+        let lock = path_lock(&path);
+        let _guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let events = self.read_events(id)?;
+        let kind = check(&events)?;
+        if let Some(key) = idempotency_key(&kind)
+            && let Some(e) = events
+                .into_iter()
+                .find(|e| idempotency_key(&e.kind).as_deref() == Some(key.as_str()))
+        {
+            return Ok((e, false));
+        }
+        let event = self.new_event(author, parent_event_id, kind);
+        let line = Self::line_for(&path, &event)?;
+        self.ensure_dir()?;
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .mode(0o600)
+            .open(&path)
+            .map_err(InboxStoreError::from)?;
+        write_durably(&mut f, line.as_bytes()).map_err(InboxStoreError::from)?;
+        Ok((event, true))
+    }
+
+    /// [`Self::append_event_once`], durably: the dispatcher's notice attempts.
+    pub fn append_event_once_durable(
+        &self,
+        id: &str,
+        author: EventAuthor,
+        parent_event_id: Option<String>,
+        kind: InboxEventKind,
+    ) -> Result<(InboxEvent, bool), InboxStoreError> {
+        self.append_event_checked::<InboxStoreError>(id, author, parent_event_id, |_| Ok(kind))
+    }
+
+    fn new_event(
+        &self,
+        author: EventAuthor,
+        parent_event_id: Option<String>,
+        kind: InboxEventKind,
+    ) -> InboxEvent {
+        InboxEvent {
+            schema_version: INBOX_EVENT_SCHEMA_VERSION,
+            event_id: random_ulid(),
+            ts: now_rfc3339(),
+            author: author.kind,
+            caller: author.caller,
+            parent_event_id,
+            kind,
+        }
+    }
+
+    /// The serialised line, newline-terminated, with a leading newline when
+    /// the log ends in a torn tail so the new line starts fresh.
+    fn line_for(path: &Path, event: &InboxEvent) -> Result<String, InboxStoreError> {
+        let mut line = serde_json::to_string(event)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        line.push('\n');
+        if path.exists() && !ends_with_newline(path)? {
+            line.insert(0, '\n');
+        }
+        Ok(line)
     }
 
     fn append_unlocked(
@@ -2013,5 +2138,58 @@ mod tests {
         assert_eq!(removed.len(), 2);
         assert!(s.dir().join(format!("{}.events.jsonl", keep.id)).is_file());
         assert_eq!(s.list().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod durable_tests {
+    use super::*;
+
+    /// Records the calls a durable append makes; can fail the write midway.
+    struct Recorder {
+        calls: Vec<&'static str>,
+        written: Vec<u8>,
+        fail_write: bool,
+    }
+    impl DurableSink for Recorder {
+        fn write_once(&mut self, buf: &[u8]) -> std::io::Result<()> {
+            self.calls.push("write");
+            if self.fail_write {
+                self.written.extend_from_slice(&buf[..buf.len() / 2]);
+                return Err(std::io::Error::other("disk full"));
+            }
+            self.written.extend_from_slice(buf);
+            Ok(())
+        }
+        fn sync(&mut self) -> std::io::Result<()> {
+            self.calls.push("sync");
+            Ok(())
+        }
+    }
+
+    // TS-60: one write, then a data sync; a failed write is not synced and
+    // its partial line is ignored by every reader.
+    #[test]
+    fn durable_append_is_one_write_then_sync() {
+        let mut ok = Recorder {
+            calls: vec![],
+            written: vec![],
+            fail_write: false,
+        };
+        write_durably(&mut ok, b"{\"a\":1}\n").unwrap();
+        assert_eq!(ok.calls, vec!["write", "sync"]);
+
+        let mut bad = Recorder {
+            calls: vec![],
+            written: vec![],
+            fail_write: true,
+        };
+        assert!(write_durably(&mut bad, b"{\"schema_version\":1,\"x\":2}\n").is_err());
+        assert_eq!(bad.calls, vec!["write"], "no sync after a failed write");
+        let partial = String::from_utf8(bad.written).unwrap();
+        assert!(
+            serde_json::from_str::<InboxEvent>(&partial).is_err(),
+            "partial line never parses"
+        );
     }
 }

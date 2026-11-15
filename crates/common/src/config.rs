@@ -571,6 +571,33 @@ pub fn load_system_agent_config_from(
     parse_system_agent_config(doc.as_mapping().and_then(|m| m.get("systemAgent")))
 }
 
+/// The machine-wide `notify:` block from `~/.ai/sebenza.yaml`. Missing file
+/// or block is the default; a block of the wrong shape is an error.
+pub fn load_notify_config() -> std::result::Result<crate::domain::config::NotifyConfig, String> {
+    load_notify_config_from(&global_config_path())
+}
+
+pub fn load_notify_config_from(
+    path: &Path,
+) -> std::result::Result<crate::domain::config::NotifyConfig, String> {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Default::default()),
+        Err(e) => return Err(format!("cannot read {}: {e}", path.display())),
+    };
+    let doc: serde_yaml::Value =
+        serde_yaml::from_str(&content).map_err(|e| format!("not valid YAML: {e}"))?;
+    let Some(block) = doc.as_mapping().and_then(|m| m.get("notify")) else {
+        return Ok(Default::default());
+    };
+    let cfg: crate::domain::config::NotifyConfig =
+        serde_yaml::from_value(block.clone()).map_err(|e| format!("notify: {e}"))?;
+    if cfg.max_attempts == 0 || cfg.poll_secs == 0 {
+        return Err("notify: maxAttempts and pollSecs must be at least 1".to_string());
+    }
+    Ok(cfg)
+}
+
 /// The machine-wide `factory:` block from `~/.ai/sebenza.yaml`.
 pub fn load_factory_config() -> std::result::Result<
     crate::domain::factory::FactoryConfig,
@@ -929,5 +956,24 @@ mod factory_config_tests {
         let path = temp("bad");
         fs::write(&path, "factory:\n  solution: [1, 2]\n").unwrap();
         assert!(load_factory_config_from(&path).is_err());
+    }
+}
+
+#[cfg(test)]
+mod notify_config_tests {
+    use super::*;
+
+    #[test]
+    fn notify_block_defaults_and_overrides() {
+        let dir = std::env::temp_dir().join(format!("sebenza-notify-{}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("sebenza.yaml");
+        let _ = fs::remove_file(&path);
+        assert_eq!(load_notify_config_from(&path).unwrap().max_attempts, 6);
+        fs::write(&path, "notify:\n  maxAttempts: 3\n").unwrap();
+        let c = load_notify_config_from(&path).unwrap();
+        assert_eq!((c.max_attempts, c.base_delay_secs, c.poll_secs), (3, 5, 30));
+        fs::write(&path, "notify:\n  maxAttempts: 0\n").unwrap();
+        assert!(load_notify_config_from(&path).is_err());
     }
 }

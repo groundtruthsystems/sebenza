@@ -505,6 +505,22 @@ pub fn build_router(state: AppState) -> Router {
             post(crate::inbox_routes::retry_triage),
         )
         .route(
+            "/api/inbox/{id}/requests/{rid}/dismiss",
+            post(crate::inbox_routes::dismiss_request),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/archive",
+            post(crate::inbox_routes::archive_request),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/notice/retry",
+            post(crate::inbox_routes::retry_notice),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/history",
+            get(crate::inbox_routes::request_history),
+        )
+        .route(
             "/api/inbox/{id}/agent/jobs/{job_id}",
             get(crate::inbox_routes::get_agent_job),
         )

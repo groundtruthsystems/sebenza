@@ -11,14 +11,18 @@ use crate::adapters::inbox_store::{
 };
 use crate::adapters::projects_registry::ProjectsRegistry;
 use crate::domain::inbox_events::{
-    AgentSession, AuthorKind, InboxEvent, InboxEventKind, REDACTED_BODY, RequestStatus,
-    RequestView, TaskLink, Thread, WorktreeKey, apply_redactions, content_hash as hash_of,
-    fold_requests,
+    AgentSession, AuthorKind, InboxEvent, InboxEventKind, NoticeEnqueued, NoticeKind,
+    NoticeOutcome, NoticeTrigger, REDACTED_BODY, RequestStatus, RequestView, TaskLink, Thread,
+    WorktreeKey, apply_redactions, content_hash as hash_of, fold_requests, fold_requests_with,
 };
 use crate::domain::model::{
     DraftStatus, InboxDraft, InboxDraftView, Priority, PrioritySource, ProjectRef, inbox_order,
 };
 use crate::domain::note_codec::InboxNote;
+use crate::domain::request_lifecycle::{
+    NoticeState, RequestFilter, RequestHistory, request_history,
+};
+use crate::domain::solution::CredentialClass;
 use crate::services::inbox_convert::{
     ConversionItem, ConversionOutcome, ConversionRunner, ConversionTarget, TargetError,
     run_conversion_item, status_after, validate_targets,
@@ -411,7 +415,34 @@ pub struct InboxService {
     /// deliveries they start, so a state check and the event it gates cannot
     /// interleave with another decision.
     decisions: Mutex<()>,
+    /// Dismissal-notice settings (`notify:` in `~/.ai/sebenza.yaml`).
+    notify: NotifySettings,
+    /// Serialises notice attempts (dispatcher and manual Retry), so an
+    /// attempt number is never used twice.
+    notices: Mutex<()>,
 }
+
+/// `notify:` settings the service needs: when a notice counts as failed and
+/// how the dispatcher backs off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotifySettings {
+    pub max_attempts: u32,
+    pub base_delay_secs: u64,
+}
+
+impl Default for NotifySettings {
+    fn default() -> Self {
+        Self {
+            max_attempts: crate::domain::request_lifecycle::DEFAULT_NOTICE_MAX_ATTEMPTS,
+            base_delay_secs: 5,
+        }
+    }
+}
+
+/// The actor recorded on backfill events.
+pub const MIGRATION_ACTOR: &str = "system:migration";
+/// The actor recorded on dispatcher notice attempts.
+pub const DISPATCHER_ACTOR: &str = "system:notice-dispatcher";
 
 impl InboxService {
     /// Build over an explicit store and registry, with default limits and
@@ -428,7 +459,19 @@ impl InboxService {
             observer: RwLock::new(None),
             delivery: RwLock::new(None),
             decisions: Mutex::new(()),
+            notify: NotifySettings::default(),
+            notices: Mutex::new(()),
         }
+    }
+
+    /// Replace the dismissal-notice settings.
+    pub fn with_notify(mut self, notify: NotifySettings) -> Self {
+        self.notify = notify;
+        self
+    }
+
+    pub fn notify_settings(&self) -> NotifySettings {
+        self.notify
     }
 
     /// Replace the ingress limits.
@@ -1393,7 +1436,24 @@ impl InboxService {
 
     /// Every request on the item, folded from the log, redactions applied.
     pub fn list_requests(&self, id: &str) -> Result<Vec<RequestView>, InboxServiceError> {
-        Ok(fold_requests(&self.events(id)?))
+        Ok(fold_requests_with(
+            &self.events(id)?,
+            self.notify.max_attempts,
+        ))
+    }
+
+    /// The requests a Requests-tab filter shows (FR-05). Archived requests
+    /// stay in their status's filter and in All.
+    pub fn list_requests_filtered(
+        &self,
+        id: &str,
+        filter: RequestFilter,
+    ) -> Result<Vec<RequestView>, InboxServiceError> {
+        Ok(self
+            .list_requests(id)?
+            .into_iter()
+            .filter(|r| filter.matches(r.status))
+            .collect())
     }
 
     /// Apply a worktree agent's request or comment, after checking the
@@ -1510,7 +1570,10 @@ impl InboxService {
 impl InboxService {
     /// One request, folded from the log with redactions applied.
     pub fn request(&self, id: &str, request_id: &str) -> Result<RequestView, InboxServiceError> {
-        find_request(&self.events(id)?, request_id)
+        self.list_requests(id)?
+            .into_iter()
+            .find(|r| r.request_id == request_id)
+            .ok_or_else(|| InboxServiceError::UnknownRequest(request_id.to_string()))
     }
 
     /// The system agent's proposed resolution (AA-D2). Only an open request
@@ -1936,6 +1999,328 @@ impl InboxService {
     }
 }
 
+// --- Request lifecycle: dismiss, archive, history, notices, backfill -------
+
+impl InboxService {
+    /// Dismiss a request (FR-01–03). Allowed from open, proposed and
+    /// delivery_failed; anything else is `WrongState` (409). One durable line
+    /// records the status change, the notice outbox entry and, for a
+    /// delivery_failed request, the redelivery cancel. The check and the
+    /// append run under the decisions lock and the log lock together.
+    pub fn dismiss_request(
+        &self,
+        id: &str,
+        request_id: &str,
+        credential: CredentialClass,
+    ) -> Result<RequestView, InboxServiceError> {
+        self.parsed(id)?;
+        let _decide = self.decisions.lock().unwrap_or_else(|e| e.into_inner());
+        let author = EventAuthor {
+            caller: Some(credential.as_str().to_string()),
+            ..EventAuthor::operator()
+        };
+        let max = self.notify.max_attempts;
+        let (event, _) = self
+            .store
+            .append_event_checked(id, author, None, |events| {
+                let view = fold_requests_with(events, max)
+                    .into_iter()
+                    .find(|r| r.request_id == request_id)
+                    .ok_or_else(|| InboxServiceError::UnknownRequest(request_id.to_string()))?;
+                if !matches!(
+                    view.status,
+                    RequestStatus::Open | RequestStatus::Proposed | RequestStatus::DeliveryFailed
+                ) {
+                    return Err(InboxServiceError::WrongState(
+                        status_name(view.status),
+                        "only an open, proposed or delivery_failed request can be dismissed",
+                    ));
+                }
+                Ok(InboxEventKind::RequestDismissed {
+                    request_id: request_id.to_string(),
+                    from: view.status,
+                    cancels_redelivery: view.status == RequestStatus::DeliveryFailed,
+                    credential,
+                    notice: view.delivers_to_pane().then(|| NoticeEnqueued {
+                        kind: NoticeKind::Dismissal,
+                        key: format!("{request_id}:dismissal"),
+                    }),
+                })
+            })?;
+        let mut record = AuditRecord::new("inbox.request.dismissed", id, AuthorKind::Operator)
+            .with_caller(&Some(credential.as_str().to_string()));
+        record.request_id = Some(request_id.to_string());
+        self.audit.record(&record.with_event(&event));
+        self.request(id, request_id)
+    }
+
+    /// Archive a confirmed or resolved request (FR-04). Sets `archivedAt`/
+    /// `archivedBy` and leaves the status alone; any other status, or an
+    /// already archived request, is `WrongState` (409).
+    pub fn archive_request(
+        &self,
+        id: &str,
+        request_id: &str,
+        credential: CredentialClass,
+    ) -> Result<RequestView, InboxServiceError> {
+        self.parsed(id)?;
+        let _decide = self.decisions.lock().unwrap_or_else(|e| e.into_inner());
+        let author = EventAuthor {
+            caller: Some(credential.as_str().to_string()),
+            ..EventAuthor::operator()
+        };
+        let max = self.notify.max_attempts;
+        let (event, _) = self
+            .store
+            .append_event_checked(id, author, None, |events| {
+                let view = fold_requests_with(events, max)
+                    .into_iter()
+                    .find(|r| r.request_id == request_id)
+                    .ok_or_else(|| InboxServiceError::UnknownRequest(request_id.to_string()))?;
+                if !matches!(
+                    view.status,
+                    RequestStatus::Confirmed | RequestStatus::Resolved
+                ) {
+                    return Err(InboxServiceError::WrongState(
+                        status_name(view.status),
+                        "only a confirmed or resolved request can be archived",
+                    ));
+                }
+                if view.archived_at.is_some() {
+                    return Err(InboxServiceError::WrongState(
+                        "archived",
+                        "the request is already archived",
+                    ));
+                }
+                Ok(InboxEventKind::RequestArchived {
+                    request_id: request_id.to_string(),
+                    status_at_archive: view.status,
+                    credential,
+                })
+            })?;
+        let mut record = AuditRecord::new("inbox.request.archived", id, AuthorKind::Operator)
+            .with_caller(&Some(credential.as_str().to_string()));
+        record.request_id = Some(request_id.to_string());
+        self.audit.record(&record.with_event(&event));
+        self.request(id, request_id)
+    }
+
+    /// The request, its answers and its ordered events (FR-07).
+    pub fn request_history(
+        &self,
+        id: &str,
+        request_id: &str,
+    ) -> Result<RequestHistory, InboxServiceError> {
+        request_history(&self.events(id)?, request_id, self.notify.max_attempts)
+            .ok_or_else(|| InboxServiceError::UnknownRequest(request_id.to_string()))
+    }
+
+    /// The operator's Retry on a failed dismissal notice (FR-09): one manual
+    /// attempt now. A pending or sent notice, or none, is `WrongState` (409).
+    pub fn retry_notice(
+        &self,
+        id: &str,
+        request_id: &str,
+        credential: CredentialClass,
+    ) -> Result<RequestView, InboxServiceError> {
+        self.parsed(id)?;
+        let _notices = self.notices.lock().unwrap_or_else(|e| e.into_inner());
+        let view = self.request(id, request_id)?;
+        match view.notice.as_ref().map(|n| n.state) {
+            Some(NoticeState::Failed) => {}
+            Some(NoticeState::Pending) => {
+                return Err(InboxServiceError::WrongState(
+                    "pending",
+                    "the notice is still being retried automatically",
+                ));
+            }
+            Some(NoticeState::Sent) => {
+                return Err(InboxServiceError::WrongState(
+                    "sent",
+                    "the notice was already delivered",
+                ));
+            }
+            None => {
+                return Err(InboxServiceError::WrongState(
+                    status_name(view.status),
+                    "the request has no notice to retry",
+                ));
+            }
+        }
+        self.notice_attempt(id, &view, NoticeTrigger::Manual, Some(credential.as_str()))?;
+        self.request(id, request_id)
+    }
+
+    /// One dispatcher pass over every item: send each pending notice whose
+    /// backoff has elapsed. Returns how many attempts were made. A notice
+    /// outcome never touches request status.
+    pub fn dispatch_due_notices(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<usize, InboxServiceError> {
+        let mut made = 0;
+        for id in self.store.ids()? {
+            let _notices = self.notices.lock().unwrap_or_else(|e| e.into_inner());
+            let Ok(requests) = self.list_requests(&id) else {
+                continue;
+            };
+            for view in requests {
+                let Some(notice) = view.notice.as_ref() else {
+                    continue;
+                };
+                if notice.state != NoticeState::Pending {
+                    continue;
+                }
+                let due = match notice.last_attempt_at.as_deref() {
+                    None => true,
+                    Some(ts) => chrono::DateTime::parse_from_rfc3339(ts)
+                        .map(|t| {
+                            let wait = notice.backoff_secs(self.notify.base_delay_secs) as i64;
+                            t.with_timezone(&chrono::Utc) + chrono::Duration::seconds(wait) <= now
+                        })
+                        .unwrap_or(true),
+                };
+                if due {
+                    self.notice_attempt(&id, &view, NoticeTrigger::Dispatcher, None)?;
+                    made += 1;
+                }
+            }
+        }
+        Ok(made)
+    }
+
+    /// The number of pending notices across every item (observability).
+    pub fn pending_notice_count(&self) -> usize {
+        self.store
+            .ids()
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|id| self.list_requests(id).ok())
+            .flatten()
+            .filter(|r| {
+                r.notice
+                    .as_ref()
+                    .is_some_and(|n| n.state == NoticeState::Pending)
+            })
+            .count()
+    }
+
+    /// Record `started`, send through the existing delivery path with the
+    /// idempotency key in the text, then record `sent` or `failed`. A crash
+    /// between the two leaves a `started` with no outcome, which the fold
+    /// counts as a failure, so the dispatcher retries it. Callers hold the
+    /// notices lock.
+    fn notice_attempt(
+        &self,
+        id: &str,
+        view: &RequestView,
+        trigger: NoticeTrigger,
+        operator: Option<&str>,
+    ) -> Result<(), InboxServiceError> {
+        let Some(notice) = view.notice.as_ref() else {
+            return Ok(());
+        };
+        let attempt = notice.last_attempt + 1;
+        let author = || match operator {
+            Some(c) => EventAuthor {
+                caller: Some(c.to_string()),
+                ..EventAuthor::operator()
+            },
+            None => EventAuthor {
+                caller: Some(DISPATCHER_ACTOR.to_string()),
+                ..EventAuthor::system_agent()
+            },
+        };
+        let kind = |outcome, error: Option<String>| InboxEventKind::NoticeAttempt {
+            request_id: view.request_id.clone(),
+            attempt,
+            trigger,
+            outcome,
+            error,
+        };
+        self.store.append_event_once_durable(
+            id,
+            author(),
+            None,
+            kind(NoticeOutcome::Started, None),
+        )?;
+        let delivery = self
+            .delivery
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let sent = match (delivery, view.worktree.as_ref()) {
+            (Some(d), Some(w)) => {
+                d.deliver_dismissal(w, &view.request_id, &view.title, &notice.key)
+            }
+            (None, _) => Err("no pane delivery is configured".to_string()),
+            (_, None) => Err("the request has no worktree pane".to_string()),
+        };
+        let (outcome, error) = match sent {
+            Ok(()) => (NoticeOutcome::Sent, None),
+            Err(e) => (
+                NoticeOutcome::Failed,
+                Some(e.chars().take(MAX_ERROR_CHARS).collect()),
+            ),
+        };
+        let (event, _) =
+            self.store
+                .append_event_once_durable(id, author(), None, kind(outcome, error))?;
+        let action = if outcome == NoticeOutcome::Sent {
+            "inbox.notice.sent"
+        } else {
+            "inbox.notice.failed"
+        };
+        let mut record = AuditRecord::new(action, id, event.author).with_caller(&event.caller);
+        record.request_id = Some(view.request_id.clone());
+        record.attempt = Some(attempt);
+        self.audit.record(&record.with_event(&event));
+        Ok(())
+    }
+
+    /// The startup backfill (FR-10): one `migrated` event, actor
+    /// `system:migration`, current time, for each request that has none.
+    /// Checked under the log lock and keyed, so restarts never duplicate.
+    /// Returns how many were appended.
+    pub fn backfill_migrations(&self) -> Result<usize, InboxServiceError> {
+        let mut appended = 0;
+        for id in self.store.ids()? {
+            let Ok(events) = self.store.read_events(&id) else {
+                continue;
+            };
+            let migrated: std::collections::HashSet<String> = events
+                .iter()
+                .filter_map(|e| match &e.kind {
+                    InboxEventKind::RequestMigrated { request_id, .. } => Some(request_id.clone()),
+                    _ => None,
+                })
+                .collect();
+            for view in fold_requests_with(&events, self.notify.max_attempts) {
+                if migrated.contains(&view.request_id) {
+                    continue;
+                }
+                let author = EventAuthor {
+                    caller: Some(MIGRATION_ACTOR.to_string()),
+                    ..EventAuthor::system_agent()
+                };
+                let (_, fresh) = self.store.append_event_once_durable(
+                    &id,
+                    author,
+                    None,
+                    InboxEventKind::RequestMigrated {
+                        request_id: view.request_id.clone(),
+                        status: view.status,
+                    },
+                )?;
+                if fresh {
+                    appended += 1;
+                }
+            }
+        }
+        Ok(appended)
+    }
+}
+
 /// Longest error kept on a `triage_failed` or `delivery_failed` event.
 const MAX_ERROR_CHARS: usize = 500;
 
@@ -1975,6 +2360,7 @@ fn status_name(status: RequestStatus) -> &'static str {
         RequestStatus::Confirmed => "confirmed",
         RequestStatus::Resolved => "resolved",
         RequestStatus::DeliveryFailed => "delivery_failed",
+        RequestStatus::Dismissed => "dismissed",
     }
 }
 
@@ -4872,5 +5258,676 @@ mod resolution_tests {
             .unwrap_err();
         assert_eq!(status(err), "400");
         assert!(f.pane.sent().is_empty());
+    }
+
+    // --- Request lifecycle (track sebenza_polishing, phase 1) ---------------
+
+    use crate::domain::inbox_events::{NoticeOutcome, NoticeTrigger};
+    use crate::domain::request_lifecycle::{NoticeState, RequestFilter};
+    use crate::domain::solution::{CredentialClass, idempotency_key};
+
+    const OP: CredentialClass = CredentialClass::OperatorSession;
+
+    fn far_future() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc::now() + chrono::Duration::days(1)
+    }
+
+    fn log_text(f: &Fixture, id: &str) -> String {
+        std::fs::read_to_string(f.store.dir().join(format!("{id}.events.jsonl")))
+            .unwrap_or_default()
+    }
+
+    fn answered(f: &Fixture) -> (String, String) {
+        let (id, rid) = with_request(f, "Which loader?");
+        f.svc
+            .confirm_resolution(&id, &rid, Some("use A"), &content_hash("use A"), None)
+            .expect("confirm");
+        (id, rid)
+    }
+
+    fn delivery_failed(f: &Fixture) -> (String, String) {
+        let (id, rid) = with_request(f, "Which loader?");
+        f.pane.fail_with(Some("no pane"));
+        f.svc
+            .confirm_resolution(&id, &rid, Some("use A"), &content_hash("use A"), None)
+            .expect("confirm");
+        f.pane.fail_with(None);
+        assert_eq!(
+            f.svc.request(&id, &rid).unwrap().status,
+            RequestStatus::DeliveryFailed
+        );
+        (id, rid)
+    }
+
+    fn wrong_state(r: Result<RequestView, InboxServiceError>) -> bool {
+        matches!(r, Err(InboxServiceError::WrongState(..)))
+    }
+
+    // TS-25 / TS-41: one durable line, notice key, actor from the credential.
+    #[test]
+    fn dismiss_appends_one_compound_line_with_the_notice_key() {
+        let f = fixture();
+        let (id, rid) = with_request(&f, "b");
+        let before = f.store.read_events(&id).unwrap().len();
+        let v = f.svc.dismiss_request(&id, &rid, OP).expect("dismiss");
+        assert_eq!(v.status, RequestStatus::Dismissed);
+        assert_eq!(v.dismissed_by.as_deref(), Some("operator_session"));
+        let events = f.store.read_events(&id).unwrap();
+        assert_eq!(events.len(), before + 1, "exactly one line");
+        match &events.last().unwrap().kind {
+            InboxEventKind::RequestDismissed {
+                from,
+                notice,
+                cancels_redelivery,
+                ..
+            } => {
+                assert_eq!(*from, RequestStatus::Open);
+                assert!(!cancels_redelivery);
+                assert_eq!(notice.as_ref().unwrap().key, format!("{rid}:dismissal"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert_eq!(v.notice.unwrap().state, NoticeState::Pending);
+        assert!(f.audit.actions().contains(&"inbox.request.dismissed"));
+    }
+
+    // TS-26: a delivery_failed request's redelivery is cancelled.
+    #[test]
+    fn dismissing_delivery_failed_cancels_redelivery() {
+        let f = fixture();
+        let (id, rid) = delivery_failed(&f);
+        let sent_before = f.pane.sent().len();
+        let v = f.svc.dismiss_request(&id, &rid, OP).expect("dismiss");
+        assert_eq!(v.status, RequestStatus::Dismissed);
+        assert!(matches!(
+            &f.store.read_events(&id).unwrap().last().unwrap().kind,
+            InboxEventKind::RequestDismissed {
+                cancels_redelivery: true,
+                ..
+            }
+        ));
+        assert!(
+            wrong_state(f.svc.redeliver(&id, &rid, None)),
+            "redeliver refuses"
+        );
+        assert_eq!(f.pane.sent().len(), sent_before, "no answer redelivered");
+    }
+
+    // TS-27: confirmed, resolved and dismissed cannot be dismissed; log unchanged.
+    #[test]
+    fn dismiss_refuses_answered_and_dismissed_requests() {
+        let f = fixture();
+        let (id, rid) = answered(&f);
+        let log = log_text(&f, &id);
+        assert!(wrong_state(f.svc.dismiss_request(&id, &rid, OP)));
+        assert_eq!(log_text(&f, &id), log);
+        let (id2, rid2) = with_request(&f, "b");
+        f.svc.dismiss_request(&id2, &rid2, OP).unwrap();
+        let log2 = log_text(&f, &id2);
+        assert!(wrong_state(f.svc.dismiss_request(&id2, &rid2, OP)));
+        assert_eq!(log_text(&f, &id2), log2);
+    }
+
+    // TS-28: a failed write records nothing.
+    #[test]
+    fn a_failed_dismissal_write_records_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = fixture();
+        let (id, rid) = with_request(&f, "b");
+        let path = f.store.dir().join(format!("{id}.events.jsonl"));
+        let log = log_text(&f, &id);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o400)).unwrap();
+        let r = f.svc.dismiss_request(&id, &rid, OP);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        if nix_is_root() {
+            return; // root ignores the mode; nothing to prove here.
+        }
+        assert!(r.is_err(), "the write failed");
+        assert_eq!(log_text(&f, &id), log, "nothing recorded");
+        assert_eq!(
+            f.svc.request(&id, &rid).unwrap().status,
+            RequestStatus::Open
+        );
+    }
+
+    fn nix_is_root() -> bool {
+        std::fs::metadata("/proc/self")
+            .map(|m| {
+                use std::os::unix::fs::MetadataExt;
+                m.uid() == 0
+            })
+            .unwrap_or(false)
+    }
+
+    // TS-29: dismissal committed, daemon restarts before any send: exactly one notice.
+    #[test]
+    fn a_restart_after_commit_sends_the_notice_exactly_once() {
+        let f = fixture();
+        let (id, rid) = with_request(&f, "b");
+        f.svc.dismiss_request(&id, &rid, OP).unwrap();
+        // "Restart": a fresh service over the same files.
+        let restarted = InboxService::new(
+            InboxStore::with_dir(f.store.dir().to_path_buf()),
+            ProjectsRegistry::with_file(f.store.dir().join("../projects.json")),
+        );
+        restarted.set_pane_sink(f.pane.clone());
+        assert_eq!(restarted.dispatch_due_notices(far_future()).unwrap(), 1);
+        assert_eq!(restarted.dispatch_due_notices(far_future()).unwrap(), 0);
+        let notices: Vec<_> = f
+            .pane
+            .sent()
+            .into_iter()
+            .filter(|(_, t)| t.contains("dismissed"))
+            .collect();
+        assert_eq!(notices.len(), 1);
+        assert!(
+            notices[0].1.contains(&format!("{rid}:dismissal")),
+            "key quoted"
+        );
+        assert_eq!(
+            restarted.request(&id, &rid).unwrap().notice.unwrap().state,
+            NoticeState::Sent
+        );
+    }
+
+    // TS-30: an attempt interrupted after `started` is retried with the same key.
+    #[test]
+    fn an_interrupted_attempt_is_retried_with_the_same_key() {
+        let f = fixture();
+        let (id, rid) = with_request(&f, "b");
+        f.svc.dismiss_request(&id, &rid, OP).unwrap();
+        f.store
+            .append_event(
+                &id,
+                EventAuthor::system_agent(),
+                None,
+                InboxEventKind::NoticeAttempt {
+                    request_id: rid.clone(),
+                    attempt: 1,
+                    trigger: NoticeTrigger::Dispatcher,
+                    outcome: NoticeOutcome::Started,
+                    error: None,
+                },
+            )
+            .unwrap();
+        let v = f.svc.request(&id, &rid).unwrap();
+        assert_eq!(
+            v.notice.as_ref().unwrap().failures,
+            1,
+            "interrupted counts as a failure"
+        );
+        assert_eq!(v.notice.unwrap().state, NoticeState::Pending);
+        assert_eq!(f.svc.dispatch_due_notices(far_future()).unwrap(), 1);
+        let v = f.svc.request(&id, &rid).unwrap();
+        assert_eq!(v.notice.as_ref().unwrap().last_attempt, 2);
+        assert_eq!(v.notice.unwrap().state, NoticeState::Sent);
+        assert!(
+            f.pane
+                .sent()
+                .last()
+                .unwrap()
+                .1
+                .contains(&format!("{rid}:dismissal"))
+        );
+    }
+
+    // TS-31: racing manual retries send once.
+    #[test]
+    fn racing_retries_send_once() {
+        let f = fixture();
+        let svc = Arc::new(
+            InboxService::new(
+                InboxStore::with_dir(f.store.dir().to_path_buf()),
+                ProjectsRegistry::with_file(f.store.dir().join("../p.json")),
+            )
+            .with_notify(NotifySettings {
+                max_attempts: 1,
+                base_delay_secs: 0,
+            }),
+        );
+        svc.set_pane_sink(f.pane.clone());
+        let id = svc.create("Idea").unwrap().id;
+        convert_into(&f, &id, "/code/acme-demo", "feat-x");
+        let e = svc
+            .open_request(&id, EventAuthor::worktree_agent(), wt(), "t", "b")
+            .unwrap();
+        let rid = request_id_of(&e.kind).unwrap().to_string();
+        svc.dismiss_request(&id, &rid, OP).unwrap();
+        f.pane.fail_with(Some("down"));
+        svc.dispatch_due_notices(far_future()).unwrap();
+        assert_eq!(
+            svc.request(&id, &rid).unwrap().notice.unwrap().state,
+            NoticeState::Failed
+        );
+        f.pane.fail_with(None);
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let (svc, id, rid) = (svc.clone(), id.clone(), rid.clone());
+                std::thread::spawn(move || svc.retry_notice(&id, &rid, OP).is_ok())
+            })
+            .collect();
+        let ok = handles
+            .into_iter()
+            .filter(|_| true)
+            .map(|h| h.join().unwrap())
+            .filter(|x| *x)
+            .count();
+        assert_eq!(ok, 1, "one retry wins, the rest see sent (409)");
+        assert_eq!(
+            f.pane
+                .sent()
+                .iter()
+                .filter(|(_, t)| t.contains("dismissed"))
+                .count(),
+            1
+        );
+    }
+
+    // TS-32 / TS-56: backoff to max attempts, then failed; Retry rules.
+    #[test]
+    fn notices_fail_after_max_attempts_and_retry_is_manual() {
+        let f = fixture();
+        let svc = InboxService::new(
+            InboxStore::with_dir(f.store.dir().to_path_buf()),
+            ProjectsRegistry::with_file(f.store.dir().join("../p.json")),
+        )
+        .with_notify(NotifySettings {
+            max_attempts: 3,
+            base_delay_secs: 5,
+        });
+        svc.set_pane_sink(f.pane.clone());
+        let id = svc.create("Idea").unwrap().id;
+        convert_into(&f, &id, "/code/acme-demo", "feat-x");
+        let e = svc
+            .open_request(&id, EventAuthor::worktree_agent(), wt(), "t", "b")
+            .unwrap();
+        let rid = request_id_of(&e.kind).unwrap().to_string();
+        svc.dismiss_request(&id, &rid, OP).unwrap();
+        // TS-56: Retry while pending is refused and appends nothing.
+        let log = log_text(&f, &id);
+        assert!(wrong_state(svc.retry_notice(&id, &rid, OP)));
+        assert_eq!(log_text(&f, &id), log);
+        f.pane.fail_with(Some("pane gone"));
+        // Backoff: an immediate second pass does not retry.
+        assert_eq!(svc.dispatch_due_notices(chrono::Utc::now()).unwrap(), 1);
+        assert_eq!(
+            svc.dispatch_due_notices(chrono::Utc::now()).unwrap(),
+            0,
+            "backing off"
+        );
+        for _ in 0..5 {
+            svc.dispatch_due_notices(far_future()).unwrap();
+        }
+        let n = svc.request(&id, &rid).unwrap().notice.unwrap();
+        assert_eq!(n.state, NoticeState::Failed);
+        assert_eq!(n.failures, 3);
+        assert_eq!(
+            n.last_error.as_deref(),
+            Some("pane gone"),
+            "TS-55: reason recorded"
+        );
+        f.pane.fail_with(None);
+        let v = svc.retry_notice(&id, &rid, OP).expect("retry");
+        assert_eq!(v.notice.unwrap().state, NoticeState::Sent);
+        assert!(f.store.read_events(&id).unwrap().iter().any(|e| matches!(
+            e.kind,
+            InboxEventKind::NoticeAttempt {
+                trigger: NoticeTrigger::Manual,
+                outcome: NoticeOutcome::Sent,
+                ..
+            }
+        )));
+        assert!(wrong_state(svc.retry_notice(&id, &rid, OP)), "sent: 409");
+    }
+
+    // TS-33: notice outcomes never change request status.
+    #[test]
+    fn notice_outcomes_never_change_status() {
+        let f = fixture();
+        let (id, rid) = with_request(&f, "b");
+        f.svc.dismiss_request(&id, &rid, OP).unwrap();
+        f.pane.fail_with(Some("x"));
+        f.svc.dispatch_due_notices(far_future()).unwrap();
+        assert_eq!(
+            f.svc.request(&id, &rid).unwrap().status,
+            RequestStatus::Dismissed
+        );
+        f.pane.fail_with(None);
+        f.svc.dispatch_due_notices(far_future()).unwrap();
+        assert_eq!(
+            f.svc.request(&id, &rid).unwrap().status,
+            RequestStatus::Dismissed
+        );
+    }
+
+    // TS-34 / TS-54: archive keeps status; twice is 409 with one event.
+    #[test]
+    fn archive_flags_answered_requests_once() {
+        let f = fixture();
+        let (id, rid) = answered(&f);
+        assert_eq!(
+            f.svc.request(&id, &rid).unwrap().status,
+            RequestStatus::Resolved
+        );
+        let v = f
+            .svc
+            .archive_request(&id, &rid, CredentialClass::OperatorCli)
+            .unwrap();
+        assert_eq!(v.status, RequestStatus::Resolved);
+        assert!(v.archived_at.is_some());
+        assert_eq!(v.archived_by.as_deref(), Some("operator_cli"));
+        assert!(wrong_state(f.svc.archive_request(&id, &rid, OP)));
+        let archives = f
+            .store
+            .read_events(&id)
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e.kind, InboxEventKind::RequestArchived { .. }))
+            .count();
+        assert_eq!(archives, 1);
+        // TS-35 (service side): open and dismissed requests cannot be archived.
+        let (id2, rid2) = with_request(&f, "b");
+        assert!(wrong_state(f.svc.archive_request(&id2, &rid2, OP)));
+        f.svc.dismiss_request(&id2, &rid2, OP).unwrap();
+        assert!(wrong_state(f.svc.archive_request(&id2, &rid2, OP)));
+    }
+
+    // TS-36 / TS-37 (service side): filters and summaries, archived included.
+    #[test]
+    fn filters_map_statuses_and_summaries_survive_archive() {
+        let f = fixture();
+        let (id, open) = with_request(&f, "secret body CANARY-SECRET-0001");
+        let e = f
+            .svc
+            .open_request(&id, EventAuthor::worktree_agent(), wt(), "Second", "b")
+            .unwrap();
+        let answered_rid = request_id_of(&e.kind).unwrap().to_string();
+        f.svc
+            .confirm_resolution(&id, &answered_rid, Some("A"), &content_hash("A"), None)
+            .unwrap();
+        f.svc.archive_request(&id, &answered_rid, OP).unwrap();
+        let e = f
+            .svc
+            .open_request(&id, EventAuthor::worktree_agent(), wt(), "Third", "b")
+            .unwrap();
+        let dismissed = request_id_of(&e.kind).unwrap().to_string();
+        f.svc.dismiss_request(&id, &dismissed, OP).unwrap();
+        let ids = |flt| -> Vec<String> {
+            f.svc
+                .list_requests_filtered(&id, flt)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.request_id)
+                .collect()
+        };
+        assert_eq!(ids(RequestFilter::Unanswered), vec![open.clone()]);
+        assert_eq!(ids(RequestFilter::Answered), vec![answered_rid.clone()]);
+        assert_eq!(ids(RequestFilter::Dismissed), vec![dismissed.clone()]);
+        assert_eq!(ids(RequestFilter::All).len(), 3);
+        let all = f.svc.list_requests(&id).unwrap();
+        let archived = all.iter().find(|r| r.request_id == answered_rid).unwrap();
+        assert_eq!(archived.summary.request, "feat-x: Second");
+        assert_eq!(archived.summary.result.as_deref(), Some("Answer delivered"));
+        let first = all.iter().find(|r| r.request_id == open).unwrap();
+        assert!(!first.summary.request.contains("CANARY"), "title only");
+        assert_eq!(first.summary.result, None);
+    }
+
+    // TS-38: history is complete and ordered for dismissed and archived items.
+    #[test]
+    fn history_lists_every_event_in_order() {
+        let f = fixture();
+        let (id, rid) = answered(&f);
+        f.svc.archive_request(&id, &rid, OP).unwrap();
+        let h = f.svc.request_history(&id, &rid).unwrap();
+        let kinds: Vec<_> = h.events.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            vec!["created", "status_changed", "status_changed", "archived"]
+        );
+        assert_eq!(h.events[3].actor, "operator:operator_session");
+        assert_eq!(h.answers.len(), 1);
+        assert_eq!(h.answers[0].kind, "confirmed");
+
+        let (id2, rid2) = with_request(&f, "b");
+        f.svc.dismiss_request(&id2, &rid2, OP).unwrap();
+        f.svc.dispatch_due_notices(far_future()).unwrap();
+        let h = f.svc.request_history(&id2, &rid2).unwrap();
+        let kinds: Vec<_> = h.events.iter().map(|e| e.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "created",
+                "dismissed",
+                "notice_enqueued",
+                "notice_attempt",
+                "notice_attempt"
+            ]
+        );
+        assert_eq!(h.events[1].from, Some(RequestStatus::Open));
+        assert_eq!(h.events[1].to, Some(RequestStatus::Dismissed));
+        assert_eq!(h.events[4].detail.as_deref(), Some("dispatcher:sent"));
+        assert_eq!(h.events[4].actor, DISPATCHER_ACTOR);
+    }
+
+    // TS-39: two startups in a row leave the log byte-identical.
+    #[test]
+    fn backfill_is_idempotent_across_restarts() {
+        let f = fixture();
+        let (id, _) = with_request(&f, "b");
+        answered(&f);
+        let n = f.svc.backfill_migrations().unwrap();
+        assert!(n >= 2);
+        let after_first = log_text(&f, &id);
+        assert_eq!(f.svc.backfill_migrations().unwrap(), 0);
+        assert_eq!(log_text(&f, &id), after_first, "byte-identical");
+        let ev = f.store.read_events(&id).unwrap();
+        let m = ev
+            .iter()
+            .find(|e| matches!(e.kind, InboxEventKind::RequestMigrated { .. }))
+            .unwrap();
+        assert_eq!(m.caller.as_deref(), Some(MIGRATION_ACTOR));
+    }
+
+    // TS-40: every new keyed kind has an idempotency key.
+    #[test]
+    fn new_lifecycle_kinds_are_keyed() {
+        let kinds = [
+            InboxEventKind::RequestDismissed {
+                request_id: "R".into(),
+                from: RequestStatus::Open,
+                cancels_redelivery: false,
+                credential: OP,
+                notice: None,
+            },
+            InboxEventKind::RequestArchived {
+                request_id: "R".into(),
+                status_at_archive: RequestStatus::Resolved,
+                credential: OP,
+            },
+            InboxEventKind::RequestMigrated {
+                request_id: "R".into(),
+                status: RequestStatus::Open,
+            },
+            InboxEventKind::NoticeAttempt {
+                request_id: "R".into(),
+                attempt: 1,
+                trigger: NoticeTrigger::Dispatcher,
+                outcome: NoticeOutcome::Started,
+                error: None,
+            },
+        ];
+        for k in &kinds {
+            assert!(idempotency_key(k).is_some(), "{k:?} needs a key");
+        }
+        assert_eq!(idempotency_key(&kinds[0]).unwrap(), "R:dismissal");
+    }
+
+    // TS-43: audit records never carry request text.
+    #[test]
+    fn audit_records_carry_no_request_text() {
+        let f = fixture();
+        let id = f.svc.create("Idea").unwrap().id;
+        convert_into(&f, &id, "/code/acme-demo", "feat-x");
+        let e = f
+            .svc
+            .open_request(
+                &id,
+                EventAuthor::worktree_agent(),
+                wt(),
+                "CANARY-SECRET-0001",
+                "CANARY-SECRET-0001",
+            )
+            .unwrap();
+        let rid = request_id_of(&e.kind).unwrap().to_string();
+        f.svc.dismiss_request(&id, &rid, OP).unwrap();
+        f.svc.dispatch_due_notices(far_future()).unwrap();
+        for r in f.audit.0.lock().unwrap().iter().filter(|r| {
+            r.action.starts_with("inbox.notice") || r.action == "inbox.request.dismissed"
+        }) {
+            assert!(!format!("{r:?}").contains("CANARY"), "{r:?}");
+        }
+    }
+
+    // TS-44: a held item lock does not stall another item.
+    #[test]
+    fn one_items_lock_does_not_stall_another() {
+        let f = fixture();
+        let (id_a, _) = with_request(&f, "a");
+        let (id_b, rid_b) = with_request(&f, "b");
+        let store = InboxStore::with_dir(f.store.dir().to_path_buf());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let held = std::thread::spawn(move || {
+            store
+                .append_event_checked::<InboxStoreError>(
+                    &id_a,
+                    EventAuthor::operator(),
+                    None,
+                    |_| {
+                        tx.send(()).unwrap();
+                        std::thread::sleep(std::time::Duration::from_millis(1500));
+                        Err(InboxStoreError::InvalidId("held".into()))
+                    },
+                )
+                .ok();
+        });
+        rx.recv().unwrap();
+        let t0 = std::time::Instant::now();
+        f.svc.dismiss_request(&id_b, &rid_b, OP).unwrap();
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(1),
+            "not blocked by item A"
+        );
+        held.join().unwrap();
+    }
+
+    // TS-46: listing a large history stays fast.
+    #[test]
+    fn listing_a_large_history_is_fast() {
+        let f = fixture();
+        let id = f.svc.create("Idea").unwrap().id;
+        for i in 0..1500 {
+            f.store
+                .append_event(
+                    &id,
+                    EventAuthor::worktree_agent(),
+                    None,
+                    InboxEventKind::RequestOpened {
+                        request_id: format!("R{i:05}"),
+                        worktree: wt(),
+                        title: "t".into(),
+                        body: "b".into(),
+                        warnings: vec![],
+                        task: None,
+                        origin: None,
+                    },
+                )
+                .unwrap();
+        }
+        let t0 = std::time::Instant::now();
+        assert_eq!(
+            f.svc
+                .list_requests_filtered(&id, RequestFilter::All)
+                .unwrap()
+                .len(),
+            1500
+        );
+        assert!(
+            t0.elapsed() < std::time::Duration::from_secs(3),
+            "{:?}",
+            t0.elapsed()
+        );
+    }
+
+    // TS-51: existing decisions refuse a dismissed request.
+    #[test]
+    fn existing_decisions_refuse_dismissed_requests() {
+        let f = fixture();
+        let (id, rid) = proposed(&f, "use A");
+        f.svc.dismiss_request(&id, &rid, OP).unwrap();
+        assert!(wrong_state(f.svc.confirm_resolution(
+            &id,
+            &rid,
+            None,
+            &content_hash("use A"),
+            None
+        )));
+        assert!(wrong_state(f.svc.reject_request(&id, &rid, "no", None)));
+        assert!(wrong_state(f.svc.redeliver(&id, &rid, None)));
+        // A late proposal or delivery event never moves it either.
+        f.svc.record_proposal(&id, &rid, "late", "r").unwrap();
+        assert_eq!(
+            f.svc.request(&id, &rid).unwrap().status,
+            RequestStatus::Dismissed
+        );
+    }
+
+    // TS-57: racing dismissals: exactly one passes validation.
+    #[test]
+    fn racing_dismissals_pass_once() {
+        let f = fixture();
+        let (id, rid) = with_request(&f, "b");
+        let handles: Vec<_> = (0..6)
+            .map(|_| {
+                let (svc, id, rid) = (f.svc.clone(), id.clone(), rid.clone());
+                std::thread::spawn(move || svc.dismiss_request(&id, &rid, OP).is_ok())
+            })
+            .collect();
+        let ok = handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .filter(|x| *x)
+            .count();
+        assert_eq!(ok, 1);
+        let n = f
+            .store
+            .read_events(&id)
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e.kind, InboxEventKind::RequestDismissed { .. }))
+            .count();
+        assert_eq!(n, 1);
+    }
+
+    // TS-58: a torn final line counts as nothing written.
+    #[test]
+    fn a_torn_final_line_is_ignored() {
+        use std::io::Write as _;
+        let f = fixture();
+        let (id, rid) = with_request(&f, "b");
+        let before = f.svc.list_requests(&id).unwrap();
+        let path = f.store.dir().join(format!("{id}.events.jsonl"));
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        file.write_all(br#"{"schema_version":1,"event_id":"X","ts":"t","author":"operator","type":"request_dism"#).unwrap();
+        assert_eq!(f.svc.list_requests(&id).unwrap(), before);
+        // The next durable append starts on a fresh line and parses.
+        f.svc.dismiss_request(&id, &rid, OP).unwrap();
+        assert_eq!(
+            f.svc.request(&id, &rid).unwrap().status,
+            RequestStatus::Dismissed
+        );
     }
 }

@@ -206,9 +206,76 @@ pub enum InboxEventKind {
         project: String,
         credential: CredentialClass,
     },
+    /// The operator dismissed a request (track sebenza_polishing). One line
+    /// carries the status change, the outbox entry for the dismissal notice
+    /// and the redelivery cancel, so a dismissal is all or nothing.
+    RequestDismissed {
+        request_id: String,
+        from: RequestStatus,
+        /// The request was `delivery_failed`: no further answer redelivery.
+        #[serde(default)]
+        cancels_redelivery: bool,
+        credential: CredentialClass,
+        /// The notice outbox entry; absent when no pane receives the request.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notice: Option<NoticeEnqueued>,
+    },
+    /// The operator archived a confirmed or resolved request. Status unchanged.
+    RequestArchived {
+        request_id: String,
+        status_at_archive: RequestStatus,
+        credential: CredentialClass,
+    },
+    /// One attempt to deliver a request notice. `started` is written before
+    /// the send and `sent`/`failed` after it, so an attempt interrupted by a
+    /// crash is visible as a `started` with no outcome.
+    NoticeAttempt {
+        request_id: String,
+        attempt: u32,
+        trigger: NoticeTrigger,
+        outcome: NoticeOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
+    },
+    /// The startup backfill saw this request (actor `system:migration`).
+    RequestMigrated {
+        request_id: String,
+        status: RequestStatus,
+    },
     /// An event type written by a newer binary. Kept out of every fold.
     #[serde(other)]
     Unknown,
+}
+
+/// The outbox entry a dismissal carries. `key` is `request_id:dismissal`, the
+/// idempotency key the notice text quotes so an agent can drop a duplicate.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct NoticeEnqueued {
+    pub kind: NoticeKind,
+    pub key: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeKind {
+    Dismissal,
+}
+
+/// Who started a notice attempt: the dispatcher's retry loop or the
+/// operator's Retry action.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeTrigger {
+    Dispatcher,
+    Manual,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeOutcome {
+    Started,
+    Sent,
+    Failed,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
@@ -235,6 +302,8 @@ pub enum RequestStatus {
     Confirmed,
     Resolved,
     DeliveryFailed,
+    /// Dismissed by the operator. Terminal: later events never move it.
+    Dismissed,
 }
 
 /// The current state of one request, folded from the log.
@@ -272,6 +341,15 @@ pub struct RequestView {
     pub opened_at: String,
     /// The plan task this request blocks, as the agent named it.
     pub task: Option<TaskLink>,
+    /// Set by an archive; archiving never changes `status`.
+    pub archived_at: Option<String>,
+    pub archived_by: Option<String>,
+    pub dismissed_at: Option<String>,
+    pub dismissed_by: Option<String>,
+    /// Template summaries of the request and its result (title only).
+    pub summary: super::request_lifecycle::RequestSummary,
+    /// The dismissal notice outbox entry, when there is one.
+    pub notice: Option<super::request_lifecycle::NoticeView>,
 }
 
 /// A plan task a request is about: `track_id` and `task_id` from the
@@ -286,6 +364,15 @@ pub struct TaskLink {
 /// Fold the log into one view per request, in the order requests were opened.
 /// Events naming an unknown request are ignored.
 pub fn fold_requests(events: &[InboxEvent]) -> Vec<RequestView> {
+    fold_requests_with(
+        events,
+        super::request_lifecycle::DEFAULT_NOTICE_MAX_ATTEMPTS,
+    )
+}
+
+/// [`fold_requests`] with the configured `notify.maxAttempts`, which decides
+/// when a dismissal notice counts as `failed`.
+pub fn fold_requests_with(events: &[InboxEvent], max_notice_attempts: u32) -> Vec<RequestView> {
     let mut views: Vec<RequestView> = Vec::new();
     for e in events {
         let opened = match &e.kind {
@@ -340,56 +427,100 @@ pub fn fold_requests(events: &[InboxEvent]) -> Vec<RequestView> {
         let Some(v) = views.iter_mut().find(|v| v.request_id == rid) else {
             continue;
         };
-        match &e.kind {
-            // A late proposal never reopens a decided request.
-            InboxEventKind::Proposal {
-                proposal_id,
-                body,
-                warnings,
-                ..
-            } if matches!(v.status, RequestStatus::Open | RequestStatus::Proposed) => {
-                v.status = RequestStatus::Proposed;
-                v.flagged = false;
-                v.proposal_id = Some(proposal_id.clone());
-                v.proposal = Some(body.clone());
-                v.proposal_hash = Some(content_hash(body));
-                v.proposal_warnings = warnings.clone();
-            }
-            InboxEventKind::TriageFailed { error, .. } => {
-                v.flagged = true;
-                v.last_error = Some(error.clone());
-            }
-            InboxEventKind::Rejected { reason, .. } => {
-                v.status = RequestStatus::Open;
-                v.proposal_id = None;
-                v.proposal = None;
-                v.proposal_hash = None;
-                v.proposal_warnings = Vec::new();
-                v.last_reason = Some(reason.clone());
-            }
-            InboxEventKind::ResolutionConfirmed {
-                content_hash, text, ..
-            } => {
-                v.status = RequestStatus::Confirmed;
-                v.flagged = false;
-                v.content_hash = Some(content_hash.clone());
-                v.confirmed_text = Some(text.clone());
-            }
-            InboxEventKind::Delivered { attempt, .. } => {
-                v.status = RequestStatus::Resolved;
-                v.flagged = false;
-                v.attempts = v.attempts.max(*attempt);
-            }
-            InboxEventKind::DeliveryFailed { attempt, error, .. } => {
-                v.status = RequestStatus::DeliveryFailed;
-                v.flagged = true;
-                v.attempts = v.attempts.max(*attempt);
-                v.last_error = Some(error.clone());
-            }
-            _ => {}
-        }
+        apply_request_event(v, e, max_notice_attempts);
+    }
+    for v in &mut views {
+        v.summary = super::request_lifecycle::summarize(v);
     }
     views
+}
+
+/// Apply one event that names an existing request. Shared by the fold and the
+/// history projection, so both read the same state machine.
+pub(crate) fn apply_request_event(v: &mut RequestView, e: &InboxEvent, max_notice_attempts: u32) {
+    // Dismissed is terminal: late answers, deliveries and triage stay in the
+    // history but never move the request again.
+    let live = v.status != RequestStatus::Dismissed;
+    match &e.kind {
+        // A late proposal never reopens a decided request.
+        InboxEventKind::Proposal {
+            proposal_id,
+            body,
+            warnings,
+            ..
+        } if matches!(v.status, RequestStatus::Open | RequestStatus::Proposed) => {
+            v.status = RequestStatus::Proposed;
+            v.flagged = false;
+            v.proposal_id = Some(proposal_id.clone());
+            v.proposal = Some(body.clone());
+            v.proposal_hash = Some(content_hash(body));
+            v.proposal_warnings = warnings.clone();
+        }
+        InboxEventKind::TriageFailed { error, .. } if live => {
+            v.flagged = true;
+            v.last_error = Some(error.clone());
+        }
+        InboxEventKind::Rejected { reason, .. } if live => {
+            v.status = RequestStatus::Open;
+            v.proposal_id = None;
+            v.proposal = None;
+            v.proposal_hash = None;
+            v.proposal_warnings = Vec::new();
+            v.last_reason = Some(reason.clone());
+        }
+        InboxEventKind::ResolutionConfirmed {
+            content_hash, text, ..
+        } if live => {
+            v.status = RequestStatus::Confirmed;
+            v.flagged = false;
+            v.content_hash = Some(content_hash.clone());
+            v.confirmed_text = Some(text.clone());
+        }
+        InboxEventKind::Delivered { attempt, .. } if live => {
+            v.status = RequestStatus::Resolved;
+            v.flagged = false;
+            v.attempts = v.attempts.max(*attempt);
+        }
+        InboxEventKind::DeliveryFailed { attempt, error, .. } if live => {
+            v.status = RequestStatus::DeliveryFailed;
+            v.flagged = true;
+            v.attempts = v.attempts.max(*attempt);
+            v.last_error = Some(error.clone());
+        }
+        InboxEventKind::RequestDismissed {
+            credential, notice, ..
+        } if live => {
+            v.status = RequestStatus::Dismissed;
+            v.flagged = false;
+            v.dismissed_at = Some(e.ts.clone());
+            v.dismissed_by = Some(credential.as_str().to_string());
+            v.notice = notice
+                .as_ref()
+                .map(|n| super::request_lifecycle::NoticeView::enqueued(&n.key));
+        }
+        InboxEventKind::RequestArchived { credential, .. }
+            if v.archived_at.is_none()
+                && matches!(v.status, RequestStatus::Confirmed | RequestStatus::Resolved) =>
+        {
+            v.archived_at = Some(e.ts.clone());
+            v.archived_by = Some(credential.as_str().to_string());
+        }
+        InboxEventKind::NoticeAttempt {
+            attempt,
+            trigger,
+            outcome,
+            error,
+            ..
+        } => {
+            if let Some(n) = v.notice.as_mut() {
+                n.record(*attempt, *trigger, *outcome, error.as_deref(), &e.ts);
+            }
+        }
+        _ => {}
+    }
+    if let Some(n) = v.notice.as_mut() {
+        n.settle(max_notice_attempts);
+    }
 }
 
 impl RequestView {
@@ -426,6 +557,12 @@ impl RequestView {
             warnings: warnings.to_vec(),
             opened_at: ts.to_string(),
             task,
+            archived_at: None,
+            archived_by: None,
+            dismissed_at: None,
+            dismissed_by: None,
+            summary: Default::default(),
+            notice: None,
         }
     }
 
@@ -447,7 +584,11 @@ pub fn request_id_of(kind: &InboxEventKind) -> Option<&str> {
         | InboxEventKind::Rejected { request_id, .. }
         | InboxEventKind::ResolutionConfirmed { request_id, .. }
         | InboxEventKind::Delivered { request_id, .. }
-        | InboxEventKind::DeliveryFailed { request_id, .. } => Some(request_id),
+        | InboxEventKind::DeliveryFailed { request_id, .. }
+        | InboxEventKind::RequestDismissed { request_id, .. }
+        | InboxEventKind::RequestArchived { request_id, .. }
+        | InboxEventKind::NoticeAttempt { request_id, .. }
+        | InboxEventKind::RequestMigrated { request_id, .. } => Some(request_id),
         _ => None,
     }
 }

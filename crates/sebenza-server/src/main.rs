@@ -150,10 +150,24 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         Err(e) => tracing::warn!("inbox: orphan sweep failed: {e}"),
     }
 
-    let inbox = Arc::new(services::inbox_service::InboxService::new(
-        inbox_store,
-        adapters::projects_registry::ProjectsRegistry::new(),
-    ));
+    let notify_config = common::config::load_notify_config()
+        .map_err(|e| anyhow::anyhow!("invalid ~/.ai/sebenza.yaml: {e}"))?;
+    let inbox = Arc::new(
+        services::inbox_service::InboxService::new(
+            inbox_store,
+            adapters::projects_registry::ProjectsRegistry::new(),
+        )
+        .with_notify(services::inbox_service::NotifySettings {
+            max_attempts: notify_config.max_attempts,
+            base_delay_secs: notify_config.base_delay_secs,
+        }),
+    );
+    // Backfill before anything serves: one `migrated` event per request that
+    // lacks one, so history is complete and restarts append nothing (FR-10).
+    match inbox.backfill_migrations() {
+        Ok(n) => tracing::info!(appended = n, "inbox: request backfill done"),
+        Err(e) => tracing::warn!("inbox: request backfill failed: {e}"),
+    }
     // Chat and the system agent share one stream manager: their conversation
     // ids never collide (`system-agent:<ulid>`), and one turn per id holds.
     let agent_stream = Arc::new(services::agent_stream::AgentStreamManager::new());
@@ -229,6 +243,8 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
             state.clone(),
         )));
     server::spawn_background_loops(state.clone());
+    // Dismissal notices: rebuilt from the log now, then retried on a timer.
+    services::notice_dispatcher::spawn(state.inbox.clone(), notify_config.poll_secs);
     let app = server::build_router(state);
     let listener = tokio::net::TcpListener::bind(addr).await?;
     tracing::info!(

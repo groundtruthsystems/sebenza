@@ -69,7 +69,7 @@ The 60×3 adversarial suite runs in CI on replay; a live run is env-gated and ma
 | TS-41 | Forged actor, auth threats | Integration | P0 | Given body actor or control token, when dismissing, then actor is credential's; control token 403 | Event actor; 403 audited |
 | TS-42 | Tamper threat, NFR-03 | Integration | P1 | Given router and store, then no DELETE route, no event rewrites, files 0600 | Route table; prefix check; mode |
 | TS-43 | Secrets-in-logs threat | Integration | P1 | Given canary secret in title or chat, then logs, audit, notice records never contain it | Canary absent |
-| TS-44 | Slow-append risk | Integration | P2 | Given stalled append holding item mutex, then other callers error within 5 s | Error ≤ 5 s; no deadlock |
+| TS-44 | Slow-append risk | Integration | P2 | Given a stalled append holding item A's lock, then a write to item B completes without waiting (locks are per item) | B done < 1 s while A held |
 | TS-45 | CLI/UI parity | Contract | P1 | Given each new route, then a `sebenza-cli` command exists and returns the same result | Output equals route |
 | TS-46 | Re-fold scaling risk | Performance | P2 | Given large synthetic history, when listing, then list stays under agreed budget | Timing under budget |
 | TS-47 | Business risks | Component | P2 | Given chat on or off, then UI shows chat status and "not part of review record" label | Rendered text |
