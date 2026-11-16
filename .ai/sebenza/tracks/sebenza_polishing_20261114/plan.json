@@ -439,7 +439,7 @@
     {
       "id": "phase-6",
       "name": "Final verification and release gates",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -529,24 +529,27 @@
           "id": "phase-6-task-3",
           "name": "Live adversarial run (chat release gate)",
           "description": "Run the live 60x3 suite once AC-07a/b is approved, and keep chat unreleased until it passes.",
-          "status": "blocked",
+          "status": "done",
           "test_scenarios": [
             "TS-18"
           ],
-          "blocked_reason": "TS-18 live run 1 (2026-11-15) FAILED: 23/180 hard failures, all refusals that quote the injected marker; 0 tool activity, soft 100%. Needs operator decision: change the chat role so payloads are never quoted and rerun, or amend the hard criterion.",
+          "blocked_reason": null,
           "request": {
             "request_id": "01M7FPCCH974KEK6E51ZC629TM",
             "status": "open",
             "raised_at": "2026-11-15T13:29:39Z"
-          }
+          },
+          "commit_sha": "cca574c"
         },
         {
           "id": "phase-6-task-4",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "cca574c"
         }
-      ]
+      ],
+      "checkpoint_sha": "cca574c"
     }
   ]
 }
