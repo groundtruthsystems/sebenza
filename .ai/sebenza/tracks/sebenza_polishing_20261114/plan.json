@@ -5,7 +5,7 @@
     {
       "id": "phase-1",
       "name": "Request lifecycle, outbox and Requests API (daemon)",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -127,20 +127,22 @@
           "id": "phase-1-task-10",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "blocked",
+          "status": "done",
           "request": {
             "request_id": "01M7EQ08MCZQ04KCACE7GG99G6",
             "status": "open",
             "raised_at": "2026-11-15T04:21:16Z"
           },
-          "blocked_reason": "Awaiting operator confirmation of the phase 1 manual verification"
+          "blocked_reason": null,
+          "commit_sha": "42ba019"
         }
-      ]
+      ],
+      "checkpoint_sha": "42ba019"
     },
     {
       "id": "phase-2",
       "name": "Requests tab UI and CLI",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -189,20 +191,22 @@
           "id": "phase-2-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "blocked",
+          "status": "done",
           "request": {
             "request_id": "01M7EQ8NHZHCKF42T9N7HKWE3E",
             "status": "open",
             "raised_at": "2026-11-15T04:25:51Z"
           },
-          "blocked_reason": "Awaiting operator confirmation of the phase 2 manual verification"
+          "blocked_reason": null,
+          "commit_sha": "dd73e3c"
         }
-      ]
+      ],
+      "checkpoint_sha": "dd73e3c"
     },
     {
       "id": "phase-3",
       "name": "Shared review controls, handover reject, full screen and Esc",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -270,20 +274,22 @@
           "id": "phase-3-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "blocked",
-          "blocked_reason": "Awaiting operator confirmation of the phase 3 manual verification",
+          "status": "done",
+          "blocked_reason": null,
           "request": {
             "request_id": "01M7EQMZEHMXPX4990YQXBCTS2",
             "status": "open",
             "raised_at": "2026-11-15T04:32:34Z"
-          }
+          },
+          "commit_sha": "0b92dfb"
         }
-      ]
+      ],
+      "checkpoint_sha": "0b92dfb"
     },
     {
       "id": "phase-4",
       "name": "Zero-tool probe, gate and runtime guard",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -336,20 +342,22 @@
           "id": "phase-4-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "blocked",
-          "blocked_reason": "Awaiting operator confirmation of the phase 4 manual verification",
+          "status": "done",
+          "blocked_reason": null,
           "request": {
             "request_id": "01M7EQZNK5A19YYXGB26MJWH6R",
             "status": "open",
             "raised_at": "2026-11-15T04:38:25Z"
-          }
+          },
+          "commit_sha": "50eed25"
         }
-      ]
+      ],
+      "checkpoint_sha": "50eed25"
     },
     {
       "id": "phase-5",
       "name": "Handover chat service, API, panel and adversarial harness",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -416,15 +424,17 @@
           "id": "phase-5-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md.",
-          "status": "blocked",
-          "blocked_reason": "Checkpoint awaits the operator's end-of-work verification (user: 'do it all I will verify at the end').",
+          "status": "done",
+          "blocked_reason": null,
           "request": {
             "request_id": "01M7FP3TSVWTK6QK3MTQBZXGFV",
             "status": "open",
             "raised_at": "2026-11-15T13:24:58Z"
-          }
+          },
+          "commit_sha": "7c9a9ba"
         }
-      ]
+      ],
+      "checkpoint_sha": "7c9a9ba"
     },
     {
       "id": "phase-6",
@@ -502,17 +512,18 @@
           "id": "phase-6-task-2",
           "name": "CLI/UI parity and UAT",
           "description": "Verify every new route has a matching CLI command and walk the inbox AC 1-10 UAT checklist.",
-          "status": "blocked",
+          "status": "done",
           "test_scenarios": [
             "TS-45",
             "TS-48"
           ],
-          "blocked_reason": "TS-45 passed (fd7a16a). TS-48 manual UAT awaits the operator's end-of-work verification.",
+          "blocked_reason": null,
           "request": {
             "request_id": "01M7FPCCC043DC3XEAK29TQPTG",
             "status": "open",
             "raised_at": "2026-11-15T13:29:38Z"
-          }
+          },
+          "commit_sha": "fd7a16a"
         },
         {
           "id": "phase-6-task-3",
