@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { InboxRequest } from "./api-contract";
+import type { InboxRequest, InboxRequestHistory } from "./api-contract";
 import { isStale, lineDiff, sha1Hex, worktreeLabel } from "./inbox-collab";
 import { renderCommentMarkdown } from "./inboxMarkdown";
 import { WarningBadges } from "./InboxComments";
@@ -11,7 +11,11 @@ const statusTone: Record<InboxRequest["status"], string> = {
   confirmed: "border-edge text-muted",
   resolved: "border-success text-success",
   delivery_failed: "border-danger text-danger",
+  dismissed: "border-edge text-muted line-through",
 };
+
+/** Visible keyboard focus for the request-management controls (NFR-04). */
+const focusRing = "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent";
 
 const field =
   "w-full rounded-md border border-edge bg-surface px-2 py-1.5 text-xs text-primary placeholder:text-muted focus:outline-none focus:border-accent resize-y font-mono";
@@ -64,6 +68,10 @@ export default function InboxRequestCard({
   onreject,
   onredeliver,
   onretry,
+  ondismiss,
+  onarchive,
+  onretrynotice,
+  onhistory,
 }: {
   request: InboxRequest;
   /** A triage job is queued or running for this request. */
@@ -72,7 +80,17 @@ export default function InboxRequestCard({
   onreject: (reason: string) => Promise<void>;
   onredeliver: () => Promise<void>;
   onretry: () => Promise<void>;
+  /** Dismiss an unanswered request (operator only). */
+  ondismiss?: () => Promise<void>;
+  /** Archive a confirmed or resolved request; status is unchanged. */
+  onarchive?: () => Promise<void>;
+  /** Retry a dismissal notice that failed to deliver. */
+  onretrynotice?: () => Promise<void>;
+  /** Load the request's history for the inline history view. */
+  onhistory?: () => Promise<InboxRequestHistory>;
 }) {
+  const [history, setHistory] = useState<InboxRequestHistory | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
   const [editing, setEditing] = useState(false);
   const [edited, setEdited] = useState(request.proposal ?? "");
   const [authored, setAuthored] = useState("");
@@ -86,6 +104,16 @@ export default function InboxRequestCard({
     r.status === "proposed" && r.proposal !== null && r.proposalHash !== null;
   const decidable = r.status === "open" || r.status === "proposed";
   const rejectable = decidable || r.status === "delivery_failed";
+  const dismissable = decidable || r.status === "delivery_failed";
+  const archivable =
+    (r.status === "confirmed" || r.status === "resolved") && !r.archivedAt;
+  const noticeFailed = r.notice?.state === "failed";
+
+  const toggleHistory = () =>
+    act(async () => {
+      if (!showHistory && onhistory) setHistory(await onhistory());
+      setShowHistory((v) => !v);
+    });
 
   const act = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -135,6 +163,19 @@ export default function InboxRequestCard({
         {r.flagged && (
           <span className="px-1 rounded border border-danger text-danger">flagged</span>
         )}
+        {r.archivedAt && (
+          <span className="px-1 rounded border border-edge text-muted" title={`Archived ${r.archivedAt}`}>
+            archived
+          </span>
+        )}
+        {noticeFailed && (
+          <span
+            className="px-1 rounded border border-danger text-danger"
+            title={r.notice?.lastError ?? undefined}
+          >
+            notice not delivered
+          </span>
+        )}
         {triaging && <span className="text-accent">triaging…</span>}
         {r.worktree ? (
           <span title={`${r.worktree.project} · ${r.worktree.branch}`}>
@@ -148,6 +189,12 @@ export default function InboxRequestCard({
       </header>
 
       <h4 className="m-0 text-xs font-semibold">{r.title}</h4>
+      {r.summary?.request && (
+        <p aria-label="Summary" className="m-0 text-[11px] text-muted">
+          {r.summary.request}
+          {r.summary.result && <> — {r.summary.result}</>}
+        </p>
+      )}
       <div
         className="inbox-comment md-body text-xs"
         dangerouslySetInnerHTML={{ __html: renderCommentMarkdown(r.body) }}
@@ -235,6 +282,29 @@ export default function InboxRequestCard({
         />
       )}
 
+      {showHistory && history && (
+        <div className="flex flex-col gap-1 rounded-md border border-edge bg-surface p-2">
+          <ol aria-label="Request history" className="m-0 pl-4 text-[11px] flex flex-col gap-0.5">
+            {history.events.map((e, i) => (
+              <li key={i}>
+                <span className="font-semibold">{e.kind.replace("_", " ")}</span>
+                {e.from && e.to && e.from !== e.to && (
+                  <span className="text-muted"> {e.from} → {e.to}</span>
+                )}
+                {e.detail && <span className="text-muted"> ({e.detail})</span>}
+                <span className="text-muted"> · {e.actor} · {e.at.replace("T", " ").slice(0, 16)}</span>
+              </li>
+            ))}
+          </ol>
+          {history.answers.map((a, i) => (
+            <div key={i} className="flex flex-col gap-0.5">
+              <span className="text-[10px] text-muted">{a.kind}</span>
+              <pre className="m-0 text-[11px] font-mono whitespace-pre-wrap">{a.text}</pre>
+            </div>
+          ))}
+        </div>
+      )}
+
       {error && <p className="m-0 text-[11px] text-danger">{error}</p>}
 
       <div className="flex flex-wrap items-center justify-end gap-2">
@@ -254,6 +324,60 @@ export default function InboxRequestCard({
           </>
         ) : (
           <>
+            {onhistory && (
+              <Btn
+                small
+                type="button"
+                className={focusRing}
+                aria-expanded={showHistory}
+                disabled={busy}
+                onClick={() => void toggleHistory()}
+              >
+                History
+              </Btn>
+            )}
+            {noticeFailed && onretrynotice && (
+              <Btn
+                small
+                type="button"
+                variant="accent-outline"
+                className={focusRing}
+                disabled={busy}
+                onClick={() => void act(onretrynotice)}
+              >
+                Retry notice
+              </Btn>
+            )}
+            {onarchive && r.status !== "dismissed" && (
+              <Btn
+                small
+                type="button"
+                className={focusRing}
+                disabled={busy || !archivable}
+                title={
+                  archivable
+                    ? "Archive: keep it, out of the way"
+                    : r.archivedAt
+                      ? "Already archived"
+                      : "Only a confirmed or resolved request can be archived"
+                }
+                onClick={() => void act(onarchive)}
+              >
+                Archive
+              </Btn>
+            )}
+            {dismissable && ondismiss && (
+              <Btn
+                small
+                type="button"
+                variant="danger-outline"
+                className={focusRing}
+                disabled={busy}
+                onClick={() => void act(ondismiss)}
+              >
+                Dismiss
+              </Btn>
+            )}
             {r.flagged && r.status === "open" && (
               <Btn small disabled={busy || triaging} onClick={() => void act(onretry)}>
                 Retry triage

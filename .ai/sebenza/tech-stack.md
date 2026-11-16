@@ -76,6 +76,17 @@ log, and operator routes need an in-memory operator token rather than the contro
 Claude Code skills plugin lives in `skills/` (Python stdlib scripts, tested with `unittest`),
 published through `.claude-plugin/marketplace.json`.
 
+**Request lifecycle and handover chat (dated 2026-11-15).** No new crates. Request
+dismiss/archive/notice state are new kinds in the item's append-only `events.jsonl`, written
+with one `write` plus `sync_data` under the per-log lock; a dispatcher task delivers dismissal
+notices with backoff (`notify:` block). Handover chat reuses the installed `claude` headlessly
+with zero tools: `--tools ""` (claude ≥ 2.1, verified on 2.1.325), every built-in in
+`--disallowedTools`, `--strict-mcp-config` with no MCP config, `--settings
+{"disableAllHooks":true}`, `--permission-mode dontAsk`, the system-agent env allowlist, an
+empty scratch cwd and a timeout. A capability probe (init `tools: []`, no `tool_use`) is the
+only thing that enables chat; it re-runs when `claude --version` changes. `chat:` holds only
+limits; there is no `enabled` key.
+
 `sebenza-cli init` reports each tool's detected version, so a session-format or hook change
 that breaks history can be diagnosed against the version actually installed rather than
 guessed at. opencode moves fast — 1.18.7 → 1.18.9 was observed within a day — so the

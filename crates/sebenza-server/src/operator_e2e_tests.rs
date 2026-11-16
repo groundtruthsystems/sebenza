@@ -59,6 +59,11 @@ pub(crate) struct Call<'a> {
 
 impl Daemon {
     pub(crate) async fn start() -> Daemon {
+        Self::start_with_chat(Default::default()).await
+    }
+
+    /// A daemon whose chat gate uses `chat` (tests point `binary` at a stub).
+    pub(crate) async fn start_with_chat(chat: common::domain::config::ChatConfig) -> Daemon {
         crate::adapters::control_token::pin_control_token(TOKEN);
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
         let base = std::env::temp_dir().join(format!("sebenza-op-e2e-{}-{n}", std::process::id()));
@@ -108,6 +113,10 @@ impl Daemon {
                 Arc::new(crate::services::role_runner::test_runner(&base)),
                 factory.clone(),
                 base.join("snapshots"),
+            )),
+            chat_gate: Arc::new(crate::services::chat::gate::ChatGate::new(
+                chat,
+                base.join("chat-scratch"),
             )),
             frontend_dist: None,
         };
@@ -556,4 +565,131 @@ async fn ts51_a_cli_login_needs_the_operators_confirmation() {
     // TS-48: neither token appears in any audit record.
     let dump = format!("{:?}", d.audit.all());
     assert!(!dump.contains(&op) && !dump.contains(&cli_token));
+}
+
+// --- Request lifecycle routes (track sebenza_polishing, phase 1) ----------
+
+// TS-15 / TS-41: dismiss, archive and notice retry need an operator
+// credential; no session and the control token are refused before any state
+// is read, and the actor recorded is the credential, never a body field.
+#[tokio::test]
+async fn lifecycle_routes_need_an_operator_and_record_the_credential() {
+    let d = Daemon::start().await;
+    let (id, rid) = d.problem_item();
+    for path in ["dismiss", "archive", "notice/retry"] {
+        let url = format!("/api/inbox/{id}/requests/{rid}/{path}");
+        let mut none = d.spa("POST", &url, "");
+        none.bearer = None;
+        assert_eq!(d.send(none).await.0, 401, "{path}: no session");
+        let (code, v) = d.send(d.spa("POST", &url, TOKEN)).await;
+        assert_eq!(code, 403, "{path}: control token: {v}");
+        assert_eq!(v["code"], "operator_required");
+    }
+    let log = std::fs::read_to_string(d.store.dir().join(format!("{id}.events.jsonl"))).unwrap();
+    assert!(!log.contains("request_dismissed"), "nothing changed");
+
+    let op = d.operator_token().await;
+    let mut c = d.spa(
+        "POST",
+        &format!("/api/inbox/{id}/requests/{rid}/dismiss"),
+        &op,
+    );
+    c.body = Some(serde_json::json!({"actor": "someone-else", "credential": "control"}));
+    let (code, v) = d.send(c).await;
+    assert_eq!(code, 200, "{v}");
+    assert_eq!(v["request"]["status"], "dismissed");
+    assert_eq!(v["request"]["dismissedBy"], "operator_session");
+
+    // A second dismiss and an archive of a dismissed request are 409.
+    let again = d.spa(
+        "POST",
+        &format!("/api/inbox/{id}/requests/{rid}/dismiss"),
+        &op,
+    );
+    assert_eq!(d.send(again).await.0, 409);
+    let archive = d.spa(
+        "POST",
+        &format!("/api/inbox/{id}/requests/{rid}/archive"),
+        &op,
+    );
+    assert_eq!(d.send(archive).await.0, 409);
+}
+
+// TS-36 / TS-38 (route side): filters, a bad filter is 400, history lists events.
+#[tokio::test]
+async fn request_list_filters_and_history_routes() {
+    let d = Daemon::start().await;
+    let (id, rid) = d.problem_item();
+    let op = d.operator_token().await;
+    let get = |p: String| {
+        let mut c = d.spa("GET", &p, "");
+        c.bearer = None;
+        c
+    };
+    let (code, v) = d
+        .send(get(format!("/api/inbox/{id}/requests?filter=unanswered")))
+        .await;
+    assert_eq!(code, 200);
+    assert_eq!(v["requests"].as_array().unwrap().len(), 1);
+    assert_eq!(v["requests"][0]["summary"]["request"], "solution: IdP?");
+    let (code, _) = d
+        .send(get(format!("/api/inbox/{id}/requests?filter=archived")))
+        .await;
+    assert_eq!(code, 400, "there is no Archived filter");
+    d.send(d.spa(
+        "POST",
+        &format!("/api/inbox/{id}/requests/{rid}/dismiss"),
+        &op,
+    ))
+    .await;
+    let (_, v) = d
+        .send(get(format!("/api/inbox/{id}/requests?filter=unanswered")))
+        .await;
+    assert!(v["requests"].as_array().unwrap().is_empty());
+    let (_, v) = d
+        .send(get(format!("/api/inbox/{id}/requests?filter=dismissed")))
+        .await;
+    assert_eq!(v["requests"].as_array().unwrap().len(), 1);
+    let (code, v) = d
+        .send(get(format!("/api/inbox/{id}/requests/{rid}/history")))
+        .await;
+    assert_eq!(code, 200, "{v}");
+    let kinds: Vec<_> = v["history"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(kinds, vec!["created", "dismissed"]);
+}
+
+// TS-42: no delete route for requests; the log stays owner-only.
+#[tokio::test]
+async fn requests_have_no_delete_route_and_the_log_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = Daemon::start().await;
+    let (id, rid) = d.problem_item();
+    let op = d.operator_token().await;
+    let log_path = d.store.dir().join(format!("{id}.events.jsonl"));
+    let before = std::fs::read_to_string(&log_path).unwrap();
+    for path in [
+        format!("/api/inbox/{id}/requests/{rid}"),
+        format!("/api/inbox/{id}/requests/{rid}/history"),
+    ] {
+        let (code, v) = d.send(d.spa("DELETE", &path, &op)).await;
+        // Unknown routes fall through to the SPA fallback; what matters is
+        // that no route deletes anything.
+        assert!(!v.to_string().contains("deleted"), "{path}: {code} {v}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(&log_path).unwrap(),
+        before,
+        "log untouched"
+    );
+    assert_eq!(d.state.inbox.list_requests(&id).unwrap().len(), 1);
+    let mode = std::fs::metadata(d.store.dir().join(format!("{id}.events.jsonl")))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
 }

@@ -75,6 +75,12 @@ pub enum SolutionError {
     ApprovalRequired(String),
     #[error("{0} already has its worktree; its copy of the handover is now stale")]
     AlreadyConverted(String),
+    /// The handover is not in a state this action allows: 409 `handover_state`.
+    #[error("{0}")]
+    HandoverState(String),
+    /// A malformed request: 400.
+    #[error("{0}")]
+    Invalid(String),
     #[error(transparent)]
     Agent(#[from] RoleJobError),
     #[error(transparent)]
@@ -1151,6 +1157,7 @@ impl SolutionService {
                     "approvalValid": state.handover_approval_valid(&h.project, &h.instruction_hash),
                     // R-D4: the worktree's copy no longer matches the inbox.
                     "copyStale": was_converted && h.approved_hash.as_deref() != Some(h.instruction_hash.as_str()),
+                    "rejection": h.rejection,
                 })
             })
             .collect();
@@ -1483,6 +1490,12 @@ impl SolutionService {
                 .find(|h| h.project == project.path)
                 .cloned()
                 .ok_or_else(|| SolutionError::NotFound(format!("no handover drafted for {slug}")))?;
+            // A rejected handover is never approved or converted (FR-14).
+            if h.status == common::domain::solution::HandoverStatus::Rejected {
+                return Err(SolutionError::HandoverState(format!(
+                    "the handover for {slug} was rejected; re-draft it before approving"
+                )));
+            }
             // One worktree per project: once converted, a later edit only
             // makes its copy stale (shown in the view), never a second one.
             if Self::converted_projects(&self.draft(id)?).contains(&project.path) {
@@ -1557,6 +1570,30 @@ impl SolutionService {
         }))
     }
 
+    /// One handover as the chat reads it: the stored text and its hash, read
+    /// fresh on every turn (FR-20). Fails when the item is not a solution, the
+    /// slug names no registered project, or no handover is drafted for it.
+    pub fn handover_for_chat(
+        &self,
+        id: &str,
+        slug: &str,
+    ) -> Result<(String, String), SolutionError> {
+        self.require_solution(id)?;
+        let project = self.project_for_slug(slug)?;
+        let state = self.state_now(id)?;
+        if !state.handovers.iter().any(|h| h.project == project.path) {
+            return Err(SolutionError::NotFound(format!(
+                "no handover drafted for {slug}"
+            )));
+        }
+        let (text, hash) = self
+            .inbox
+            .store()
+            .read_solution_doc(id, &format!("handover/{slug}.md"))?
+            .ok_or_else(|| SolutionError::NotFound(format!("no handover document for {slug}")))?;
+        Ok((text, hash))
+    }
+
     pub fn defer_handover(
         &self,
         id: &str,
@@ -1565,21 +1602,113 @@ impl SolutionService {
     ) -> Result<(), SolutionError> {
         self.require_solution(id)?;
         let project = self.project_for_slug(slug)?;
-        self.inbox.store().append_event(
-            id,
-            EventAuthor {
-                caller: Some(credential.as_str().to_string()),
-                ..EventAuthor::operator()
-            },
-            None,
-            InboxEventKind::HandoverDeferred {
-                project: project.path.clone(),
-                credential,
-            },
-        )?;
+        let store = self.inbox.store();
+        store.with_item_lock(id, || -> Result<(), SolutionError> {
+            let state = self.state_now(id)?;
+            if state.handovers.iter().any(|h| {
+                h.project == project.path
+                    && h.status == common::domain::solution::HandoverStatus::Rejected
+            }) {
+                return Err(SolutionError::HandoverState(format!(
+                    "the handover for {slug} was rejected"
+                )));
+            }
+            store.append_event(
+                id,
+                EventAuthor {
+                    caller: Some(credential.as_str().to_string()),
+                    ..EventAuthor::operator()
+                },
+                None,
+                InboxEventKind::HandoverDeferred {
+                    project: project.path.clone(),
+                    credential,
+                },
+            )?;
+            Ok(())
+        })?;
         self.inbox
             .record_gated_action(id, "solution.handover.deferred", credential, None)?;
         Ok(())
+    }
+
+    /// Reject one project's handover while it awaits review (FR-12–14).
+    /// Drafted or deferred only; anything else is 409. Needs a non-empty
+    /// comment. One durable line records the rejection and, for
+    /// `wrong_project` only, the design-revision request that moves the
+    /// solution to Revising. Runs under the item lock, like approve, so a
+    /// racing approve sees the rejection (and refuses) or wins first (and
+    /// the reject is then 409). Other projects' handovers are untouched, and
+    /// with no dispatch queue (approval converts synchronously), a rejected
+    /// handover simply can never be approved or converted.
+    pub fn reject_handover(
+        &self,
+        id: &str,
+        slug: &str,
+        reason: common::domain::solution::HandoverRejectReason,
+        comment: &str,
+        credential: CredentialClass,
+    ) -> Result<serde_json::Value, SolutionError> {
+        use common::domain::solution::{HandoverStatus, design_revision_for};
+        let comment = comment.trim();
+        if comment.is_empty() {
+            return Err(SolutionError::Invalid("a rejection needs a comment".into()));
+        }
+        if comment.len() > MAX_TURN_BYTES {
+            return Err(SolutionError::TooLarge);
+        }
+        self.require_solution(id)?;
+        let project = self.project_for_slug(slug)?;
+        let store = self.inbox.store();
+        store.with_item_lock(id, || -> Result<(), SolutionError> {
+            let state = self.state_now(id)?;
+            let h = state
+                .handovers
+                .iter()
+                .find(|h| h.project == project.path)
+                .ok_or_else(|| SolutionError::NotFound(format!("no handover drafted for {slug}")))?;
+            if !h.status.awaiting_review() {
+                let status = match h.status {
+                    HandoverStatus::Approved => "approved",
+                    HandoverStatus::Converted => "converted",
+                    HandoverStatus::Rejected => "already rejected",
+                    _ => "not awaiting review",
+                };
+                return Err(SolutionError::HandoverState(format!(
+                    "the handover for {slug} is {status}; only a handover awaiting review can be rejected"
+                )));
+            }
+            let revision = design_revision_for(reason, &project.path);
+            if revision.is_some() && !state.phase.can_move_to(SolutionPhase::Revising) {
+                return Err(SolutionError::WrongPhase {
+                    phase: state.phase,
+                    what: "the design cannot go back to revising from here",
+                });
+            }
+            store.append_event_checked::<SolutionError>(
+                id,
+                EventAuthor {
+                    caller: Some(credential.as_str().to_string()),
+                    ..EventAuthor::operator()
+                },
+                None,
+                |_| {
+                    Ok(InboxEventKind::HandoverRejected {
+                        project: project.path.clone(),
+                        reason,
+                        comment: comment.to_string(),
+                        credential,
+                        revision,
+                    })
+                },
+            )?;
+            Ok(())
+        })?;
+        self.inbox
+            .record_gated_action(id, "solution.handover.rejected", credential, None)?;
+        Ok(serde_json::to_value(self.state_now(id)?)
+            .map(|s| serde_json::json!({ "ok": true, "solution": s }))
+            .unwrap_or_else(|_| serde_json::json!({ "ok": true })))
     }
 }
 

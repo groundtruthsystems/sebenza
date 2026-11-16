@@ -261,6 +261,64 @@ impl Default for SystemAgentConfig {
     }
 }
 
+/// `chat:` in `~/.ai/sebenza.yaml`: the handover chat. There is no `enabled`
+/// key on purpose: only the zero-tool capability probe turns chat on.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ChatConfig {
+    /// A handover estimated above this many tokens (bytes / 4) is refused,
+    /// never truncated.
+    pub max_handover_tokens: usize,
+    /// A transcript above this many tokens answers 413 `chat full`.
+    pub max_transcript_tokens: usize,
+    /// Wall-clock limit per turn; the process group is killed past it.
+    pub turn_timeout_secs: u64,
+    /// Chat turns running at once across every handover.
+    pub max_concurrent_turns: usize,
+    /// Model for chat turns; unset uses the CLI default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The `claude` binary. Unset resolves `claude` on `PATH` to an absolute
+    /// path at probe time; tests point it at a stub.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub binary: Option<String>,
+}
+
+impl Default for ChatConfig {
+    fn default() -> Self {
+        Self {
+            max_handover_tokens: 60_000,
+            max_transcript_tokens: 40_000,
+            turn_timeout_secs: 120,
+            max_concurrent_turns: 2,
+            model: None,
+            binary: None,
+        }
+    }
+}
+
+/// `notify:` in `~/.ai/sebenza.yaml`: the dismissal-notice dispatcher.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct NotifyConfig {
+    /// Dispatcher attempts before a notice is `failed` (then manual Retry).
+    pub max_attempts: u32,
+    /// First backoff; doubles per failure, capped at 15 minutes.
+    pub base_delay_secs: u64,
+    /// How often the dispatcher looks for due notices.
+    pub poll_secs: u64,
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            max_attempts: 6,
+            base_delay_secs: 5,
+            poll_secs: 30,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OneshotConfig {

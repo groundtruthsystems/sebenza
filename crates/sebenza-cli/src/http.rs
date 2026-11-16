@@ -813,6 +813,49 @@ impl Http {
             .await
     }
 
+    /// `GET /api/inbox/{id}/requests?filter=…`
+    pub async fn inbox_requests_filtered(&self, id: &str, filter: Option<&str>) -> Result<Value> {
+        match filter {
+            Some(f) => {
+                self.get(&format!("{}/api/inbox/{id}/requests?filter={f}", self.hub))
+                    .await
+            }
+            None => self.inbox_requests(id).await,
+        }
+    }
+
+    /// `GET /api/inbox/{id}/requests/{rid}/history`
+    pub async fn inbox_request_history(&self, id: &str, rid: &str) -> Result<Value> {
+        self.get(&format!(
+            "{}/api/inbox/{id}/requests/{rid}/history",
+            self.hub
+        ))
+        .await
+    }
+
+    /// `POST /api/inbox/{id}/requests/{rid}/{action}` on an operator-only
+    /// route (dismiss, archive, notice/retry): the cached `sebenza-cli login`
+    /// operator token, never the shared control token.
+    pub async fn inbox_operator_decision(
+        &self,
+        id: &str,
+        rid: &str,
+        action: &str,
+    ) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/inbox/{id}/requests/{rid}/{action}",
+                self.hub
+            ))
+            .bearer_auth(crate::login::operator_token()?)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
     /// `POST` to a request decision route with the token and the CLI marker.
     async fn inbox_decision(&self, url: String, body: Value) -> Result<Value> {
         let resp = self

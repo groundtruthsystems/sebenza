@@ -1138,7 +1138,33 @@ export const InboxRequestStatusSchema = z.enum([
   "confirmed",
   "resolved",
   "delivery_failed",
+  "dismissed",
 ]);
+
+/** Requests-tab filters (FR-05). There is no Archived filter in v1. */
+export const InboxRequestFilterSchema = z.enum([
+  "unanswered",
+  "answered",
+  "dismissed",
+  "all",
+]);
+export type InboxRequestFilter = z.infer<typeof InboxRequestFilterSchema>;
+
+/** The dismissal notice's outbox state. `failed` shows the badge + Retry. */
+export const InboxNoticeSchema = z.object({
+  key: z.string(),
+  state: z.enum(["pending", "sent", "failed"]),
+  failures: z.number(),
+  lastAttempt: z.number(),
+  lastAttemptAt: z.string().nullable(),
+  lastError: z.string().nullable(),
+});
+
+/** Template summaries: title only, and a fixed result line per status. */
+export const InboxRequestSummarySchema = z.object({
+  request: z.string(),
+  result: z.string().nullable(),
+});
 
 /** Where a request came from; absent on servers that predate it. */
 export const InboxRequestOriginSchema = z.enum([
@@ -1172,7 +1198,32 @@ export const InboxRequestSchema = z.object({
   attempts: z.number(),
   warnings: z.array(z.string()).default([]),
   openedAt: z.string(),
+  archivedAt: z.string().nullable().default(null),
+  archivedBy: z.string().nullable().default(null),
+  dismissedAt: z.string().nullable().default(null),
+  dismissedBy: z.string().nullable().default(null),
+  summary: InboxRequestSummarySchema.default({ request: "", result: null }),
+  notice: InboxNoticeSchema.nullable().default(null),
 });
+
+/** One row of a request's history: what happened, who did it, when. */
+export const InboxRequestHistoryEntrySchema = z.object({
+  kind: z.string(),
+  from: InboxRequestStatusSchema.nullable(),
+  to: InboxRequestStatusSchema.nullable(),
+  actor: z.string(),
+  at: z.string(),
+  detail: z.string().optional(),
+});
+
+export const InboxRequestHistorySchema = z.object({
+  history: z.object({
+    request: z.lazy(() => InboxRequestSchema),
+    answers: z.array(z.object({ kind: z.string(), text: z.string(), at: z.string() })),
+    events: z.array(InboxRequestHistoryEntrySchema),
+  }),
+});
+export type InboxRequestHistory = z.infer<typeof InboxRequestHistorySchema>["history"];
 
 export type InboxComment = z.infer<typeof InboxCommentSchema>;
 export type InboxCommentGroups = z.infer<typeof InboxCommentGroupsSchema>;

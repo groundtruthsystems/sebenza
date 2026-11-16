@@ -32,6 +32,7 @@ use axum::response::Json;
 use axum::response::{IntoResponse, Response};
 use common::adapters::inbox_store::{InboxStoreError, NotePatch};
 use common::domain::note_codec::{InboxNote, list_hash, parse_notes};
+use common::domain::request_lifecycle::RequestFilter;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -1114,13 +1115,97 @@ fn comment_with_delivery(
         .or_else(|| svc.comment_view(event))
 }
 
-/// `GET /api/inbox/{id}/requests` — every request, folded from the log.
+#[derive(Debug, Deserialize, Default)]
+pub struct RequestListQuery {
+    /// `unanswered | answered | dismissed | all` (default `all`).
+    #[serde(default)]
+    pub filter: Option<String>,
+}
+
+/// `GET /api/inbox/{id}/requests[?filter=…]` — requests folded from the log,
+/// each with its archived flag, notice state, summary and timestamps (FR-05).
 pub async fn list_requests(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(q): Query<RequestListQuery>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let requests = inbox(&state).list_requests(&id)?;
+    let filter = match q.filter.as_deref() {
+        None => RequestFilter::All,
+        Some(s) => RequestFilter::parse(s).ok_or_else(|| {
+            ApiError::new(
+                400,
+                "filter must be unanswered, answered, dismissed or all".to_string(),
+            )
+        })?,
+    };
+    let requests = inbox(&state).list_requests_filtered(&id, filter)?;
     Ok(Json(serde_json::json!({ "requests": requests })))
+}
+
+/// `GET /api/inbox/{id}/requests/{rid}/history` — the request, its answers
+/// and its ordered events (FR-07).
+pub async fn request_history(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check_read(&headers)?;
+    let history = inbox(&state).request_history(&id, &rid)?;
+    Ok(Json(serde_json::json!({ "history": history })))
+}
+
+/// `POST /api/inbox/{id}/requests/{rid}/dismiss` — operator only (NFR-05).
+/// The actor is the presented credential, never anything in the body.
+pub async fn dismiss_request(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let class = crate::operator_routes::require_operator(
+        &state,
+        &headers,
+        "inbox.request.dismissed",
+        Some(&id),
+    )?;
+    let svc = inbox(&state);
+    let request = blocking(move || svc.dismiss_request(&id, &rid, class)).await?;
+    crate::services::notice_dispatcher::kick(state.inbox.clone());
+    Ok(Json(serde_json::json!({ "request": request })))
+}
+
+/// `POST /api/inbox/{id}/requests/{rid}/archive` — operator only.
+pub async fn archive_request(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let class = crate::operator_routes::require_operator(
+        &state,
+        &headers,
+        "inbox.request.archived",
+        Some(&id),
+    )?;
+    let svc = inbox(&state);
+    let request = blocking(move || svc.archive_request(&id, &rid, class)).await?;
+    Ok(Json(serde_json::json!({ "request": request })))
+}
+
+/// `POST /api/inbox/{id}/requests/{rid}/notice/retry` — operator only; a
+/// manual attempt on a failed dismissal notice.
+pub async fn retry_notice(
+    State(state): State<AppState>,
+    Path((id, rid)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let class = crate::operator_routes::require_operator(
+        &state,
+        &headers,
+        "inbox.notice.retry",
+        Some(&id),
+    )?;
+    let svc = inbox(&state);
+    let request = blocking(move || svc.retry_notice(&id, &rid, class)).await?;
+    Ok(Json(serde_json::json!({ "request": request })))
 }
 
 // --- Decisions, triage retry, agent jobs and redaction ------------------------
@@ -1950,6 +2035,10 @@ mod tests {
                 factory.clone(),
                 base.join("snapshots"),
             )),
+            chat_gate: Arc::new(crate::services::chat::gate::ChatGate::new(
+                Default::default(),
+                std::env::temp_dir().join(format!("sebenza-chat-test-{}", std::process::id())),
+            )),
             frontend_dist: None,
         };
         Fixture {
@@ -2330,7 +2419,14 @@ mod tests {
             404
         );
         assert_eq!(
-            status(list_requests(State(f.state.clone()), Path(missing.into())).await),
+            status(
+                list_requests(
+                    State(f.state.clone()),
+                    Path(missing.into()),
+                    Query(Default::default())
+                )
+                .await
+            ),
             404
         );
     }
@@ -2351,9 +2447,13 @@ mod tests {
         assert_eq!(v["ok"], true);
         assert!(v["requestId"].is_string());
 
-        let Json(list) = list_requests(State(f.state.clone()), Path(id.clone()))
-            .await
-            .expect("requests");
+        let Json(list) = list_requests(
+            State(f.state.clone()),
+            Path(id.clone()),
+            Query(Default::default()),
+        )
+        .await
+        .expect("requests");
         let r = &list["requests"][0];
         assert_eq!(r["status"], "open");
         assert_eq!(r["worktree"]["project"], "/code/acme-demo");
@@ -2788,9 +2888,13 @@ mod tests {
         let text = std::fs::read_to_string(f.store.dir().join(format!("{id}.md"))).unwrap();
         assert!(text.contains("schema_version: 3"), "still v3:\n{text}");
 
-        let Json(list) = list_requests(State(f.state.clone()), Path(id.to_string()))
-            .await
-            .expect("requests");
+        let Json(list) = list_requests(
+            State(f.state.clone()),
+            Path(id.to_string()),
+            Query(Default::default()),
+        )
+        .await
+        .expect("requests");
         assert_eq!(list["requests"], serde_json::json!([]));
     }
 

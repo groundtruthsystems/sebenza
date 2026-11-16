@@ -7,7 +7,12 @@ import {
   createApiClient,
   TaskGraphSchema,
 } from "./api-contract";
-import type { InboxAgentJob, SaveTrackFileResponse } from "./api-contract";
+import type {
+  InboxAgentJob,
+  InboxRequestFilter,
+  SaveTrackFileResponse,
+} from "./api-contract";
+import { operatorToken } from "./operator";
 import type {
   ActiveProjectWorktrees,
   AgentDetails,
@@ -813,9 +818,53 @@ export async function fetchInboxSummary() {
   return hubApi.fetchInboxSummary();
 }
 
-/** Every request worktree agents raised against the item, with its state. */
-export async function fetchInboxRequests(id: string) {
-  return hubApi.fetchInboxRequests({ params: { id } });
+/** Every request worktree agents raised against the item, with its state.
+ *  `filter` narrows to Unanswered, Answered, Dismissed or All (default). */
+export async function fetchInboxRequests(id: string, filter?: InboxRequestFilter) {
+  return hubApi.fetchInboxRequests({
+    params: { id },
+    query: filter ? { filter } : undefined,
+  });
+}
+
+/** Operator-only request routes refuse the shared control token, so they
+ *  carry the dashboard's operator token instead. */
+async function operatorHeaders(): Promise<Record<string, string>> {
+  const token = await operatorToken();
+  return token ? { authorization: `Bearer ${token}` } : {};
+}
+
+/** Dismiss an open, proposed or delivery_failed request (operator only). */
+export async function dismissInboxRequest(id: string, requestId: string) {
+  return hubApi.dismissInboxRequest({
+    params: { id, rid: requestId },
+    body: {},
+    extraHeaders: await operatorHeaders(),
+  });
+}
+
+/** Archive a confirmed or resolved request; its status is unchanged. */
+export async function archiveInboxRequest(id: string, requestId: string) {
+  return hubApi.archiveInboxRequest({
+    params: { id, rid: requestId },
+    body: {},
+    extraHeaders: await operatorHeaders(),
+  });
+}
+
+/** One manual attempt at a dismissal notice that failed to deliver. */
+export async function retryInboxNotice(id: string, requestId: string) {
+  return hubApi.retryInboxNotice({
+    params: { id, rid: requestId },
+    body: {},
+    extraHeaders: await operatorHeaders(),
+  });
+}
+
+/** The request, its answers and its ordered events. */
+export async function fetchInboxRequestHistory(id: string, requestId: string) {
+  const res = await hubApi.fetchInboxRequestHistory({ params: { id, rid: requestId } });
+  return res.history;
 }
 
 /** Confirm a request's resolution and deliver it to its worktree.

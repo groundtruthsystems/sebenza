@@ -9,8 +9,10 @@ pub use common::services::{
 
 pub mod active_worktrees;
 pub mod agent_stream;
+pub mod chat;
 pub mod inbox_graph;
 pub mod inbox_jobs;
+pub mod notice_dispatcher;
 pub mod oneshot_watcher_service;
 pub mod pane_delivery;
 pub mod project_init_service;

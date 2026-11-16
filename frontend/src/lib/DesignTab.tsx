@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import AgentPicker from "./AgentPicker";
+import HandoverReview from "./HandoverReview";
 import { renderDraftMarkdown } from "./inboxMarkdown";
 import {
   ApiRefusal,
@@ -95,7 +96,6 @@ export default function DesignTab({
   const [doc, setDoc] = useState<{ name: string; content: string; hash: string; html: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
-  const [handover, setHandover] = useState<Record<string, { content: string; hash: string }>>({});
   const [agents, setAgents] = useState<FactoryAgent[]>([]);
   const [overrides, setOverrides] = useState<FactoryOverrides>({});
   const [settingsMsg, setSettingsMsg] = useState("");
@@ -291,66 +291,16 @@ export default function DesignTab({
       {view.handovers.length > 0 && (
         <section aria-label="Handovers" className="flex flex-col gap-2">
           <h3 className="m-0 text-sm font-semibold">Project handovers</h3>
-          {view.handovers.map((h) => {
-            const edit = handover[h.slug];
-            return (
-              <div key={h.slug} aria-label={`Handover ${h.slug}`} className="border border-edge rounded-md p-2 flex flex-col gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold">{h.slug}</span>
-                  <span>{h.status}</span>
-                  {h.copyStale && <span className="text-warning">worktree copy is stale</span>}
-                  <div className="ml-auto flex gap-2">
-                    <button
-                      type="button"
-                      className="px-2 py-0.5 rounded border border-edge"
-                      onClick={() =>
-                        void api.doc(draftId, `handover/${h.slug}.md`).then((d) =>
-                          setHandover((m) => ({ ...m, [h.slug]: { content: d.content, hash: d.hash } })),
-                        )
-                      }
-                    >
-                      Review
-                    </button>
-                    {h.status !== "converted" && (
-                      <>
-                        <button
-                          type="button"
-                          className="px-2 py-0.5 rounded border border-accent text-accent"
-                          disabled={!view.designApprovalValid}
-                          onClick={() => void act(() => api.approveHandover(draftId, h.slug, h.instructionHash))}
-                        >
-                          Approve and create worktree
-                        </button>
-                        <button type="button" className="px-2 py-0.5 rounded border border-edge" onClick={() => void act(() => api.deferHandover(draftId, h.slug))}>
-                          Defer
-                        </button>
-                      </>
-                    )}
-                  </div>
-                </div>
-                {edit && (
-                  <>
-                    <textarea
-                      aria-label={`Instruction for ${h.slug}`}
-                      className="w-full min-h-[8rem] rounded-md border border-edge bg-surface p-2"
-                      value={edit.content}
-                      onChange={(e) => {
-                        const content = e.currentTarget.value;
-                        setHandover((m) => ({ ...m, [h.slug]: { ...edit, content } }));
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className="self-start px-2 py-0.5 rounded border border-edge"
-                      onClick={() => void act(() => api.editHandover(draftId, h.slug, edit.content, edit.hash))}
-                    >
-                      Save instruction
-                    </button>
-                  </>
-                )}
-              </div>
-            );
-          })}
+          {view.handovers.map((h) => (
+            <HandoverReview
+              key={h.slug}
+              draftId={draftId}
+              handover={h}
+              api={api}
+              designApprovalValid={view.designApprovalValid}
+              onchanged={load}
+            />
+          ))}
         </section>
       )}
 

@@ -52,6 +52,20 @@ impl ResolutionDelivery {
 }
 
 impl ResolutionDelivery {
+    /// Tell `worktree`'s agent its request was dismissed. The text quotes the
+    /// idempotency `key`, so an agent that sees the notice twice (a retry
+    /// after a crash mid-send) can tell it is the same one.
+    pub(crate) fn deliver_dismissal(
+        &self,
+        worktree: &WorktreeKey,
+        request_id: &str,
+        title: &str,
+        key: &str,
+    ) -> Result<(), String> {
+        self.sink
+            .send(worktree, &prepare_dismissal(request_id, title, key))
+    }
+
     /// Paste an operator comment into `worktree`'s pane, labelled with the
     /// item it is about. Crate-private like [`Self::deliver`].
     pub(crate) fn deliver_comment(
@@ -234,6 +248,17 @@ fn strip_tmux_syntax(text: &str) -> String {
         out.push_str(&token);
     }
     out
+}
+
+/// The paste for a dismissal notice. No answer will follow; the agent should
+/// stop waiting on the request. `key` lets it drop a duplicate.
+pub fn prepare_dismissal(request_id: &str, title: &str, key: &str) -> String {
+    let request_id = sanitize_for_paste(request_id);
+    let title = sanitize_for_paste(title);
+    let key = sanitize_for_paste(key);
+    format!(
+        "The operator dismissed your inbox request {request_id} (\"{title}\"). No answer will follow: stop waiting on it and continue, or raise a new request if you are still blocked. Notice key: {key} (ignore a repeat with the same key).\n"
+    )
 }
 
 /// The exact text pasted for a resolution: a fixed header naming the request,

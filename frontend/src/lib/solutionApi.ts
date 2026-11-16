@@ -47,13 +47,38 @@ export interface ProblemView {
   status: "open" | "resolved";
 }
 
+export interface HandoverRejection {
+  reason: "wrong_project" | "other";
+  comment: string;
+  by: string;
+  at: string;
+}
+
 export interface HandoverCard {
   project: string;
   slug: string;
-  status: "drafted" | "approved" | "deferred" | "converted";
+  status: "drafted" | "approved" | "deferred" | "converted" | "rejected";
   instructionHash: string;
   approvalValid: boolean;
   copyStale: boolean;
+  /** Set while the handover is rejected; absent on older servers. */
+  rejection?: HandoverRejection | null;
+}
+
+/** One handover-chat message, rendered only as plain text. */
+export interface ChatMessage {
+  messageId: string;
+  ts: string;
+  author: string;
+  role: "reviewer" | "agent" | "aborted";
+  text: string;
+  instructionHash: string;
+}
+
+export interface ChatThread {
+  chatId: string;
+  notice: string;
+  messages: ChatMessage[];
 }
 
 export interface SolutionView {
@@ -153,6 +178,15 @@ export const solutionApi = {
   approveHandover: (id: string, slug: string, instructionHash: string) =>
     call("POST", `${item(id)}/handover/${slug}/approve`, { instructionHash }, true),
   deferHandover: (id: string, slug: string) => call("POST", `${item(id)}/handover/${slug}/defer`, {}, true),
+  /** A handover's chat thread; 503 (`chat_unavailable`) while chat is off. */
+  chat: (id: string, slug: string) =>
+    call<{ chat: ChatThread }>("GET", `${item(id)}/handover/${slug}/chat`, undefined, true),
+  /** Ask the handover chat one question. */
+  ask: (id: string, slug: string, text: string) =>
+    call<{ chat: ChatThread }>("POST", `${item(id)}/handover/${slug}/chat/messages`, { text }, true),
+  /** Reject a handover awaiting review; `comment` is required. */
+  rejectHandover: (id: string, slug: string, reason: "wrong_project" | "other", comment: string) =>
+    call("POST", `${item(id)}/handover/${slug}/reject`, { reason, comment }, true),
   agents: () => call<{ agents: FactoryAgent[] }>("GET", "/api/factory/agents"),
   config: () => call<{ config: FactoryConfig; effective: EffectiveProfiles }>("GET", "/api/factory/config"),
   saveConfig: (config: FactoryConfig) => call("PUT", "/api/factory/config", config, true),

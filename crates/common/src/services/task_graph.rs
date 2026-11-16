@@ -1169,6 +1169,12 @@ mod tests {
                 track_id: "t1_20261105".into(),
                 task_id: "b".into(),
             }),
+            archived_at: None,
+            archived_by: None,
+            dismissed_at: None,
+            dismissed_by: None,
+            summary: Default::default(),
+            notice: None,
         };
         let g = graph_with(
             &[created("/code/acme", "x", &wt)],

@@ -31,6 +31,10 @@ impl From<SolutionError> for ApiError {
             SolutionError::AlreadyConverted(_) => {
                 ApiError::coded(409, "already_converted", e.to_string())
             }
+            SolutionError::HandoverState(_) => {
+                ApiError::coded(409, "handover_state", e.to_string())
+            }
+            SolutionError::Invalid(_) => ApiError::new(400, e.to_string()),
             SolutionError::Agent(RoleJobError::Refused(_)) => {
                 ApiError::coded(422, "agent_refused", e.to_string())
             }
@@ -285,6 +289,103 @@ pub async fn approve_handover(
         .await
         .map_err(|_| ApiError::new(500, "task panicked".into()))??,
     ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RejectHandoverBody {
+    pub reason: common::domain::solution::HandoverRejectReason,
+    #[serde(default)]
+    pub comment: String,
+}
+
+/// `POST /api/inbox/{id}/handover/{project}/reject` — operator only. The
+/// actor is the presented credential; `reason` is `wrong_project | other`
+/// and `comment` is required.
+pub async fn reject_handover(
+    State(state): State<AppState>,
+    Path((id, project)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<RejectHandoverBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let class = require_operator(&state, &headers, "solution.handover.rejected", Some(&id))?;
+    let svc = state.solution.clone();
+    Ok(Json(
+        tokio::task::spawn_blocking(move || {
+            svc.reject_handover(&id, &project, body.reason, &body.comment, class)
+        })
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".into()))??,
+    ))
+}
+
+impl From<crate::services::chat::service::ChatError> for ApiError {
+    fn from(e: crate::services::chat::service::ChatError) -> Self {
+        use crate::services::chat::service::ChatError as C;
+        match e {
+            C::Unavailable(reason) => ApiError::coded(
+                503,
+                "chat_unavailable",
+                format!("chat unavailable: {reason}"),
+            ),
+            C::HandoverTooLarge => ApiError::coded(
+                413,
+                "handover_too_large",
+                "the handover is too large for chat; it is never truncated".into(),
+            ),
+            C::Full => ApiError::coded(413, "chat_full", "chat full".into()),
+            C::Invalid(m) => ApiError::new(400, m),
+            C::Solution(s) => s.into(),
+            C::Failed(m) => ApiError::coded(502, "chat_failed", m),
+            C::Store(s) => crate::services::inbox_service::InboxServiceError::from(s).into(),
+        }
+    }
+}
+
+/// `GET /api/inbox/{id}/handover/{project}/chat` — operator only; the
+/// handover's shared thread. 503 while chat is off. Read-only.
+pub async fn get_chat(
+    State(state): State<AppState>,
+    Path((id, project)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_operator(&state, &headers, "solution.chat.read", Some(&id))?;
+    let thread = crate::services::chat::service::thread(
+        &state.chat_gate,
+        &state.inbox,
+        &state.solution,
+        &id,
+        &project,
+    )?;
+    Ok(Json(serde_json::json!({ "chat": thread })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatMessageBody {
+    pub text: String,
+}
+
+/// `POST /api/inbox/{id}/handover/{project}/chat/messages {text}` — operator
+/// only; one question and its answer. Changes nothing outside the chat.
+pub async fn post_chat_message(
+    State(state): State<AppState>,
+    Path((id, project)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<ChatMessageBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let class = require_operator(&state, &headers, "solution.chat.message", Some(&id))?;
+    let thread = crate::services::chat::service::post_message(
+        &state.chat_gate,
+        &state.agent_stream,
+        &state.inbox,
+        &state.solution,
+        &id,
+        &project,
+        &body.text,
+        class,
+    )
+    .await?;
+    Ok(Json(serde_json::json!({ "chat": thread })))
 }
 
 /// `POST /api/inbox/{id}/handover/{project}/defer` — operator only.

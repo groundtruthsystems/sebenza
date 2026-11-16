@@ -64,6 +64,8 @@ pub struct AppState {
     pub solution: Arc<crate::services::solution::SolutionService>,
     /// Project design and code reviews requested by worktrees.
     pub reviews: Arc<crate::services::project_review::ProjectReviewService>,
+    /// The handover-chat zero-tool gate: off until its probe passes.
+    pub chat_gate: Arc<crate::services::chat::gate::ChatGate>,
     pub frontend_dist: Option<PathBuf>,
 }
 
@@ -420,6 +422,19 @@ pub fn build_router(state: AppState) -> Router {
             post(crate::solution_routes::defer_handover),
         )
         .route(
+            "/api/inbox/{id}/handover/{project}/reject",
+            post(crate::solution_routes::reject_handover),
+        )
+        // Handover chat: these two routes and no other (AC-07a).
+        .route(
+            "/api/inbox/{id}/handover/{project}/chat",
+            get(crate::solution_routes::get_chat),
+        )
+        .route(
+            "/api/inbox/{id}/handover/{project}/chat/messages",
+            post(crate::solution_routes::post_chat_message),
+        )
+        .route(
             "/api/inbox/{id}/solution/problems/{pid}/resolve",
             post(crate::solution_routes::resolve_problem),
         )
@@ -503,6 +518,22 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/inbox/{id}/requests/{rid}/retry-triage",
             post(crate::inbox_routes::retry_triage),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/dismiss",
+            post(crate::inbox_routes::dismiss_request),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/archive",
+            post(crate::inbox_routes::archive_request),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/notice/retry",
+            post(crate::inbox_routes::retry_notice),
+        )
+        .route(
+            "/api/inbox/{id}/requests/{rid}/history",
+            get(crate::inbox_routes::request_history),
         )
         .route(
             "/api/inbox/{id}/agent/jobs/{job_id}",

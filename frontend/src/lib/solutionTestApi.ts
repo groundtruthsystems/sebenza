@@ -43,6 +43,14 @@ export function fakeApi(over: Partial<Record<keyof SolutionApi, unknown>> = {}):
     editHandover: vi.fn().mockResolvedValue({ instructionHash: "ih2" }),
     approveHandover: vi.fn().mockResolvedValue({}),
     deferHandover: vi.fn().mockResolvedValue({}),
+    rejectHandover: vi.fn().mockResolvedValue({}),
+    // Loaded lazily: a test that mocks ./solutionApi with this fake would
+    // otherwise import the mocked module from inside its own factory.
+    chat: vi.fn().mockImplementation(async () => {
+      const { ApiRefusal } = await vi.importActual<typeof import("./solutionApi")>("./solutionApi");
+      throw new ApiRefusal(503, "chat_unavailable", "chat unavailable");
+    }),
+    ask: vi.fn().mockResolvedValue({ chat: { chatId: "c", notice: "Chat is not part of the review record.", messages: [] } }),
     agents: vi.fn().mockResolvedValue({
       agents: [
         { agent: "claude", installed: true, enforcement: "verified", canReview: true },
