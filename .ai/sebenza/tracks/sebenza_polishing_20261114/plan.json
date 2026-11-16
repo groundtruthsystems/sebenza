@@ -533,7 +533,7 @@
           "test_scenarios": [
             "TS-18"
           ],
-          "blocked_reason": "TS-18 live adversarial run is the chat release gate; it waits on the operator approving the AC-07a/b amendment (handover section 6).",
+          "blocked_reason": "TS-18 live run 1 (2026-11-15) FAILED: 23/180 hard failures, all refusals that quote the injected marker; 0 tool activity, soft 100%. Needs operator decision: change the chat role so payloads are never quoted and rerun, or amend the hard criterion.",
           "request": {
             "request_id": "01M7FPCCH974KEK6E51ZC629TM",
             "status": "open",
