@@ -6,8 +6,9 @@
 //! not under the head, the head is off the track's branch, the plan was never
 //! approved, a merge brought in anything but the target, or a change commit
 //! lacks a `Sebenza-Track: <track>` and `Sebenza-Task: <approved task>`
-//! trailer pair. Target merges need no trailers; their changes are already
-//! outside the scope diff.
+//! trailer pair. Clean target merges need no trailers; their changes are
+//! already outside the scope diff. A target merge with edits of its own is a
+//! change commit here, and its paths are those its remerge diff shows.
 //!
 //! Each change commit's paths are checked against the union of its tasks'
 //! boundaries, ignoring track bookkeeping. An in-scope file a commit changed
@@ -22,7 +23,7 @@ use super::git_pinned::{Git, GitError, RunLimits};
 use super::plan_approval::{content_sha256_of, plan_at};
 use super::reasons::{Blocker, Reason};
 use super::resolver::ReviewInputs;
-use super::scope::{Anchor, CommitKind, DiffFile, ScopeCommit, Side, SnapshotPins};
+use super::scope::{Anchor, CommitKind, DiffFile, ScopeCommit, Side, SnapshotPins, remerge_paths};
 use super::standards_docs::is_track_bookkeeping;
 use common::domain::review_records::{AnchorRecord, AnchorSide, PlanApproved};
 use std::collections::{BTreeMap, BTreeSet};
@@ -76,7 +77,7 @@ pub fn prove_scope(
     let changes: Vec<&ScopeCommit> = inputs
         .commits
         .iter()
-        .filter(|c| c.kind == CommitKind::Change)
+        .filter(|c| matches!(c.kind, CommitKind::Change | CommitKind::EditedTargetMerge))
         .collect();
     let trailers = commit_trailers(git, &changes)?;
     let mut blockers = merge_blockers(&inputs.commits);
@@ -255,8 +256,18 @@ fn boundary_of(approval: &PlanApproved, tasks: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// Every path, old and new, that commit `c` changed against its parent.
+/// Every path, old and new, that commit `c` changed: against its first
+/// parent, or for an edited two-parent target merge, against git's own merge.
 fn changed_paths(git: &Git, c: &ScopeCommit) -> Result<Vec<String>, GitError> {
+    let out = if c.kind == CommitKind::EditedTargetMerge && c.parents.len() == 2 {
+        remerge_paths(git, &c.sha)?
+    } else {
+        first_parent_paths(git, c)?
+    };
+    Ok(parse_name_status(&String::from_utf8_lossy(&out)))
+}
+
+fn first_parent_paths(git: &Git, c: &ScopeCommit) -> Result<Vec<u8>, GitError> {
     let mut args = vec![
         "diff-tree",
         "-r",
@@ -270,8 +281,7 @@ fn changed_paths(git: &Git, c: &ScopeCommit) -> Result<Vec<String>, GitError> {
         None => args.push("--root"),
     }
     args.push(&c.sha);
-    let out = git.run(&args)?;
-    Ok(parse_name_status(&String::from_utf8_lossy(&out)))
+    git.run(&args)
 }
 
 /// `-z --name-status`: a status field, then one path, or two for a rename
@@ -459,6 +469,38 @@ mod tests {
         let merge = r.head();
         let (_, p) = proof(&r, Some(&approval_of(&r)));
         assert_eq!(reasons(&p), vec![(Reason::ForeignMerge, Some(merge))]);
+    }
+
+    /// Merge `main` into the track without committing, write `rel`, then
+    /// commit the merge with `message`.
+    fn edited_target_merge(r: &TestRepo, rel: &str, content: &str, message: &str) -> String {
+        git(
+            &r.worktree,
+            &["merge", "-q", "--no-ff", "--no-commit", "main"],
+        );
+        r.commit_on_feat_with(rel, content, message)
+    }
+
+    #[test]
+    fn ts14_a_target_merge_carrying_its_own_edit_needs_trailers() {
+        let r = TestRepo::new("proof-ts14-hidden");
+        let a = approval_of(&r);
+        r.commit_on_main("main.rs", "fn m() {}\n");
+        let merge = edited_target_merge(&r, "src.rs", "fn main() { hidden(); }\n", "merge");
+        let (_, p) = proof(&r, Some(&a));
+        assert_eq!(reasons(&p), vec![(Reason::MissingTrailer, Some(merge))]);
+    }
+
+    #[test]
+    fn ts44_a_target_merge_edit_outside_the_boundary_is_out_of_scope() {
+        let (r, a) = bounded("proof-ts44-merge");
+        r.commit_on_main("main.rs", "fn m() {}\n");
+        let msg = format!("merge\n\n{}", trailers(TRACK, TASK));
+        edited_target_merge(&r, "lib.rs", "fn lib() {}\n", &msg);
+        let (_, p) = proof(&r, Some(&a));
+        assert!(p.blockers.is_empty(), "{:?}", p.blockers);
+        let paths: Vec<_> = p.out_of_scope.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec!["lib.rs"], "main.rs came from the target");
     }
 
     #[test]

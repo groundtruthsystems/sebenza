@@ -4,7 +4,9 @@
 //! Because the base is the merge-base with the target, the tree diff
 //! base→head already leaves out every change a target merge brought in: those
 //! changes are in the base. The commit list still marks such merges, and
-//! merges of any other branch, for the scope proof (phase 4).
+//! merges of any other branch, for the scope proof (phase 4). A target merge
+//! whose tree differs from git's automatic merge of its parents carries
+//! edits of its own, so it is marked apart and scoped like a change.
 //!
 //! Hunks come from `git diff -M -U0` between the pinned SHAs, so renames
 //! keep their history. A hunk's anchor is (path, line, side, SHA): a
@@ -31,8 +33,12 @@ pub struct SnapshotPins {
 pub enum CommitKind {
     /// A single-parent commit.
     Change,
-    /// A merge whose second parent is reachable from the target.
+    /// A merge whose second parent is reachable from the target and whose
+    /// tree is exactly git's automatic merge of its parents.
     TargetMerge,
+    /// A target merge that also carries changes of its own (an edit or a
+    /// conflict resolution); scoped like a change commit.
+    EditedTargetMerge,
     /// A merge of anything else.
     ForeignMerge,
 }
@@ -167,11 +173,36 @@ fn scope_commit(git: &Git, line: &str, target: &str) -> Result<ScopeCommit, GitE
     let kind = if parents.len() < 2 {
         CommitKind::Change
     } else if all_reachable(git, &parents[1..], target)? {
-        CommitKind::TargetMerge
+        target_merge_kind(git, &sha, parents.len())?
     } else {
         CommitKind::ForeignMerge
     };
     Ok(ScopeCommit { sha, parents, kind })
+}
+
+/// Whether the target merge `sha` is git's own merge. An octopus merge
+/// cannot be re-merged, so it is never taken as clean.
+fn target_merge_kind(git: &Git, sha: &str, parents: usize) -> Result<CommitKind, GitError> {
+    if parents == 2 && remerge_paths(git, sha)?.is_empty() {
+        Ok(CommitKind::TargetMerge)
+    } else {
+        Ok(CommitKind::EditedTargetMerge)
+    }
+}
+
+/// `git diff-tree --remerge-diff` of merge `sha` as `-z --name-status`: what
+/// its tree changes against a fresh automatic merge of its two parents.
+pub fn remerge_paths(git: &Git, sha: &str) -> Result<Vec<u8>, GitError> {
+    git.run(&[
+        "diff-tree",
+        "--remerge-diff",
+        "-r",
+        "-z",
+        "-M",
+        "--name-status",
+        "--no-commit-id",
+        sha,
+    ])
 }
 
 fn all_reachable(git: &Git, commits: &[String], target: &str) -> Result<bool, GitError> {
