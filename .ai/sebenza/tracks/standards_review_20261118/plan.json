@@ -77,7 +77,8 @@
           "id": "phase-2-task-2",
           "name": "Implement the snapshot and input resolver",
           "description": "Pin head, merge-base and target, load index.md-listed standards from git objects, and build the manifest and in-scope hunks with anchors.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "4137fe1"
         },
         {
           "id": "phase-2-task-3",
