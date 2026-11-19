@@ -1,12 +1,12 @@
 //! The per-project review log: `~/.ai/sebenza/reviews/<project>/events.jsonl`.
 //!
 //! Append-only and fsynced, like the inbox `events.jsonl`: one `write` of the
-//! whole line, then a data sync, which is the commit point. Review state is a
+//! whole line, then a data sync, which is the commit point. When the write or
+//! the sync fails, the line is cut off again before the error is returned. Review state is a
 //! fold over the log. A crash mid-write leaves a torn final line; it never
 //! held a committed event, so it is cut off before the next read or append.
 //! Events carry ids and hashes only, never code, tokens or free text.
 
-use crate::adapters::inbox_store::write_durably;
 use crate::domain::review_records::{
     AttemptFailed, ExistingChecksRecorded, FindingDecided, JobBlocked, PlanApproved, RunLeased,
     RunSubmitted, SignedOff,
@@ -14,7 +14,7 @@ use crate::domain::review_records::{
 use crate::util::id::random_ulid;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
@@ -316,7 +316,52 @@ fn append_event(file: &mut fs::File, kind: ReviewEventKind) -> std::io::Result<(
     let mut line = serde_json::to_string(&ReviewEvent::new(kind))
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     line.push('\n');
-    write_durably(file, line.as_bytes())
+    let before = file.metadata()?.len();
+    match file
+        .write_all(line.as_bytes())
+        .and_then(|()| sync_data(file))
+    {
+        Ok(()) => Ok(()),
+        Err(e) => Err(roll_back(file, before, e)),
+    }
+}
+
+/// Cut the file back to `len` after a failed append and return `failed`.
+/// A whole line whose sync failed would otherwise read as committed to
+/// every later fold in this process, though it may never reach the disk.
+fn roll_back(file: &fs::File, len: u64, failed: std::io::Error) -> std::io::Error {
+    match file.set_len(len).and_then(|()| file.sync_data()) {
+        Ok(()) => failed,
+        Err(e) => std::io::Error::other(format!("{failed}; rolling the line back failed: {e}")),
+    }
+}
+
+fn sync_data(file: &fs::File) -> std::io::Result<()> {
+    #[cfg(test)]
+    hooks::injected_sync_failure()?;
+    file.sync_data()
+}
+
+/// Test-only fault injection for the append's data sync.
+#[cfg(test)]
+pub(crate) mod hooks {
+    use std::cell::Cell;
+
+    thread_local! {
+        static FAIL_NEXT_SYNC: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Make the next append's data sync on this thread fail.
+    pub(crate) fn fail_next_sync() {
+        FAIL_NEXT_SYNC.with(|f| f.set(true));
+    }
+
+    pub(super) fn injected_sync_failure() -> std::io::Result<()> {
+        if FAIL_NEXT_SYNC.with(|f| f.replace(false)) {
+            return Err(std::io::Error::other("injected sync failure"));
+        }
+        Ok(())
+    }
 }
 
 /// A new log's directory entry must survive a crash too.
@@ -398,6 +443,27 @@ mod tests {
         assert!(text.contains("\"kind\":\"track-completed\""));
         let state = log.open().unwrap();
         assert_eq!(state.completions, vec![completion("t1", &"a".repeat(40))]);
+    }
+
+    #[test]
+    fn ts69_a_failed_fsync_rolls_the_line_back_before_returning_the_error() {
+        let log = temp_log("fsync-fail");
+        assert!(append_once(&log, completion("t1", "h1")));
+        let before = fs::metadata(log.path()).unwrap().len();
+        hooks::fail_next_sync();
+        let c = completion("t1", "h2");
+        let key = c.job_key();
+        let err = log
+            .append_completion_unless(c, |s| s.job(&key).cloned())
+            .unwrap_err();
+        assert_eq!(err.to_string(), "injected sync failure");
+        assert_eq!(fs::metadata(log.path()).unwrap().len(), before);
+        assert_eq!(log.open().unwrap().job_count("t1"), 1);
+        assert!(
+            append_once(&log, completion("t1", "h2")),
+            "the retry commits"
+        );
+        assert_eq!(log.open().unwrap().job_count("t1"), 2);
     }
 
     #[test]
