@@ -397,13 +397,14 @@
           "id": "phase-8-task-7",
           "name": "Roll back a review-log line when fsync fails",
           "description": "Regression test: an injected sync failure after write_all truncates the file to its pre-write length before returning the error.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "33236d0"
         },
         {
           "id": "phase-8-task-8",
           "name": "Execute test scenarios touched by the review fixes",
           "description": "Re-run and record evidence for every scenario the review fixes touch.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-09",
             "TS-12",
