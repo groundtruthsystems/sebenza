@@ -8,8 +8,8 @@
 //! reconciler, because the log wins. A repeat with the same job key appends
 //! nothing. No lock is held across a git call.
 
-use crate::services::git_pinned::{merge_base, rev_parse};
-use crate::services::standards_rev::standards_rev;
+use crate::services::standards_review::git_pinned::{merge_base, rev_parse};
+use crate::services::standards_review::standards_rev::standards_rev;
 use crate::services::tracks_projection::{Projected, ProjectionError, project_done};
 use common::adapters::review_log::{CompletionSource, ReviewLog, TrackCompleted};
 use common::domain::solution::CredentialClass;

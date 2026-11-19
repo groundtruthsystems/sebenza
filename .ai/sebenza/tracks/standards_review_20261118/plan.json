@@ -63,14 +63,14 @@
     {
       "id": "phase-2",
       "name": "Snapshot and input resolver",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for the snapshot resolver",
           "description": "Add failing tests over temp git repos for pinned objects, path containment, symlinks, submodules, caps and standards_rev.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-2-task-2",

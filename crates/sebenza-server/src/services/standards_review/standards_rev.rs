@@ -4,11 +4,14 @@
 //! from git objects only. A listed document that is absent contributes
 //! (path, `missing`), so a job over it can be told apart.
 //!
-//! This is the minimal resolver phase 1 needs for the job key. The phase-2
-//! resolver extends [`resolve_entries`] with the path, mode, size and type
-//! checks that make a job `standards-unavailable`.
+//! [`resolve_entries`] delegates to [`resolve_standards`], which also applies
+//! the path, mode, size and type checks that make a job
+//! `standards-unavailable`; those blockers do not change the revision.
 
-use crate::services::git_pinned::git;
+use super::git_pinned::Git;
+use super::standards_docs::{
+    MAX_STANDARDS_BLOB, classify_link, is_track_bookkeeping, link_targets, resolve_standards,
+};
 use common::domain::solution::sha256_hex;
 use std::path::Path;
 
@@ -16,14 +19,21 @@ use std::path::Path;
 pub const INDEX_PATH: &str = ".ai/sebenza/index.md";
 /// The blob value of a listed document that does not exist at the base.
 pub const MISSING: &str = "missing";
-const WORKSPACE: &str = ".ai/sebenza";
 
-/// One input to the revision: a repo-relative path and its blob SHA.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// One input to the revision: a repo-relative path and its object SHA.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub struct StandardsEntry {
     pub path: String,
     /// `None` when the path names nothing readable at the base.
     pub blob: Option<String>,
+}
+
+/// The (path, `missing`) sentinel for a path that names nothing.
+pub fn missing(path: &str) -> StandardsEntry {
+    StandardsEntry {
+        path: path.to_string(),
+        blob: None,
+    }
 }
 
 /// The standards revision at `base_sha`.
@@ -46,115 +56,25 @@ pub fn rev_of(entries: &[StandardsEntry]) -> String {
     sha256_hex(&text)
 }
 
-/// `index.md` and every blob its listed documents name at `base_sha`.
+/// `index.md` and every object its listed documents name at `base_sha`.
 pub fn resolve_entries(repo: &Path, base_sha: &str) -> Result<Vec<StandardsEntry>, String> {
-    let index = blobs_at(repo, base_sha, INDEX_PATH)?;
-    let Some(index_entry) = index.into_iter().next() else {
-        return Ok(vec![missing(INDEX_PATH)]);
-    };
-    let text = git(repo, &["cat-file", "blob", &blob_of(&index_entry)])?;
-    let mut entries = vec![index_entry];
-    for path in listed_paths(&String::from_utf8_lossy(&text)) {
-        entries.extend(listed_entries(repo, base_sha, &path)?);
-    }
-    entries.sort();
-    entries.dedup();
-    Ok(entries)
+    let git = Git::open(repo).map_err(|e| e.to_string())?;
+    let standards =
+        resolve_standards(&git, base_sha, MAX_STANDARDS_BLOB).map_err(|e| e.to_string())?;
+    Ok(standards.entries)
 }
 
-fn listed_entries(repo: &Path, base: &str, path: &str) -> Result<Vec<StandardsEntry>, String> {
-    if !path.starts_with(&format!("{WORKSPACE}/")) {
-        return Ok(vec![missing(path)]);
-    }
-    let found = blobs_at(repo, base, path)?;
-    Ok(if found.is_empty() {
-        vec![missing(path)]
-    } else {
-        found
-    })
-}
-
-/// The repo paths `index.md` links to, resolved against `.ai/sebenza/`. The
-/// track registry and track directories are bookkeeping, not standards. A
-/// link that escapes the workspace keeps its raw form and resolves to
-/// [`MISSING`].
+/// The repo paths `index.md` links to, resolved against `.ai/sebenza/`,
+/// minus track bookkeeping. A refused link keeps its raw form.
 pub fn listed_paths(index_md: &str) -> Vec<String> {
     let mut paths: Vec<String> = link_targets(index_md)
         .into_iter()
-        .filter(|t| !t.contains("://") && !t.starts_with('#') && !t.starts_with("mailto:"))
-        .map(|t| normalise(&t).unwrap_or(t))
+        .map(|t| classify_link(&t).unwrap_or(t))
         .filter(|p| !is_track_bookkeeping(p))
         .collect();
     paths.sort();
     paths.dedup();
     paths
-}
-
-fn is_track_bookkeeping(path: &str) -> bool {
-    let rel = path.strip_prefix(&format!("{WORKSPACE}/")).unwrap_or("");
-    rel == "tracks.json" || rel == "tracks" || rel.starts_with("tracks/")
-}
-
-/// Markdown `[text](target)` targets, without any `#fragment`.
-fn link_targets(md: &str) -> Vec<String> {
-    md.split("](")
-        .skip(1)
-        .filter_map(|rest| rest.split(')').next())
-        .map(|t| t.split('#').next().unwrap_or("").trim().to_string())
-        .filter(|t| !t.is_empty())
-        .collect()
-}
-
-/// `target` relative to `.ai/sebenza/` as a repo path, or `None` when it is
-/// absolute or climbs out of the workspace.
-fn normalise(target: &str) -> Option<String> {
-    if target.starts_with('/') {
-        return None;
-    }
-    let mut parts: Vec<&str> = WORKSPACE.split('/').collect();
-    for seg in target.trim_end_matches('/').split('/') {
-        match seg {
-            "" | "." => {}
-            ".." if parts.len() > 2 => {
-                parts.pop();
-            }
-            ".." => return None,
-            s => parts.push(s),
-        }
-    }
-    Some(parts.join("/"))
-}
-
-/// Every regular blob at or under `path` in `rev`.
-fn blobs_at(repo: &Path, rev: &str, path: &str) -> Result<Vec<StandardsEntry>, String> {
-    let out = git(repo, &["ls-tree", "-r", "--full-tree", rev, "--", path])?;
-    Ok(String::from_utf8_lossy(&out)
-        .lines()
-        .filter_map(parse_ls_tree_line)
-        .collect())
-}
-
-/// `<mode> blob <sha>\t<path>` for a regular file; symlinks, submodules and
-/// trees are not standards.
-fn parse_ls_tree_line(line: &str) -> Option<StandardsEntry> {
-    let (meta, path) = line.split_once('\t')?;
-    let mut f = meta.split_whitespace();
-    let (mode, kind, sha) = (f.next()?, f.next()?, f.next()?);
-    (kind == "blob" && (mode == "100644" || mode == "100755")).then(|| StandardsEntry {
-        path: path.to_string(),
-        blob: Some(sha.to_string()),
-    })
-}
-
-fn blob_of(e: &StandardsEntry) -> String {
-    e.blob.clone().unwrap_or_default()
-}
-
-fn missing(path: &str) -> StandardsEntry {
-    StandardsEntry {
-        path: path.to_string(),
-        blob: None,
-    }
 }
 
 #[cfg(test)]

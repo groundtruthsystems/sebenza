@@ -135,6 +135,56 @@ impl TestRepo {
         self.main_head()
     }
 
+    /// Commit `content` at `rel` on the track branch.
+    pub fn commit_on_feat(&self, rel: &str, content: &str) -> String {
+        self.commit_bytes_on(&self.worktree, rel, content.as_bytes())
+    }
+
+    /// Commit raw `bytes` at `rel` on `main`.
+    pub fn commit_bytes_on_main(&self, rel: &str, bytes: &[u8]) -> String {
+        self.commit_bytes_on(&self.repo, rel, bytes)
+    }
+
+    fn commit_bytes_on(&self, dir: &Path, rel: &str, bytes: &[u8]) -> String {
+        let p = dir.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, bytes).unwrap();
+        commit_all(dir, "change")
+    }
+
+    /// Delete `rel` on the track branch and commit.
+    pub fn remove_on_feat(&self, rel: &str) -> String {
+        git(&self.worktree, &["rm", "-q", rel]);
+        commit_all(&self.worktree, "remove")
+    }
+
+    /// Commit a symlink at `rel` pointing to `target` on `main`.
+    pub fn symlink_on_main(&self, rel: &str, target: &str) -> String {
+        let p = self.repo.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&p);
+        std::os::unix::fs::symlink(target, &p).unwrap();
+        commit_all(&self.repo, "symlink")
+    }
+
+    /// Commit a submodule entry (mode 160000) at `rel` on `main`.
+    pub fn gitlink_on_main(&self, rel: &str) -> String {
+        let sha = self.main_head();
+        let info = format!("160000,{sha},{rel}");
+        git(&self.repo, &["update-index", "--add", "--cacheinfo", &info]);
+        git(&self.repo, &["commit", "-q", "-m", "gitlink"]);
+        self.main_head()
+    }
+
+    /// Merge `main` into the track branch with a merge commit.
+    pub fn merge_main_into_feat(&self) -> String {
+        git(
+            &self.worktree,
+            &["merge", "-q", "--no-ff", "--no-edit", "main"],
+        );
+        self.head()
+    }
+
     pub fn track_status(&self, track: &str) -> String {
         let v: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(self.tracks_path()).unwrap()).unwrap();
@@ -146,6 +196,12 @@ impl TestRepo {
             .map(|t| t["status"].as_str().unwrap_or_default().to_string())
             .unwrap_or_default()
     }
+}
+
+fn commit_all(dir: &Path, msg: &str) -> String {
+    git(dir, &["add", "-A"]);
+    git(dir, &["commit", "-q", "-m", msg]);
+    git(dir, &["rev-parse", "HEAD"])
 }
 
 pub fn write(dir: &Path, rel: &str, content: &str) {
