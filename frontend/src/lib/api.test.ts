@@ -634,6 +634,25 @@ describe("inbox priority, comments and requests", () => {
     expect(seen[0].auth).toBe("Bearer tok");
   });
 
+  it("completes a track with the control token and reads the job", async () => {
+    const job = {
+      trackId: "t_20261118",
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      standardsRev: "c".repeat(64),
+    };
+    const seen = recordFetch({ ok: true, appended: true, projected: "applied", job });
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+    const got = await api.completeTrack("t_20261118", "wt-id-1");
+    expect(got.job).toEqual(job);
+    expect(got.projected).toBe("applied");
+    expect(seen[0].url).toContain("/api/tracks/t_20261118/complete");
+    expect(seen[0].method).toBe("POST");
+    expect(seen[0].auth).toBe("Bearer tok");
+    expect(JSON.parse(seen[0].body)).toEqual({ worktreeId: "wt-id-1" });
+  });
+
   it("streams inbox.job events for one item", async () => {
     const sockets: {
       url: string;

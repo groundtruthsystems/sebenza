@@ -32,33 +32,43 @@ pub async fn complete_track(
     Json(body): Json<CompleteTrackBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     crate::solution_routes::control_only(&headers)?;
-    let credential = CredentialClass::Control;
-    let s = state.clone();
-    let worktree_id = body.worktree_id.clone();
-    let target = tokio::task::spawn_blocking(move || resolve_target(&s, &worktree_id))
-        .await
-        .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
-    let Some(target) = target else {
-        audit_refusal(&track_id, None, "unknown_worktree");
+    tokio::task::spawn_blocking(move || {
+        complete_blocking(
+            &state,
+            &track_id,
+            &body.worktree_id,
+            CredentialClass::Control,
+        )
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))?
+    .map(Json)
+}
+
+/// Resolve the caller's worktree, complete the track there, and audit the
+/// outcome either way.
+fn complete_blocking(
+    state: &AppState,
+    track_id: &str,
+    worktree_id: &str,
+    credential: CredentialClass,
+) -> Result<serde_json::Value, ApiError> {
+    let Some(target) = resolve_target(state, worktree_id) else {
+        audit_refusal(track_id, None, "unknown_worktree");
         return Err(ApiError::coded(
             404,
             "unknown_worktree",
             "This worktree is not one the daemon manages.".to_string(),
         ));
     };
-    let s = state.clone();
-    let (t, id) = (target.clone(), track_id.clone());
-    let result = tokio::task::spawn_blocking(move || s.completion.complete(&t, &id, credential))
-        .await
-        .map_err(|_| ApiError::new(500, "task panicked".to_string()))?;
-    match result {
+    match state.completion.complete(&target, track_id, credential) {
         Ok(done) => {
             audit_completion(&target, &done, credential);
-            Ok(Json(completion_json(&done)))
+            Ok(completion_json(&done))
         }
         Err(e) => {
             let err = completion_error(e);
-            audit_refusal(&track_id, Some(&target), err.code.unwrap_or("error"));
+            audit_refusal(track_id, Some(&target), err.code.unwrap_or("error"));
             Err(err)
         }
     }

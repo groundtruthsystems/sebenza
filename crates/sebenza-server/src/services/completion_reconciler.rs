@@ -8,7 +8,6 @@
 //! - re-projects `done` where a completion's worktree shows anything else
 //!   (a crash before projection, or a skill overwrote it);
 //! - reaps expired run leases (phase 3; there are none yet).
-#![allow(unused_imports, unused_variables)] // red: stubs until phase-1-task-2
 
 use crate::server::AppState;
 use crate::services::project_manager::ProjectApp;
@@ -42,7 +41,19 @@ pub fn reconcile_project(
     svc: &TrackCompletionService,
     project: &ProjectWorktrees,
 ) -> ReconcileReport {
-    todo!("phase-1-task-2")
+    let mut report = ReconcileReport::default();
+    for wt in &project.worktrees {
+        append_missing(svc, wt, &mut report);
+    }
+    match svc.log(&project.project_key).open() {
+        Ok(state) => reproject(&state, project, &mut report),
+        Err(e) => {
+            tracing::warn!(project = %project.project_key, "review log unreadable: {e}");
+            report.errors += 1;
+        }
+    }
+    report.reaped = reap_expired_leases(svc, project);
+    report
 }
 
 /// Hook for phase 3: return expired run leases to the queue. No runs exist

@@ -16,6 +16,7 @@ mod serve;
 mod service;
 mod service_units;
 mod tmux_switch;
+mod track;
 mod update;
 mod worktree;
 
@@ -51,6 +52,7 @@ Usage:
   sebenza-cli inbox        Draft notes, triage worktree requests, convert to worktrees
   sebenza-cli login        Sign in as the operator (confirm the code in the dashboard)
   sebenza-cli project      List, add, or remove projects served by the dashboard
+  sebenza-cli track        Complete a track through the daemon (enqueues its review)
   sebenza-cli completion   Generate shell completion script (bash, zsh)
 
 Options:
@@ -91,6 +93,7 @@ const ROOT_COMMANDS: &[&str] = &[
     "project",
     "completion",
     "login",
+    "track",
 ];
 
 const WORKTREE_COMMANDS: &[&str] = &[
@@ -276,6 +279,8 @@ async fn main() {
         oneshot::run(&parsed.command_args, effective_port, &cwd).await
     } else if command == "project" {
         project::run(&parsed.command_args, effective_port).await
+    } else if command == "track" {
+        track::run(&parsed.command_args, effective_port, &cwd).await
     } else if WORKTREE_COMMANDS.contains(&command.as_str()) {
         worktree::run(worktree::WorktreeContext {
             command,
@@ -313,6 +318,7 @@ mod tests {
             "oneshot",
             "project",
             "login",
+            "track",
         ];
         for cmd in dispatched {
             assert!(

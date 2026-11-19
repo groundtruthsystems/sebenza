@@ -86,6 +86,8 @@ import {
   RetryInboxTriageResponseSchema,
   InboxAgentJobSchema,
   RedactInboxCommentResponseSchema,
+  CompleteTrackRequestSchema,
+  CompleteTrackResponseSchema,
   InboxDraftHelpRequestSchema,
   InboxDraftHelpResponseSchema,
   ConvertInstructionsRequestSchema,
@@ -177,6 +179,7 @@ export const apiPaths = {
   redeliverInboxComment: "/api/inbox/:id/comments/:eventId/redeliver",
   fetchRegistry: "/api/registry",
   fetchRegistryFile: "/api/registry/file",
+  completeTrack: "/api/tracks/:id/complete",
 } as const;
 
 /** Errors every guarded inbox decision route can return: 401/403 from the
@@ -916,6 +919,21 @@ export const apiContract = c.router(
       responses: {
         200: RedactInboxCommentResponseSchema,
         ...inboxDecisionErrors,
+      },
+    },
+    /** Control token; the daemon resolves the worktree from its own record. */
+    completeTrack: {
+      method: "POST",
+      path: apiPaths.completeTrack,
+      body: CompleteTrackRequestSchema,
+      responses: {
+        200: CompleteTrackResponseSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        500: ErrorResponseSchema,
       },
     },
     fetchRegistry: {

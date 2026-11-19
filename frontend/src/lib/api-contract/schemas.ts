@@ -1308,6 +1308,28 @@ export const RedactInboxCommentResponseSchema = z.object({
   targetEventId: z.string(),
 });
 
+/** `POST /api/tracks/:id/complete` — the worktree asking, by the id the
+ *  daemon wrote into its control.env. */
+export const CompleteTrackRequestSchema = z.object({
+  worktreeId: z.string(),
+});
+
+/** The review job a completion enqueued: unique on these four values. */
+export const ReviewJobKeySchema = z.object({
+  trackId: z.string(),
+  headSha: z.string(),
+  baseSha: z.string(),
+  standardsRev: z.string(),
+});
+
+export const CompleteTrackResponseSchema = z.object({
+  ok: z.literal(true),
+  /** False when this job key was already completed (idempotent repeat). */
+  appended: z.boolean(),
+  projected: z.enum(["applied", "already_done"]),
+  job: ReviewJobKeySchema,
+});
+
 export const AdvisorySchema = z.object({
   kind: z.string(),
   message: z.string(),

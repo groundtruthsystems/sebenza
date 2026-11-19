@@ -948,6 +948,16 @@ export async function redactInboxComment(id: string, eventId: string) {
   });
 }
 
+/** Complete a track of the worktree `worktreeId` through the daemon, which
+ *  records the completion, enqueues its review and marks it done. */
+export async function completeTrack(trackId: string, worktreeId: string) {
+  return hubApi.completeTrack({
+    params: { id: trackId },
+    body: { worktreeId },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
 /** Follow an item's system-agent jobs: each known job, then every change,
  *  as `inbox.job` events. Returns a function that closes the stream. */
 export function connectInboxAgentStream(

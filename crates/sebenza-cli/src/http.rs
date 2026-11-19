@@ -601,6 +601,26 @@ fn control_token() -> Result<String> {
 }
 
 impl Http {
+    /// `POST /api/tracks/{id}/complete` — complete a track of the worktree
+    /// `worktree_id` (control token).
+    pub async fn complete_track(&self, track_id: &str, worktree_id: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/tracks/{}/complete",
+                self.hub,
+                urlencode(track_id)
+            ))
+            .bearer_auth(control_token()?)
+            .json(&json!({ "worktreeId": worktree_id }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+}
+
+impl Http {
     /// `POST /api/operator/login` — start a CLI operator login.
     pub async fn operator_login_start(&self, verifier_hash: &str) -> Result<Value> {
         let resp = self
