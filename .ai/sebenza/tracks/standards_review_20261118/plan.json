@@ -19,13 +19,14 @@
           "id": "phase-1-task-2",
           "name": "Implement the review log and track_completion service",
           "description": "Add the per-project append-only review log and the daemon completion transition with tracks.json projection.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "90334d3"
         },
         {
           "id": "phase-1-task-3",
           "name": "Implement the reconciler and complete route",
           "description": "Add the startup and periodic reconciler plus POST /tracks/{id}/complete, agentctl complete and sebenza-cli track complete.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-4",
