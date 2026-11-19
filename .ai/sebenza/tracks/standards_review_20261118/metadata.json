@@ -1,0 +1,8 @@
+{
+  "track_id": "standards_review_20261118",
+  "type": "feature",
+  "status": "done",
+  "created_at": "2026-11-19T04:05:11Z",
+  "updated_at": "2026-11-19T21:42:02Z",
+  "description": "Standards review at track completion: daemon completion outbox, pinned-snapshot standards review in sebenza-review, implement writing guidance, sign-off gate (AC-01..AC-06, AC-08, AC-09)"
+}

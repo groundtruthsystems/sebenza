@@ -297,4 +297,65 @@ describe("TrackDetail", () => {
       expect(onclose).not.toHaveBeenCalled();
     });
   });
+
+  // TS-10 (fullscreen_request_20261119): track views get no full screen, even with view=full in the URL.
+  it("offers no full-screen control or view", async () => {
+    window.history.replaceState(null, "", "/?view=full");
+    const fetchFile = fetchFileFor({ "./tracks/inbox_20260914/spec.md": "# Spec\n\nThe requirements." });
+    render(<TrackDetail fetchFile={fetchFile} track={track} onclose={() => {}} />);
+    await waitFor(() => expect(screen.getByText("The requirements.")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /full screen/i })).toBeNull();
+    expect(screen.queryByRole("region", { name: /full-screen/i })).toBeNull();
+    window.history.replaceState(null, "", "/");
+  });
+  // FR-22: the operator signs off a completed track through the daemon's gate.
+  it("signs off a completed track and shows the signed head", async () => {
+    const signOff = vi.fn(async () => ({
+      ok: true as const,
+      appended: true,
+      trackId: track.track_id,
+      jobId: "job_1",
+      headSha: "abcdef1234567890",
+      baseSha: "b".repeat(40),
+      findingIds: [],
+    }));
+    const user = userEvent.setup();
+    render(
+      <TrackDetail
+        fetchFile={fetchFileFor({})}
+        track={{ ...track, status: "done" }}
+        signOff={signOff}
+        onclose={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Sign off" }));
+    await waitFor(() => expect(screen.getByText("Signed off at abcdef1")).toBeInTheDocument());
+    expect(signOff).toHaveBeenCalledWith(track.track_id);
+  });
+
+  it("shows why the gate refused a sign-off", async () => {
+    const signOff = vi.fn(async () => {
+      throw new Error("the verdict is not passing: open-findings");
+    });
+    const user = userEvent.setup();
+    render(
+      <TrackDetail
+        fetchFile={fetchFileFor({})}
+        track={{ ...track, status: "done" }}
+        signOff={signOff}
+        onclose={() => {}}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Sign off" }));
+    await waitFor(() =>
+      expect(screen.getByText("the verdict is not passing: open-findings")).toBeInTheDocument(),
+    );
+  });
+
+  it("offers no sign-off before the track is done", () => {
+    render(
+      <TrackDetail fetchFile={fetchFileFor({})} track={track} signOff={vi.fn()} onclose={() => {}} />,
+    );
+    expect(screen.queryByRole("button", { name: "Sign off" })).not.toBeInTheDocument();
+  });
 });

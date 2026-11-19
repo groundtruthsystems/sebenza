@@ -2039,6 +2039,11 @@ mod tests {
                 Default::default(),
                 std::env::temp_dir().join(format!("sebenza-chat-test-{}", std::process::id())),
             )),
+            completion: Arc::new(
+                crate::services::track_completion::TrackCompletionService::new(
+                    base.join("reviews"),
+                ),
+            ),
             frontend_dist: None,
         };
         Fixture {

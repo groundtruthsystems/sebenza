@@ -8,9 +8,11 @@ import {
   TaskGraphSchema,
 } from "./api-contract";
 import type {
+  ExistingCheck,
   InboxAgentJob,
   InboxRequestFilter,
   SaveTrackFileResponse,
+  SubmitReviewRunRequest,
 } from "./api-contract";
 import { operatorToken } from "./operator";
 import type {
@@ -561,7 +563,10 @@ export async function fetchInboxDraft(id: string) {
   return hubApi.fetchInboxDraft({ params: { id } });
 }
 
-export async function createInboxDraft(title: string, kind?: "note" | "solution") {
+export async function createInboxDraft(
+  title: string,
+  kind?: "note" | "solution",
+) {
   return hubApi.createInboxDraft({
     body: kind ? { title, kind } : { title },
     extraHeaders: inboxAuthHeaders(),
@@ -613,7 +618,11 @@ function noteOutcome(res: { status: number; body: unknown }): NoteWriteOutcome {
     };
   }
   if (res.status === 409) {
-    return { kind: "conflict", current: body.current ?? null, listHash: body.listHash ?? "" };
+    return {
+      kind: "conflict",
+      current: body.current ?? null,
+      listHash: body.listHash ?? "",
+    };
   }
   throw new Error(body?.error ?? `HTTP ${res.status}`);
 }
@@ -633,7 +642,8 @@ export async function fetchInboxGraph(
     fetchOptions: signal ? { signal } : undefined,
   });
   if (res.status === 304) return { kind: "unchanged" };
-  if (res.status === 200) return { kind: "graph", graph: res.body as TaskGraph };
+  if (res.status === 200)
+    return { kind: "graph", graph: res.body as TaskGraph };
   const body = res.body as { error?: string } | undefined;
   throw new Error(body?.error ?? `HTTP ${res.status}`);
 }
@@ -820,7 +830,10 @@ export async function fetchInboxSummary() {
 
 /** Every request worktree agents raised against the item, with its state.
  *  `filter` narrows to Unanswered, Answered, Dismissed or All (default). */
-export async function fetchInboxRequests(id: string, filter?: InboxRequestFilter) {
+export async function fetchInboxRequests(
+  id: string,
+  filter?: InboxRequestFilter,
+) {
   return hubApi.fetchInboxRequests({
     params: { id },
     query: filter ? { filter } : undefined,
@@ -863,7 +876,9 @@ export async function retryInboxNotice(id: string, requestId: string) {
 
 /** The request, its answers and its ordered events. */
 export async function fetchInboxRequestHistory(id: string, requestId: string) {
-  const res = await hubApi.fetchInboxRequestHistory({ params: { id, rid: requestId } });
+  const res = await hubApi.fetchInboxRequestHistory({
+    params: { id, rid: requestId },
+  });
   return res.history;
 }
 
@@ -946,6 +961,97 @@ export async function redactInboxComment(id: string, eventId: string) {
     body: {},
     extraHeaders: inboxAuthHeaders(),
   });
+}
+
+/** Complete a track of the worktree `worktreeId` through the daemon, which
+ *  records the completion, enqueues its review and marks it done. */
+export async function completeTrack(trackId: string, worktreeId: string) {
+  return hubApi.completeTrack({
+    params: { id: trackId },
+    body: { worktreeId },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Report the four existing sebenza-review checks of the worktree's track;
+ *  the daemon re-derives the verdict from them. */
+export async function recordExistingChecks(
+  trackId: string,
+  worktreeId: string,
+  checks: ExistingCheck[],
+) {
+  return hubApi.recordExistingChecks({
+    params: { id: trackId },
+    body: { worktreeId, checks },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Approve a track's committed plan and snapshot each task's edit boundary
+ *  (operator only). */
+export async function approveTrackPlan(trackId: string) {
+  return hubApi.approveTrackPlan({
+    params: { id: trackId },
+    body: {},
+    extraHeaders: await operatorHeaders(),
+  });
+}
+
+/** Sign off a track through the daemon's gate (operator only): refused
+ *  unless its verdict passes and its refs are the reviewed ones. */
+export async function signOffTrack(trackId: string) {
+  return hubApi.signOffTrack({
+    params: { id: trackId },
+    body: {},
+    extraHeaders: await operatorHeaders(),
+  });
+}
+
+/** Settle a finding the two review runs disagree on (operator only):
+ *  `confirm` keeps it open, `reject` resolves it. */
+export async function decideReviewFinding(
+  findingId: string,
+  decision: "confirm" | "reject",
+) {
+  return hubApi.decideFinding({
+    params: { id: findingId },
+    body: { decision },
+    extraHeaders: await operatorHeaders(),
+  });
+}
+
+/** Claim a standards-review run with its single-use run token. */
+export async function claimReviewRun(
+  runToken: string,
+  kind: "first" | "second",
+) {
+  return hubApi.claimReviewRun({
+    body: { kind },
+    extraHeaders: { authorization: `Bearer ${runToken}` },
+  });
+}
+
+/** Submit a run's disposition matrix; the daemon alone derives the verdict. */
+export async function submitReviewRun(
+  runId: string,
+  runToken: string,
+  submission: SubmitReviewRunRequest,
+) {
+  return hubApi.submitReviewRun({
+    params: { id: runId },
+    body: submission,
+    extraHeaders: { authorization: `Bearer ${runToken}` },
+  });
+}
+
+/** The active project's latest review job for `trackId` (read-only). */
+export async function fetchTrackReviewStatus(trackId: string) {
+  return api.fetchTrackReviewStatus({ params: { id: trackId } });
+}
+
+/** Every review finding of `trackId` with its status (read-only). */
+export async function fetchTrackReviewFindings(trackId: string) {
+  return api.fetchTrackReviewFindings({ params: { id: trackId } });
 }
 
 /** Follow an item's system-agent jobs: each known job, then every change,

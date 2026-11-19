@@ -10,6 +10,7 @@ pub use common::services::{
 pub mod active_worktrees;
 pub mod agent_stream;
 pub mod chat;
+pub mod completion_reconciler;
 pub mod inbox_graph;
 pub mod inbox_jobs;
 pub mod notice_dispatcher;
@@ -19,6 +20,11 @@ pub mod project_init_service;
 pub mod project_manager;
 pub mod project_review;
 pub mod review_snapshot;
+#[cfg(test)]
+pub mod review_test_repo;
 pub mod role_runner;
 pub mod solution;
+pub mod standards_review;
 pub mod system_agent;
+pub mod track_completion;
+pub mod tracks_projection;

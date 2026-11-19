@@ -1,0 +1,531 @@
+{
+  "$schema": "sebenza-plan-v1",
+  "track_id": "standards_review_20261118",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Review log, completion transition and reconciler",
+      "status": "done",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-1-task-1",
+          "name": "Write tests for the review log and completion",
+          "description": "Add failing tests for fsynced append, torn-tail recovery, idempotent completion, projection CAS and the reconciler.",
+          "status": "done",
+          "commit_sha": "797b7bd"
+        },
+        {
+          "id": "phase-1-task-2",
+          "name": "Implement the review log and track_completion service",
+          "description": "Add the per-project append-only review log and the daemon completion transition with tracks.json projection.",
+          "status": "done",
+          "commit_sha": "90334d3"
+        },
+        {
+          "id": "phase-1-task-3",
+          "name": "Implement the reconciler and complete route",
+          "description": "Add the startup and periodic reconciler plus POST /tracks/{id}/complete, agentctl complete and sebenza-cli track complete.",
+          "status": "done",
+          "commit_sha": "66a18c6"
+        },
+        {
+          "id": "phase-1-task-4",
+          "name": "Execute test scenarios TS-01..TS-70",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "done",
+          "test_scenarios": [
+            "TS-01",
+            "TS-03",
+            "TS-04",
+            "TS-05",
+            "TS-06",
+            "TS-63",
+            "TS-65",
+            "TS-66",
+            "TS-67",
+            "TS-68",
+            "TS-69",
+            "TS-70"
+          ],
+          "commit_sha": "e959dd1"
+        },
+        {
+          "id": "phase-1-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "done",
+          "commit_sha": "e959dd1"
+        }
+      ],
+      "checkpoint_sha": "e959dd1"
+    },
+    {
+      "id": "phase-2",
+      "name": "Snapshot and input resolver",
+      "status": "done",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-2-task-1",
+          "name": "Write tests for the snapshot resolver",
+          "description": "Add failing tests over temp git repos for pinned objects, path containment, symlinks, submodules, caps and standards_rev.",
+          "status": "done",
+          "commit_sha": "f005fea"
+        },
+        {
+          "id": "phase-2-task-2",
+          "name": "Implement the snapshot and input resolver",
+          "description": "Pin head, merge-base and target, load index.md-listed standards from git objects, and build the manifest and in-scope hunks with anchors.",
+          "status": "done",
+          "commit_sha": "4137fe1"
+        },
+        {
+          "id": "phase-2-task-3",
+          "name": "Execute test scenarios TS-07..TS-57",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "done",
+          "test_scenarios": [
+            "TS-07",
+            "TS-09",
+            "TS-10",
+            "TS-11",
+            "TS-17",
+            "TS-31",
+            "TS-51",
+            "TS-57"
+          ],
+          "commit_sha": "e813901"
+        },
+        {
+          "id": "phase-2-task-4",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "done",
+          "commit_sha": "e813901"
+        }
+      ],
+      "checkpoint_sha": "e813901"
+    },
+    {
+      "id": "phase-3",
+      "name": "Review store, run API and verdict deriver",
+      "status": "done",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-3-task-1",
+          "name": "Write tests for runs, submissions and finding lifecycle",
+          "description": "Add failing tests for run tokens, leases, attempts, matrix validation, redaction, the transition table and the matcher.",
+          "status": "done",
+          "commit_sha": "ef0fcc4"
+        },
+        {
+          "id": "phase-3-task-2",
+          "name": "Implement the run store and claim/submit API",
+          "description": "Add review jobs and runs with single-use hashed tokens, leases, per-kind attempts and strict submission validation.",
+          "status": "done",
+          "commit_sha": "55a0402"
+        },
+        {
+          "id": "phase-3-task-3",
+          "name": "Implement the verdict deriver and finding matcher",
+          "description": "Derive findings and verdicts in the daemon, with rename and text-hash matching, out-of-scope and rule-withdrawn handling.",
+          "status": "done",
+          "commit_sha": "1b4d566"
+        },
+        {
+          "id": "phase-3-task-4",
+          "name": "Execute test scenarios TS-18..TS-61",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "done",
+          "test_scenarios": [
+            "TS-18",
+            "TS-19",
+            "TS-20",
+            "TS-21",
+            "TS-22",
+            "TS-32",
+            "TS-33",
+            "TS-34",
+            "TS-35",
+            "TS-36",
+            "TS-37",
+            "TS-74",
+            "TS-50",
+            "TS-56",
+            "TS-60",
+            "TS-61"
+          ],
+          "commit_sha": "2e5a7df"
+        },
+        {
+          "id": "phase-3-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "done",
+          "commit_sha": "2e5a7df"
+        }
+      ],
+      "checkpoint_sha": "2e5a7df"
+    },
+    {
+      "id": "phase-4",
+      "name": "Trailers, edit boundary and writing guidance",
+      "status": "done",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-4-task-1",
+          "name": "Write tests for scope proof and the edit boundary",
+          "description": "Add failing tests for trailer verification, target merges, plan approval snapshots and out-of-scope edits.",
+          "status": "done",
+          "commit_sha": "8d896bc"
+        },
+        {
+          "id": "phase-4-task-2",
+          "name": "Implement scope proof and plan approval",
+          "description": "Verify trailers and first-parent scope on claim and add operator-token plan approval with a per-task boundary snapshot.",
+          "status": "done",
+          "commit_sha": "01f665e"
+        },
+        {
+          "id": "phase-4-task-3",
+          "name": "Update sebenza-implement and sebenza-plan skills",
+          "description": "Add the writing guidance, trailers, edit boundary and daemon completion to sebenza-implement, and plan approval to sebenza-plan.",
+          "status": "done",
+          "commit_sha": "c9320f6"
+        },
+        {
+          "id": "phase-4-task-4",
+          "name": "Execute test scenarios TS-08..TS-64",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "done",
+          "test_scenarios": [
+            "TS-08",
+            "TS-12",
+            "TS-13",
+            "TS-14",
+            "TS-15",
+            "TS-16",
+            "TS-41",
+            "TS-42",
+            "TS-43",
+            "TS-44",
+            "TS-45",
+            "TS-59",
+            "TS-64"
+          ],
+          "commit_sha": "f806ee9"
+        },
+        {
+          "id": "phase-4-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "done",
+          "commit_sha": "1c68af3"
+        }
+      ],
+      "checkpoint_sha": "1c68af3"
+    },
+    {
+      "id": "phase-5",
+      "name": "Standards stage, second run, measurers and template defaults",
+      "status": "done",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-5-task-1",
+          "name": "Write tests for measurers, second run and the standards stage",
+          "description": "Add failing tests for method-length measurers, second-run scheduling and agreement, notes for absent rules and sandbox egress.",
+          "status": "done",
+          "commit_sha": "68f6b64"
+        },
+        {
+          "id": "phase-5-task-2",
+          "name": "Implement numeric-rule measurers",
+          "description": "Add in-tree method-length measurers for Rust, TS/JS and Python with fallback to the second run.",
+          "status": "done",
+          "commit_sha": "a37ead5"
+        },
+        {
+          "id": "phase-5-task-3",
+          "name": "Implement second-run scheduling, decisions and the sandboxed launch",
+          "description": "Schedule kind=second runs, reconcile agreement, add the operator decision route and launch claude read-only with allowlisted egress.",
+          "status": "done",
+          "commit_sha": "f2fe13a"
+        },
+        {
+          "id": "phase-5-task-4",
+          "name": "Update sebenza-review and sebenza-setup skills",
+          "description": "Add the standards stage to sebenza-review, ship the three default rules in setup templates with a diff-only upgrade, and adopt them here.",
+          "status": "done",
+          "commit_sha": "87a8f45"
+        },
+        {
+          "id": "phase-5-task-5",
+          "name": "Execute test scenarios TS-23..TS-71",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "done",
+          "test_scenarios": [
+            "TS-23",
+            "TS-24",
+            "TS-25",
+            "TS-26",
+            "TS-27",
+            "TS-28",
+            "TS-29",
+            "TS-72",
+            "TS-30",
+            "TS-46",
+            "TS-47",
+            "TS-48",
+            "TS-49",
+            "TS-53",
+            "TS-55",
+            "TS-58",
+            "TS-62",
+            "TS-71"
+          ],
+          "commit_sha": "5ce833a"
+        },
+        {
+          "id": "phase-5-task-6",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "done",
+          "commit_sha": "aee82a6"
+        }
+      ],
+      "checkpoint_sha": "aee82a6"
+    },
+    {
+      "id": "phase-6",
+      "name": "Compare-and-swap sign-off gate",
+      "status": "done",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-6-task-1",
+          "name": "Write tests for the sign-off gate",
+          "description": "Add failing tests for refusal without a verdict, stale refs, refs moved mid-commit, audit records and contract parity.",
+          "status": "done",
+          "commit_sha": "8db322c"
+        },
+        {
+          "id": "phase-6-task-2",
+          "name": "Implement the sign-off gate and parity",
+          "description": "Add operator-token CAS sign-off, audit records, and mirror every new route in the ts-rest contract and sebenza-cli.",
+          "status": "done",
+          "commit_sha": "7b4a82a"
+        },
+        {
+          "id": "phase-6-task-3",
+          "name": "Execute test scenarios TS-02..TS-54",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "done",
+          "test_scenarios": [
+            "TS-02",
+            "TS-73",
+            "TS-38",
+            "TS-39",
+            "TS-40",
+            "TS-52",
+            "TS-54"
+          ],
+          "commit_sha": "3e25211"
+        },
+        {
+          "id": "phase-6-task-4",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "done",
+          "commit_sha": "75ef5f3"
+        }
+      ],
+      "checkpoint_sha": "75ef5f3"
+    },
+    {
+      "id": "phase-8",
+      "name": "Review Fixes",
+      "status": "done",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-8-task-1",
+          "name": "Resolve the target and head as branch refs",
+          "description": "Regression test: a tag named like the target branch must not change the merge-base or the standards. Resolve refs/heads/<target> and refs/heads/<branch> at every rev_parse/commit_sha call site.",
+          "status": "done",
+          "commit_sha": "30b11e5"
+        },
+        {
+          "id": "phase-8-task-2",
+          "name": "Check edits hidden in target merges",
+          "description": "Regression test: a target merge with a manual edit and no trailers must be caught. Treat a merge that introduces changes beyond the automatic merge (git merge-tree --write-tree) as a Change commit for trailers and the edit boundary.",
+          "status": "done",
+          "commit_sha": "9ae9f0f"
+        },
+        {
+          "id": "phase-8-task-3",
+          "name": "Fail closed on binary in-scope files",
+          "description": "Regression test: a NUL byte or a -diff attribute must not hide a reviewable file. Raise an unreviewable-binary blocker naming the path, and run the diff with --text and attributes neutralised.",
+          "status": "done",
+          "commit_sha": "a3698c3"
+        },
+        {
+          "id": "phase-8-task-4",
+          "name": "Bind the control token to the caller's worktree",
+          "description": "Regression test: record_existing_checks and complete must refuse (403 foreign_track) a track whose jobs were recorded by another worktree or branch, and an origin-less track recorded elsewhere; the first completion binds it.",
+          "status": "done",
+          "commit_sha": "efb49a8"
+        },
+        {
+          "id": "phase-8-task-5",
+          "name": "Handle symlink type changes in scope",
+          "description": "Regression test: a file-to-symlink type change in scope yields a blocker instead of an error, and resolver input errors fail the attempt immediately with a recorded reason.",
+          "status": "done",
+          "commit_sha": "72a67a9"
+        },
+        {
+          "id": "phase-8-task-6",
+          "name": "Refresh the latest job on re-completion",
+          "description": "Regression test: completing at A, B, then A again makes the A job latest. Decide the latest job by the most recent completion event while keeping job-key dedup.",
+          "status": "done",
+          "commit_sha": "41b0075"
+        },
+        {
+          "id": "phase-8-task-7",
+          "name": "Roll back a review-log line when fsync fails",
+          "description": "Regression test: an injected sync failure after write_all truncates the file to its pre-write length before returning the error.",
+          "status": "done",
+          "commit_sha": "33236d0"
+        },
+        {
+          "id": "phase-8-task-8",
+          "name": "Execute test scenarios touched by the review fixes",
+          "description": "Re-run and record evidence for every scenario the review fixes touch.",
+          "status": "done",
+          "test_scenarios": [
+            "TS-09",
+            "TS-12",
+            "TS-14",
+            "TS-17",
+            "TS-35",
+            "TS-39",
+            "TS-44",
+            "TS-63",
+            "TS-65",
+            "TS-66",
+            "TS-69"
+          ],
+          "commit_sha": "b38af8b"
+        },
+        {
+          "id": "phase-8-task-9",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "done",
+          "commit_sha": "4e7052d"
+        }
+      ],
+      "checkpoint_sha": "4e7052d"
+    },
+    {
+      "id": "phase-7",
+      "name": "Final verification",
+      "status": "done",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-7-task-1",
+          "name": "Re-run the whole test plan",
+          "description": "Re-run all 74 scenarios against the finished feature and close any traceability gap.",
+          "status": "done",
+          "test_scenarios": [
+            "TS-01",
+            "TS-03",
+            "TS-04",
+            "TS-05",
+            "TS-06",
+            "TS-63",
+            "TS-65",
+            "TS-66",
+            "TS-67",
+            "TS-68",
+            "TS-69",
+            "TS-70",
+            "TS-07",
+            "TS-09",
+            "TS-10",
+            "TS-11",
+            "TS-17",
+            "TS-31",
+            "TS-51",
+            "TS-57",
+            "TS-18",
+            "TS-19",
+            "TS-20",
+            "TS-21",
+            "TS-22",
+            "TS-32",
+            "TS-33",
+            "TS-34",
+            "TS-35",
+            "TS-36",
+            "TS-37",
+            "TS-74",
+            "TS-50",
+            "TS-56",
+            "TS-60",
+            "TS-61",
+            "TS-08",
+            "TS-12",
+            "TS-13",
+            "TS-14",
+            "TS-15",
+            "TS-16",
+            "TS-41",
+            "TS-42",
+            "TS-43",
+            "TS-44",
+            "TS-45",
+            "TS-59",
+            "TS-64",
+            "TS-23",
+            "TS-24",
+            "TS-25",
+            "TS-26",
+            "TS-27",
+            "TS-28",
+            "TS-29",
+            "TS-72",
+            "TS-30",
+            "TS-46",
+            "TS-47",
+            "TS-48",
+            "TS-49",
+            "TS-53",
+            "TS-55",
+            "TS-58",
+            "TS-62",
+            "TS-71",
+            "TS-02",
+            "TS-73",
+            "TS-38",
+            "TS-39",
+            "TS-40",
+            "TS-52",
+            "TS-54"
+          ],
+          "notes": "Full re-run 2026-11-19: cargo 542/78/505, skills 195, frontend 582, tsc clean. TS-71 manual egress gate checklist deferred to operator final verification."
+        },
+        {
+          "id": "phase-7-task-2",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "done"
+        }
+      ]
+    }
+  ]
+}

@@ -634,6 +634,249 @@ describe("inbox priority, comments and requests", () => {
     expect(seen[0].auth).toBe("Bearer tok");
   });
 
+  it("completes a track with the control token and reads the job", async () => {
+    const job = {
+      trackId: "t_20261118",
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      standardsRev: "c".repeat(64),
+    };
+    const seen = recordFetch({
+      ok: true,
+      appended: true,
+      projected: "applied",
+      job,
+    });
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+    const got = await api.completeTrack("t_20261118", "wt-id-1");
+    expect(got.job).toEqual(job);
+    expect(got.projected).toBe("applied");
+    expect(seen[0].url).toContain("/api/tracks/t_20261118/complete");
+    expect(seen[0].method).toBe("POST");
+    expect(seen[0].auth).toBe("Bearer tok");
+    expect(JSON.parse(seen[0].body)).toEqual({ worktreeId: "wt-id-1" });
+  });
+
+  it("reports the existing checks with the control token", async () => {
+    const seen = recordFetch({
+      ok: true,
+      trackId: "t_20261118",
+      jobId: "job_1",
+      failed: ["coverage"],
+      verdict: null,
+    });
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+    const checks = [
+      { check: "requirements", status: "pass" },
+      { check: "test_plan", status: "pass" },
+      { check: "coverage", status: "fail" },
+      { check: "architecture", status: "not_applicable" },
+    ] as const;
+    const got = await api.recordExistingChecks("t_20261118", "wt-id-1", [
+      ...checks,
+    ]);
+    expect(got.failed).toEqual(["coverage"]);
+    expect(got.verdict).toBeNull();
+    expect(seen[0].url).toContain(
+      "/api/review/tracks/t_20261118/existing-checks",
+    );
+    expect(seen[0].method).toBe("POST");
+    expect(seen[0].auth).toBe("Bearer tok");
+    expect(JSON.parse(seen[0].body)).toEqual({
+      worktreeId: "wt-id-1",
+      checks,
+    });
+  });
+
+  it("claims a review run with the run token, not the control token", async () => {
+    const claim = {
+      runId: "run_1",
+      jobId: "job_1",
+      trackId: "t_20261118",
+      kind: "first",
+      attempt: 1,
+      leaseUntil: 1800,
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      standardsRev: "c".repeat(64),
+      manifest: [
+        {
+          ruleId: "short",
+          category: "long-methods",
+          sourceDoc: "g.md",
+          line: 2,
+          maxLines: 20,
+        },
+      ],
+      files: [
+        {
+          path: "src/a.rs",
+          status: "added",
+          hunks: [
+            {
+              oldStart: 0,
+              oldLines: 0,
+              newStart: 1,
+              newLines: 1,
+              anchor: {
+                path: "src/a.rs",
+                line: 1,
+                side: "head",
+                sha: "a".repeat(40),
+              },
+            },
+          ],
+        },
+      ],
+      priorFindings: [],
+    };
+    const seen = recordFetch(claim);
+    window.__SEBENZA_CONTROL_TOKEN__ = "control";
+    const api = await loadApiAt("/myproject/");
+    const got = await api.claimReviewRun("rt_token", "first");
+    expect(got.manifest[0].maxLines).toBe(20);
+    expect(seen[0].url).toMatch(/^[^?]*\/api\/review-runs\/claim$/);
+    expect(seen[0].url).not.toContain("/myproject/");
+    expect(seen[0].auth).toBe("Bearer rt_token");
+    expect(JSON.parse(seen[0].body)).toEqual({ kind: "first" });
+  });
+
+  it("submits a disposition matrix and reads the daemon's verdict", async () => {
+    const seen = recordFetch({
+      ok: true,
+      runId: "run_1",
+      jobId: "job_1",
+      findingsOpened: 0,
+      verdict: { passing: false, reasons: ["existing-checks-missing"] },
+    });
+    const api = await loadApiAt("/myproject/");
+    const submission = {
+      dispositions: [
+        {
+          ruleId: "short",
+          path: "src/a.rs",
+          outcome: "clean" as const,
+          span: { startLine: 1, endLine: 1 },
+        },
+      ],
+    };
+    const got = await api.submitReviewRun("run_1", "rt_token", submission);
+    expect(got.verdict.reasons).toEqual(["existing-checks-missing"]);
+    expect(seen[0].url).toContain("/api/review-runs/run_1/submit");
+    expect(seen[0].auth).toBe("Bearer rt_token");
+    expect(JSON.parse(seen[0].body)).toEqual(submission);
+  });
+
+  it("decides a review finding at the hub with the operator token", async () => {
+    const { clearOperatorToken } = await import("./operator");
+    clearOperatorToken();
+    const seen = recordFetch({
+      token: "op_1",
+      expiresAt: 4_000_000_000,
+      ok: true,
+      findingId: "f_1",
+      from: "needs-operator-decision",
+      status: "resolved",
+      verdict: { passing: true, reasons: [] },
+    });
+    window.__SEBENZA_CONTROL_TOKEN__ = "control";
+    const api = await loadApiAt("/myproject/");
+    const got = await api.decideReviewFinding("f_1", "reject");
+    expect(got.status).toBe("resolved");
+    const call = seen[seen.length - 1];
+    expect(call.url).toMatch(/^[^?]*\/api\/findings\/f_1\/decision$/);
+    expect(call.url).not.toContain("/myproject/");
+    expect(call.auth).toBe("Bearer op_1");
+    expect(JSON.parse(call.body)).toEqual({ decision: "reject" });
+  });
+
+  it("approves a track plan at the hub with the operator token", async () => {
+    const { clearOperatorToken } = await import("./operator");
+    clearOperatorToken();
+    const seen = recordFetch({
+      token: "op_1",
+      expiresAt: 4_000_000_000,
+      ok: true,
+      trackId: "t_1",
+      headSha: "h",
+      planSha256: "p",
+      planContentSha256: "c",
+      tasks: [{ taskId: "task-1", files: ["src/"] }],
+    });
+    window.__SEBENZA_CONTROL_TOKEN__ = "control";
+    const api = await loadApiAt("/myproject/");
+    const got = await api.approveTrackPlan("t_1");
+    expect(got.tasks[0].taskId).toBe("task-1");
+    const call = seen[seen.length - 1];
+    expect(call.url).toMatch(/^[^?]*\/api\/tracks\/t_1\/plan\/approve$/);
+    expect(call.url).not.toContain("/myproject/");
+    expect(call.auth).toBe("Bearer op_1");
+  });
+
+  it("signs off a track at the hub with the operator token", async () => {
+    const { clearOperatorToken } = await import("./operator");
+    clearOperatorToken();
+    const seen = recordFetch({
+      token: "op_1",
+      expiresAt: 4_000_000_000,
+      ok: true,
+      appended: true,
+      trackId: "t_1",
+      jobId: "job_1",
+      headSha: "h",
+      baseSha: "b",
+      findingIds: ["f_1"],
+    });
+    window.__SEBENZA_CONTROL_TOKEN__ = "control";
+    const api = await loadApiAt("/myproject/");
+    const got = await api.signOffTrack("t_1");
+    expect(got.headSha).toBe("h");
+    const call = seen[seen.length - 1];
+    expect(call.url).toMatch(/^[^?]*\/api\/tracks\/t_1\/signoff$/);
+    expect(call.url).not.toContain("/myproject/");
+    expect(call.auth).toBe("Bearer op_1");
+  });
+
+  it("reads a track's review status and findings under the project prefix", async () => {
+    const job = {
+      trackId: "t_1",
+      jobId: "job_1",
+      headSha: "h",
+      baseSha: "b",
+      standardsRev: "r",
+      state: "verdict",
+      attempts: { first: 1, second: 0 },
+      blockers: [],
+      openRun: null,
+      verdict: { passing: false, reasons: ["open-findings"] },
+      existingChecksRecorded: false,
+      secondRunPending: false,
+      signedOff: false,
+      notes: [],
+    };
+    let seen = recordFetch({ trackId: "t_1", job });
+    let api = await loadApiAt("/myproject/");
+    const status = await api.fetchTrackReviewStatus("t_1");
+    expect(status.job?.state).toBe("verdict");
+    expect(seen[0].url).toContain("/myproject/api/review/tracks/t_1");
+    const finding = {
+      findingId: "f_1",
+      jobId: "job_1",
+      ruleId: "short",
+      status: "open",
+      origin: "agent",
+      anchor: { path: "src/a.rs", line: 3, side: "head", sha: "h" },
+      description: "Too long.",
+    };
+    seen = recordFetch({ trackId: "t_1", findings: [finding] });
+    api = await loadApiAt("/myproject/");
+    const findings = await api.fetchTrackReviewFindings("t_1");
+    expect(findings.findings[0].status).toBe("open");
+    expect(seen[0].url).toContain("/myproject/api/review/tracks/t_1/findings");
+  });
+
   it("streams inbox.job events for one item", async () => {
     const sockets: {
       url: string;

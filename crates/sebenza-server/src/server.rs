@@ -66,6 +66,8 @@ pub struct AppState {
     pub reviews: Arc<crate::services::project_review::ProjectReviewService>,
     /// The handover-chat zero-tool gate: off until its probe passes.
     pub chat_gate: Arc<crate::services::chat::gate::ChatGate>,
+    /// Track completion: the review log and its `tracks.json` projection.
+    pub completion: Arc<crate::services::track_completion::TrackCompletionService>,
     pub frontend_dist: Option<PathBuf>,
 }
 
@@ -79,6 +81,21 @@ impl AppState {
             .ok_or_else(|| ApiError::new(404, "Project not found".to_string()))?;
         app.touch();
         Ok(app)
+    }
+
+    /// The standards-review run store over the completion review logs. Its
+    /// scanner also redacts the control token wherever it appears.
+    pub fn review_runs(&self) -> crate::services::standards_review::run_store::ReviewRuns {
+        use crate::services::standards_review::free_text::ContentScanner;
+        use crate::services::standards_review::run_store::{ReviewRuns, RunSettings};
+        let known = crate::adapters::control_token::load_control_token()
+            .map(|t| vec![t])
+            .unwrap_or_default();
+        ReviewRuns::new(
+            self.completion.root().to_path_buf(),
+            RunSettings::default(),
+            Arc::new(ContentScanner { known }),
+        )
     }
 }
 
@@ -211,6 +228,9 @@ pub struct ApiError {
     /// A stable machine-readable code (`operator_required`,
     /// `not_independent`, ...), sent as `code` beside `error`.
     pub code: Option<&'static str>,
+    /// Machine-readable reasons beside the code, such as a refused
+    /// verdict's (`verdict_not_passing`); sent as `reasons` when present.
+    pub reasons: Vec<String>,
 }
 
 impl ApiError {
@@ -219,7 +239,14 @@ impl ApiError {
             status: StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             message,
             code: None,
+            reasons: Vec::new(),
         }
+    }
+
+    /// This error with `reasons` attached.
+    pub fn with_reasons(mut self, reasons: Vec<String>) -> Self {
+        self.reasons = reasons;
+        self
     }
 
     pub fn coded(status: u16, code: &'static str, message: String) -> Self {
@@ -236,16 +263,20 @@ impl From<LifecycleError> for ApiError {
     }
 }
 
+fn error_body(e: &ApiError) -> serde_json::Value {
+    let mut body = serde_json::json!({ "error": e.message });
+    if let Some(code) = e.code {
+        body["code"] = code.into();
+    }
+    if !e.reasons.is_empty() {
+        body["reasons"] = serde_json::json!(e.reasons);
+    }
+    body
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(match self.code {
-                Some(code) => serde_json::json!({ "error": self.message, "code": code }),
-                None => serde_json::json!({ "error": self.message }),
-            }),
-        )
-            .into_response()
+        (self.status, Json(error_body(&self))).into_response()
     }
 }
 
@@ -337,6 +368,34 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/runtime/review/{job}",
             get(crate::solution_routes::poll_review),
+        )
+        .route(
+            "/api/tracks/{id}/complete",
+            post(crate::track_routes::complete_track),
+        )
+        .route(
+            "/api/tracks/{id}/plan/approve",
+            post(crate::track_routes::approve_track_plan),
+        )
+        .route(
+            "/api/tracks/{id}/signoff",
+            post(crate::track_routes::sign_off_track),
+        )
+        .route(
+            "/api/review/tracks/{id}/existing-checks",
+            post(crate::track_routes::record_existing_checks),
+        )
+        .route(
+            "/api/review-runs/claim",
+            post(crate::review_run_routes::claim_run),
+        )
+        .route(
+            "/api/review-runs/{id}/submit",
+            post(crate::review_run_routes::submit_run),
+        )
+        .route(
+            "/api/findings/{id}/decision",
+            post(crate::review_run_routes::decide_finding),
         )
         // Inbox (global; drafts precede any project).
         .route(
@@ -564,6 +623,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/{prefix}/api/branches", get(get_branches))
         .route("/{prefix}/api/base-branches", get(get_base_branches))
         .route("/{prefix}/api/project", get(get_project))
+        .route(
+            "/{prefix}/api/review/tracks/{id}",
+            get(crate::review_run_routes::review_status),
+        )
+        .route(
+            "/{prefix}/api/review/tracks/{id}/findings",
+            get(crate::review_run_routes::review_findings),
+        )
         .route(
             "/{prefix}/api/project/auto-name",
             get(fetch_auto_name_config),

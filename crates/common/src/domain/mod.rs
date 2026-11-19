@@ -6,5 +6,6 @@ pub mod model;
 pub mod note_codec;
 pub mod policies;
 pub mod request_lifecycle;
+pub mod review_records;
 pub mod solution;
 pub mod task_graph;

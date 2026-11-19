@@ -103,6 +103,16 @@
         "request": {
           "$ref": "#/$defs/request"
         },
+        "files": {
+          "type": "array",
+          "description": "The task's edit boundary: repository-relative path globs its commits may change. `**` spans directories, `*` and `?` stay within one path segment, and a trailing `/` covers a whole directory. Optional; a task without `files` has an empty boundary, so any change it commits is out of scope. The daemon snapshots every task's boundary when the operator approves the plan (`sebenza-cli track approve-plan`); a later plan edit makes the snapshot stale until it is approved again.",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*(^|/)\\.{1,2}(/|$))(?!.*//)[^\\\\]+$"
+          },
+          "uniqueItems": true
+        },
         "test_scenarios": {
           "type": "array",
           "description": "Test-plan scenario IDs this task executes, e.g. [\"TS-01\",\"TS-02\"], defined in the track's test-plan.md. Its presence is what marks the task as a test task.",

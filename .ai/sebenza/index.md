@@ -8,6 +8,7 @@
 ## Workflow
 - [Workflow](./workflow.md)
 - [Code Style Guides](./code_styleguides/)
+- [General Code Style Guide](./code_styleguides/general.md)
 - [Security Threat Model](./SECURITY.md)
 
 ## Tracks

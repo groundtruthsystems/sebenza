@@ -13,6 +13,7 @@ use crate::domain::inbox_events::{InboxEventKind, WorktreeKey};
 use crate::server::AppState;
 use crate::services::inbox_convert::{ConversionRunner, ConversionTarget, SEBENZA_INDEX_REL_PATH};
 use crate::services::inbox_service::InboxService;
+use crate::services::standards_review::existing_checks::tests::green_checks;
 use crate::services::system_agent::apply::TriageApplier;
 use crate::services::system_agent::{SystemAgentService, stub_agent_for_tests};
 use common::adapters::inbox_store::InboxStore;
@@ -140,6 +141,11 @@ impl Daemon {
                 Default::default(),
                 std::env::temp_dir().join(format!("sebenza-chat-test-{}", std::process::id())),
             )),
+            completion: Arc::new(
+                crate::services::track_completion::TrackCompletionService::new(
+                    base.join("reviews"),
+                ),
+            ),
             frontend_dist: None,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -186,12 +192,28 @@ impl Daemon {
         bearer_only: bool,
     ) -> (u16, serde_json::Value) {
         let host = format!("127.0.0.1:{}", self.port);
+        let origin = (!bearer_only).then(|| format!("http://{host}"));
         let payload = body.map(|b| b.to_string()).unwrap_or_default();
-        let mut req = format!(
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: Bearer {TOKEN}\r\nConnection: close\r\n"
-        );
-        if !bearer_only {
-            req.push_str(&format!("Origin: http://{host}\r\n"));
+        self.call_as(method, path, Some(TOKEN), origin.as_deref(), &payload)
+            .await
+    }
+
+    /// A request with `bearer` (or none) and a raw `payload`.
+    async fn call_as(
+        &self,
+        method: &str,
+        path: &str,
+        bearer: Option<&str>,
+        origin: Option<&str>,
+        payload: &str,
+    ) -> (u16, serde_json::Value) {
+        let host = format!("127.0.0.1:{}", self.port);
+        let mut req = format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n");
+        if let Some(b) = bearer {
+            req.push_str(&format!("Authorization: Bearer {b}\r\n"));
+        }
+        if let Some(o) = origin {
+            req.push_str(&format!("Origin: {o}\r\n"));
         }
         if !payload.is_empty() {
             req.push_str("Content-Type: application/json\r\n");
@@ -760,4 +782,1065 @@ async fn ts57_two_targets_convert_with_instructions_and_launch_architect_first()
         assert_eq!(h["architectFirst"], true, "{h}");
         assert!(h["systemInstruction"].is_string(), "{h}");
     }
+}
+
+// --- Track completion (TS-01, TS-63, TS-65, TS-66) -------------------------
+
+/// A real repo served by the daemon, whose worktree `id-feat` on `feat`
+/// carries the track `TRACK`.
+fn completion_project(d: &Daemon) -> crate::services::review_test_repo::TestRepo {
+    let r = crate::services::review_test_repo::TestRepo::new("e2e");
+    let app = d.state.manager.add_ephemeral(&r.repo.to_string_lossy());
+    app.runtime
+        .lock()
+        .unwrap()
+        .upsert_worktree(common::services::project_runtime::UpsertInput {
+            worktree_id: "id-feat".into(),
+            kind: Default::default(),
+            branch: "feat".into(),
+            label: None,
+            base_branch: Some("main".into()),
+            path: r.worktree.to_string_lossy().to_string(),
+            profile: None,
+            agent_name: Some("claude".into()),
+            agent_terminal_stale: false,
+            runtime: "host".into(),
+            source: common::domain::model::WorktreeSource::Ui,
+            oneshot: None,
+            tabs: vec![],
+            active_tab_id: None,
+        });
+    r
+}
+
+fn completion_log(d: &Daemon) -> common::adapters::review_log::ReviewState {
+    let app = d.state.manager.list().into_iter().next().expect("project");
+    d.state.completion.log(&app.prefix).open().expect("log")
+}
+
+async fn complete(d: &Daemon, track: &str, body: serde_json::Value) -> (u16, serde_json::Value) {
+    d.call(
+        "POST",
+        &format!("/api/tracks/{track}/complete"),
+        Some(body),
+        true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn ts01_agentctl_complete_enqueues_one_job_and_projects_done() {
+    use crate::services::review_test_repo::{OTHER_TRACK, TRACK};
+    let d = Daemon::start("ok").await;
+    let r = completion_project(&d);
+    let (status, v) = complete(&d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["appended"], true);
+    assert_eq!(v["projected"], "applied");
+    assert_eq!(v["job"]["headSha"], r.head());
+    assert_eq!(v["job"]["baseSha"], r.main_head());
+    assert_eq!(v["job"]["standardsRev"].as_str().map(str::len), Some(64));
+    let log = completion_log(&d);
+    assert_eq!(log.job_count(TRACK), 1);
+    assert_eq!(log.completions[0].credential.as_deref(), Some("control"));
+    assert_eq!(r.track_status(TRACK), "done");
+    assert_eq!(r.track_status(OTHER_TRACK), "doing");
+}
+
+#[tokio::test]
+async fn ts63_the_control_token_can_only_enqueue() {
+    use crate::services::review_test_repo::TRACK;
+    let d = Daemon::start("ok").await;
+    let _r = completion_project(&d);
+    let forged = serde_json::json!({"worktreeId": "id-feat", "status": "signed-off"});
+    let (status, _) = complete(&d, TRACK, forged).await;
+    assert_eq!(
+        status, 422,
+        "no status, sign-off or finding field is accepted"
+    );
+    assert_eq!(completion_log(&d).completions.len(), 0);
+    let (status, v) = complete(&d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
+    assert_eq!(status, 200, "{v}");
+    let keys: Vec<_> = v.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(keys, vec!["appended", "job", "ok", "projected"]);
+    let log = completion_log(&d);
+    assert_eq!(log.completions.len(), 1);
+    assert_eq!(log.completions[0].credential.as_deref(), Some("control"));
+}
+
+#[tokio::test]
+async fn ts65_completing_again_at_the_same_head_is_idempotent() {
+    use crate::services::review_test_repo::TRACK;
+    let d = Daemon::start("ok").await;
+    let _r = completion_project(&d);
+    let body = serde_json::json!({"worktreeId": "id-feat"});
+    let (s1, first) = complete(&d, TRACK, body.clone()).await;
+    let (s2, again) = complete(&d, TRACK, body).await;
+    assert_eq!((s1, s2), (200, 200));
+    assert_eq!(again["appended"], false);
+    assert_eq!(again["projected"], "already_done");
+    assert_eq!(again["job"], first["job"]);
+    assert_eq!(completion_log(&d).job_count(TRACK), 1);
+}
+
+#[tokio::test]
+async fn ts66_another_worktrees_track_is_refused_and_appends_nothing() {
+    use crate::services::review_test_repo::OTHER_TRACK;
+    let d = Daemon::start("ok").await;
+    let _r = completion_project(&d);
+    let (status, v) = complete(
+        &d,
+        OTHER_TRACK,
+        serde_json::json!({"worktreeId": "id-feat"}),
+    )
+    .await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (403, Some("foreign_track")),
+        "{v}"
+    );
+    let (status, v) = complete(
+        &d,
+        OTHER_TRACK,
+        serde_json::json!({"worktreeId": "id-elsewhere"}),
+    )
+    .await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (404, Some("unknown_worktree")),
+        "{v}"
+    );
+    assert_eq!(completion_log(&d).completions.len(), 0);
+}
+
+// --- Review runs (TS-22, TS-37, TS-56, TS-60, TS-74) -------------------------
+
+/// A completed track with two rules at its base, served by the daemon.
+async fn review_project(d: &Daemon) -> (crate::services::review_test_repo::TestRepo, String) {
+    use crate::services::review_test_repo::TRACK;
+    use crate::services::standards_review::run_store::tests::{RULES, STYLE};
+    let r = completion_project(d);
+    r.commit_on_main(STYLE, RULES);
+    r.merge_main_into_feat();
+    let (status, v) = approve_plan(d, &operator_token(d)).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v) = complete(d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
+    assert_eq!(status, 200, "{v}");
+    let (status, v) = report_checks(d, TRACK, green_checks()).await;
+    assert_eq!(status, 200, "{v}");
+    let prefix = d.state.manager.list()[0].prefix.clone();
+    (r, prefix)
+}
+
+/// `POST /api/review/tracks/{track}/existing-checks` from `id-feat`.
+async fn report_checks(
+    d: &Daemon,
+    track: &str,
+    checks: serde_json::Value,
+) -> (u16, serde_json::Value) {
+    let body = serde_json::json!({"worktreeId": "id-feat", "checks": checks});
+    let path = format!("/api/review/tracks/{track}/existing-checks");
+    d.call("POST", &path, Some(body), true).await
+}
+
+fn operator_token(d: &Daemon) -> String {
+    d.state
+        .operator
+        .issue_session_at(std::time::SystemTime::now())
+        .0
+}
+
+/// `POST /api/tracks/{TRACK}/plan/approve` with `bearer`.
+async fn approve_plan(d: &Daemon, bearer: &str) -> (u16, serde_json::Value) {
+    use crate::services::review_test_repo::TRACK;
+    let path = format!("/api/tracks/{TRACK}/plan/approve");
+    d.call_as("POST", &path, Some(bearer), None, "").await
+}
+
+fn plan_approvals(d: &Daemon, prefix: &str) -> Vec<common::domain::review_records::PlanApproved> {
+    use common::adapters::review_log::ReviewEventKind;
+    let events = d.state.completion.log(prefix).events().expect("log");
+    events
+        .into_iter()
+        .filter_map(|e| match e.kind {
+            ReviewEventKind::PlanApproved(a) => Some(a),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn ts45_ts64_only_the_operator_token_approves_a_plan() {
+    use crate::services::review_test_repo::{PLAN, TASK, plan_json};
+    let d = Daemon::start("ok").await;
+    let r = completion_project(&d);
+    let committed = plan_json(&[(TASK, Some(&["src.rs"]))]);
+    r.commit_on_feat(PLAN, &committed);
+    let prefix = d.state.manager.list()[0].prefix.clone();
+    let (status, v) = approve_plan(&d, TOKEN).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (403, Some("operator_required")),
+        "{v}"
+    );
+    assert!(
+        plan_approvals(&d, &prefix).is_empty(),
+        "a refusal records nothing"
+    );
+
+    let (status, v) = approve_plan(&d, &operator_token(&d)).await;
+    assert_eq!(status, 200, "{v}");
+    let want = common::domain::solution::sha256_hex(&committed);
+    assert_eq!(v["planSha256"], want.as_str());
+    assert_eq!(v["headSha"], r.head().as_str());
+    assert_eq!(
+        v["tasks"],
+        serde_json::json!([{"taskId": TASK, "files": ["src.rs"]}])
+    );
+    let approvals = plan_approvals(&d, &prefix);
+    assert_eq!(approvals.len(), 1);
+    assert_eq!(
+        approvals[0].plan_sha256, want,
+        "the boundary hash is the approved plan's"
+    );
+    assert_eq!(approvals[0].credential, "operator_session");
+}
+
+#[tokio::test]
+async fn ts08_a_one_file_track_is_reviewed_on_that_file_only() {
+    use crate::services::review_test_repo::{PLAN, TASK, TRACK, plan_json};
+    use crate::services::standards_review::run_store::tests::{RULES, STYLE, clean};
+    let d = Daemon::start("ok").await;
+    let r = completion_project(&d);
+    r.commit_on_main(STYLE, RULES);
+    r.commit_on_main("lib.rs", "// untouched\nfn lib() {}\n");
+    r.merge_main_into_feat();
+    r.commit_on_feat(PLAN, &plan_json(&[(TASK, Some(&["src.rs"]))]));
+    r.commit_on_feat("src.rs", "fn main() {\n    run();\n}\n");
+    assert_eq!(approve_plan(&d, &operator_token(&d)).await.0, 200);
+    let (status, v) = complete(&d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
+    assert_eq!(status, 200, "{v}");
+    let prefix = d.state.manager.list()[0].prefix.clone();
+
+    let run = lease(&d, &prefix);
+    let (status, v) = claim(&d, Some(run.token.expose()), "first").await;
+    assert_eq!(status, 200, "{v}");
+    let files = v["files"].as_array().expect("files");
+    assert_eq!(files.len(), 1, "{v}");
+    assert_eq!(files[0]["path"], "src.rs");
+    for hunk in files[0]["hunks"].as_array().expect("hunks") {
+        assert_eq!(hunk["anchor"]["path"], "src.rs");
+    }
+    let stub = serde_json::json!({
+        "dispositions": [clean("plain", "src.rs"), {"ruleId": "short", "path": "src.rs", "outcome": "finding"}],
+        "findings": [{"ruleId": "short", "path": "src.rs", "line": 2, "description": "main does too much."}],
+    });
+    let (status, v) = submit(&d, &run.run_id, run.token.expose(), &stub).await;
+    assert_eq!(status, 200, "{v}");
+    let f = d
+        .ok(
+            "GET",
+            &format!("/{prefix}/api/review/tracks/{TRACK}/findings"),
+            None,
+        )
+        .await;
+    let findings = f["findings"].as_array().expect("findings");
+    assert_eq!(
+        findings.len(),
+        1,
+        "no finding or edit outside the file: {f}"
+    );
+    assert_eq!(findings[0]["ruleId"], "short");
+    assert_eq!(findings[0]["anchor"]["path"], "src.rs");
+    assert_eq!(findings[0]["anchor"]["line"], 2);
+    let lib = crate::services::review_test_repo::git(&r.worktree, &["show", "HEAD:lib.rs"]);
+    assert_eq!(
+        lib, "// untouched\nfn lib() {}",
+        "the comment in the untouched file stays"
+    );
+}
+
+#[tokio::test]
+async fn ts12_an_untrailered_commit_makes_the_job_scope_unproven() {
+    let d = Daemon::start("ok").await;
+    let (r, prefix) = review_project(&d).await;
+    let bare = r.commit_on_feat_with("notes.txt", "x\n", "hand-made");
+    let body = serde_json::json!({"worktreeId": "id-feat"});
+    assert_eq!(
+        complete(&d, crate::services::review_test_repo::TRACK, body)
+            .await
+            .0,
+        200
+    );
+    let run = lease(&d, &prefix);
+    let (status, v) = claim(&d, Some(run.token.expose()), "first").await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (409, Some("scope_unproven")),
+        "{v}"
+    );
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["state"], "scope-unproven", "{s}");
+    assert_eq!(s["job"]["blockers"][0]["reason"], "missing-trailer");
+    assert_eq!(s["job"]["blockers"][0]["commit"], bare.as_str());
+}
+
+fn lease(d: &Daemon, prefix: &str) -> crate::services::standards_review::run_store::LeasedRun {
+    use crate::services::standards_review::run_store::now_secs;
+    d.state
+        .review_runs()
+        .lease_next(prefix, now_secs())
+        .expect("log")
+        .expect("a queued job")
+}
+
+fn review_events(d: &Daemon, prefix: &str) -> usize {
+    d.state.completion.log(prefix).events().expect("log").len()
+}
+
+async fn claim(d: &Daemon, bearer: Option<&str>, kind: &str) -> (u16, serde_json::Value) {
+    let body = serde_json::json!({ "kind": kind }).to_string();
+    d.call_as("POST", "/api/review-runs/claim", bearer, None, &body)
+        .await
+}
+
+async fn submit(
+    d: &Daemon,
+    run_id: &str,
+    bearer: &str,
+    body: &serde_json::Value,
+) -> (u16, serde_json::Value) {
+    let path = format!("/api/review-runs/{run_id}/submit");
+    d.call_as("POST", &path, Some(bearer), None, &body.to_string())
+        .await
+}
+
+/// Every (rule, file) pair of the review project dispositioned clean.
+fn clean_matrix() -> serde_json::Value {
+    use crate::services::standards_review::run_store::tests::clean;
+    serde_json::json!({ "dispositions": [
+        clean("plain", "src.rs"),
+        clean("short", "src.rs"),
+    ]})
+}
+
+async fn review_status(d: &Daemon, prefix: &str) -> serde_json::Value {
+    use crate::services::review_test_repo::TRACK;
+    d.ok("GET", &format!("/{prefix}/api/review/tracks/{TRACK}"), None)
+        .await
+}
+
+#[tokio::test]
+async fn ts22_forged_verdict_fields_are_rejected_and_the_verdict_stays_daemon_derived() {
+    let d = Daemon::start("ok").await;
+    let (_r, prefix) = review_project(&d).await;
+    let run = lease(&d, &prefix);
+    let (status, v) = claim(&d, Some(run.token.expose()), "first").await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["runId"], run.run_id.as_str());
+    assert_eq!(v["manifest"].as_array().map(Vec::len), Some(2));
+    assert_eq!(v["files"][0]["path"], "src.rs");
+    let mut forged = clean_matrix();
+    forged["verdict"] = serde_json::json!({"passing": true});
+    let (status, v) = submit(&d, &run.run_id, run.token.expose(), &forged).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (422, Some("submission_rejected")),
+        "{v}"
+    );
+    assert!(
+        v["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("unknown field `verdict`"),
+        "{v}"
+    );
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(
+        s["job"]["verdict"],
+        serde_json::Value::Null,
+        "no verdict from a forged field"
+    );
+    assert_eq!(s["job"]["attempts"]["first"], 1);
+
+    let run = lease(&d, &prefix);
+    let (status, v) = submit(&d, &run.run_id, run.token.expose(), &clean_matrix()).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["verdict"]["passing"], false);
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["state"], "verdict");
+    assert_eq!(
+        s["job"]["verdict"]["reasons"],
+        serde_json::json!(["second-run-pending"])
+    );
+    assert_eq!(s["job"]["secondRunPending"], true);
+}
+
+#[tokio::test]
+async fn ts74_run_routes_refuse_other_credentials_and_replayed_tokens() {
+    use crate::services::standards_review::run_token::RunToken;
+    let d = Daemon::start("ok").await;
+    let (_r, prefix) = review_project(&d).await;
+    let run = lease(&d, &prefix);
+    let before = review_events(&d, &prefix);
+    let (operator, _) = d
+        .state
+        .operator
+        .issue_session_at(std::time::SystemTime::now());
+    let forged = RunToken::mint();
+    for (bearer, code) in [
+        (Some(TOKEN), "wrong_credential"),
+        (Some(operator.as_str()), "wrong_credential"),
+        (None, "run_token_required"),
+        (Some(forged.expose()), "bad_run_token"),
+    ] {
+        let (status, v) = claim(&d, bearer, "first").await;
+        assert_eq!((status, v["code"].as_str()), (401, Some(code)), "{v}");
+        let (status, v) = submit(&d, &run.run_id, bearer.unwrap_or("none"), &clean_matrix()).await;
+        assert_eq!(status, 401, "{v}");
+    }
+    let (status, v) = claim(&d, Some(run.token.expose()), "second").await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (403, Some("token_wrong_kind")),
+        "{v}"
+    );
+    let (status, v) = submit(&d, "run_other", run.token.expose(), &clean_matrix()).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (403, Some("token_wrong_run")),
+        "{v}"
+    );
+    assert_eq!(
+        review_events(&d, &prefix),
+        before,
+        "refusals change nothing"
+    );
+
+    let (status, v) = submit(&d, &run.run_id, run.token.expose(), &clean_matrix()).await;
+    assert_eq!(status, 200, "{v}");
+    let after = review_events(&d, &prefix);
+    let (status, v) = submit(&d, &run.run_id, run.token.expose(), &clean_matrix()).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (401, Some("run_token_used")),
+        "{v}"
+    );
+    assert_eq!(review_events(&d, &prefix), after);
+}
+
+#[tokio::test]
+async fn ts37_three_expired_first_run_leases_make_the_review_failed() {
+    use crate::services::completion_reconciler::{project_worktrees, reap_expired_leases_at};
+    let d = Daemon::start("ok").await;
+    let (_r, prefix) = review_project(&d).await;
+    let app = d.state.manager.list()[0].clone();
+    for attempt in 1..=3 {
+        let run = lease(&d, &prefix);
+        assert_eq!(run.attempt, attempt);
+        let reaped = reap_expired_leases_at(
+            &d.state.completion,
+            &project_worktrees(&app),
+            run.lease_until,
+        );
+        assert_eq!(reaped, 1);
+    }
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["state"], "review-failed", "{s}");
+    assert_eq!(
+        s["job"]["attempts"],
+        serde_json::json!({"first": 3, "second": 0})
+    );
+    let events = d.state.completion.log(&prefix).events().expect("log");
+    let expiries = events
+        .iter()
+        .filter(|e| serde_json::to_value(&e.kind).unwrap()["cause"] == "lease-expired")
+        .count();
+    assert_eq!(expiries, 3);
+}
+
+#[tokio::test]
+async fn ts60_attempts_count_per_run_kind_through_the_api() {
+    use crate::services::standards_review::run_store::now_secs;
+    use common::domain::review_records::RunKind;
+    let d = Daemon::start("ok").await;
+    let (_r, prefix) = review_project(&d).await;
+    let runs = d.state.review_runs();
+    let empty = serde_json::json!({"dispositions": []});
+    let mut job_id = String::new();
+    for _ in 0..2 {
+        let first = lease(&d, &prefix);
+        job_id = first.job_id.clone();
+        let (status, _) = submit(&d, &first.run_id, first.token.expose(), &empty).await;
+        assert_eq!(status, 422);
+        let second = runs
+            .lease_run(&prefix, &job_id, RunKind::Second, now_secs())
+            .expect("log")
+            .expect("leased");
+        let (status, v) = claim(&d, Some(second.token.expose()), "second").await;
+        assert_eq!(status, 200, "{v}");
+        assert_eq!(
+            v["priorFindings"],
+            serde_json::json!([]),
+            "a second run sees no prior output"
+        );
+        let (status, _) = submit(&d, &second.run_id, second.token.expose(), &empty).await;
+        assert_eq!(status, 422);
+    }
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(
+        s["job"]["attempts"],
+        serde_json::json!({"first": 2, "second": 2})
+    );
+    assert_ne!(
+        s["job"]["state"], "review-failed",
+        "two of each kind is not three of one"
+    );
+    let second = runs
+        .lease_run(&prefix, &job_id, RunKind::Second, now_secs())
+        .expect("log")
+        .expect("leased");
+    let (status, _) = submit(&d, &second.run_id, second.token.expose(), &empty).await;
+    assert_eq!(status, 422);
+    assert_eq!(
+        review_status(&d, &prefix).await["job"]["state"],
+        "review-failed"
+    );
+}
+
+#[tokio::test]
+async fn ts56_track_review_runs_leave_project_reviews_alone() {
+    let d = Daemon::start("ok").await;
+    let (_r, prefix) = review_project(&d).await;
+    let run = lease(&d, &prefix);
+    let (status, _) = submit(&d, &run.run_id, run.token.expose(), &clean_matrix()).await;
+    assert_eq!(status, 200);
+    assert!(d.state.reviews.job(&run.run_id).is_none());
+    assert!(d.state.reviews.job(&run.job_id).is_none());
+    let (status, _) = d
+        .call(
+            "GET",
+            &format!("/api/runtime/review/{}", run.run_id),
+            None,
+            true,
+        )
+        .await;
+    assert_eq!(
+        status, 404,
+        "project review polling knows nothing of track runs"
+    );
+    d.state.reviews.fail_running("shutdown");
+    assert_eq!(review_status(&d, &prefix).await["job"]["state"], "verdict");
+}
+
+#[tokio::test]
+async fn the_findings_route_lists_the_tracks_findings_with_status() {
+    use crate::services::review_test_repo::TRACK;
+    let d = Daemon::start("ok").await;
+    let (_r, prefix) = review_project(&d).await;
+    let run = lease(&d, &prefix);
+    let body = serde_json::json!({
+        "dispositions": [
+            crate::services::standards_review::run_store::tests::clean("plain", "src.rs"),
+            {"ruleId": "short", "path": "src.rs", "outcome": "finding"}
+        ],
+        "findings": [{"ruleId": "short", "path": "src.rs", "line": 1, "description": "main is too long."}],
+    });
+    let (status, v) = submit(&d, &run.run_id, run.token.expose(), &body).await;
+    assert_eq!(
+        (status, v["findingsOpened"].as_u64()),
+        (200, Some(1)),
+        "{v}"
+    );
+    let f = d
+        .ok(
+            "GET",
+            &format!("/{prefix}/api/review/tracks/{TRACK}/findings"),
+            None,
+        )
+        .await;
+    assert_eq!(f["findings"][0]["status"], "open");
+    assert_eq!(f["findings"][0]["anchor"]["path"], "src.rs");
+    let (status, _) = d
+        .call(
+            "GET",
+            &format!("/{prefix}/api/review/tracks/bad..id"),
+            None,
+            false,
+        )
+        .await;
+    assert_eq!(status, 400);
+}
+
+// --- Second run, decisions and existing checks (TS-27..TS-30, TS-58, TS-62,
+// TS-72) ---------------------------------------------------------------------
+
+/// A first run flagging `plain` on `src.rs` with `text`.
+fn plain_flagged(text: &str) -> serde_json::Value {
+    use crate::services::standards_review::run_store::tests::clean;
+    serde_json::json!({
+        "dispositions": [
+            {"ruleId": "plain", "path": "src.rs", "outcome": "finding"},
+            clean("short", "src.rs"),
+        ],
+        "findings": [{"ruleId": "plain", "path": "src.rs", "line": 1, "description": text}],
+    })
+}
+
+fn lease_second(
+    d: &Daemon,
+    prefix: &str,
+) -> crate::services::standards_review::run_store::LeasedRun {
+    use crate::services::standards_review::run_store::now_secs;
+    d.state
+        .review_runs()
+        .lease_next_second(prefix, now_secs())
+        .expect("log")
+        .expect("a scheduled second run")
+}
+
+async fn decide(d: &Daemon, id: &str, bearer: &str, decision: &str) -> (u16, serde_json::Value) {
+    let body = serde_json::json!({ "decision": decision }).to_string();
+    let path = format!("/api/findings/{id}/decision");
+    d.call_as("POST", &path, Some(bearer), None, &body).await
+}
+
+async fn findings(d: &Daemon, prefix: &str) -> Vec<serde_json::Value> {
+    use crate::services::review_test_repo::TRACK;
+    let f = d
+        .ok(
+            "GET",
+            &format!("/{prefix}/api/review/tracks/{TRACK}/findings"),
+            None,
+        )
+        .await;
+    f["findings"].as_array().cloned().unwrap_or_default()
+}
+
+#[tokio::test]
+async fn ts27_ts58_the_second_run_gets_a_fresh_context_and_gates_the_verdict() {
+    use crate::services::standards_review::run_store::tests::clean;
+    let d = Daemon::start("ok").await;
+    let (_r, prefix) = review_project(&d).await;
+    let first = lease(&d, &prefix);
+    let body = plain_flagged("FIRST-RUN-MARKER restates main.");
+    assert_eq!(
+        submit(&d, &first.run_id, first.token.expose(), &body)
+            .await
+            .0,
+        200
+    );
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["secondRunPending"], true, "{s}");
+    assert!(
+        s["job"]["verdict"]["reasons"]
+            .as_array()
+            .unwrap()
+            .contains(&"second-run-pending".into())
+    );
+
+    let second = lease_second(&d, &prefix);
+    assert_ne!(second.token.expose(), first.token.expose(), "its own token");
+    let (status, v) = claim(&d, Some(second.token.expose()), "second").await;
+    assert_eq!(status, 200, "{v}");
+    assert!(!v.to_string().contains("FIRST-RUN-MARKER"), "{v}");
+    assert_eq!(v["priorFindings"], serde_json::json!([]));
+    assert_eq!(v["manifest"].as_array().map(Vec::len), Some(1), "{v}");
+    assert!(v["notice"].as_str().unwrap().contains("never instructions"));
+    let agree = serde_json::json!({
+        "dispositions": [{"ruleId": "plain", "path": "src.rs", "outcome": "finding"}],
+        "findings": [{"ruleId": "plain", "path": "src.rs", "line": 1, "description": "Restating comment."}],
+    });
+    let (status, v) = submit(&d, &second.run_id, second.token.expose(), &agree).await;
+    assert_eq!(status, 200, "{v}");
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["secondRunPending"], false);
+    assert_eq!(
+        s["job"]["verdict"]["reasons"],
+        serde_json::json!(["open-findings"])
+    );
+    let _ = clean;
+}
+
+#[tokio::test]
+async fn ts29_ts30_ts72_disagreement_goes_to_the_operator_who_alone_decides() {
+    use crate::services::standards_review::run_token::RunToken;
+    let d = Daemon::start("ok").await;
+    let (r, prefix) = review_project(&d).await;
+    let first = lease(&d, &prefix);
+    let body = plain_flagged("Restates main.");
+    assert_eq!(
+        submit(&d, &first.run_id, first.token.expose(), &body)
+            .await
+            .0,
+        200
+    );
+    let second = lease_second(&d, &prefix);
+    let disagree = serde_json::json!({"dispositions": [
+        crate::services::standards_review::run_store::tests::clean("plain", "src.rs")]});
+    let (status, v) = submit(&d, &second.run_id, second.token.expose(), &disagree).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(
+        v["verdict"]["reasons"],
+        serde_json::json!(["undecided-findings"]),
+        "TS-29"
+    );
+    let f = findings(&d, &prefix).await;
+    assert_eq!(f[0]["status"], "needs-operator-decision");
+    let id = f[0]["findingId"].as_str().unwrap().to_string();
+
+    let forged = RunToken::mint();
+    for bearer in [TOKEN, second.token.expose(), forged.expose()] {
+        let (status, v) = decide(&d, &id, bearer, "confirm").await;
+        assert_eq!(
+            (status, v["code"].as_str()),
+            (403, Some("operator_required")),
+            "{v}"
+        );
+    }
+    assert_eq!(
+        findings(&d, &prefix).await[0]["status"],
+        "needs-operator-decision"
+    );
+
+    let operator = operator_token(&d);
+    let (status, v) = decide(&d, &id, &operator, "maybe").await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (400, Some("bad_decision")),
+        "{v}"
+    );
+    let (status, v) = decide(&d, &id, &operator, "confirm").await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(
+        (v["from"].as_str(), v["status"].as_str()),
+        (Some("needs-operator-decision"), Some("open"))
+    );
+    let (status, v) = decide(&d, &id, &operator, "reject").await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (409, Some("transition_refused")),
+        "{v}"
+    );
+    let (status, _) = decide(&d, "f_unknown", &operator, "reject").await;
+    assert_eq!(status, 404);
+
+    let events = d.state.completion.log(&prefix).events().expect("log");
+    let decided: Vec<_> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            common::adapters::review_log::ReviewEventKind::FindingDecided(x) => Some(x.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(decided.len(), 1, "a refusal records nothing");
+    assert_eq!(decided[0].credential, "operator_session");
+    assert_eq!(decided[0].finding_id, id);
+    assert_eq!(decided[0].head_sha, r.head());
+    assert!(!decided[0].base_sha.is_empty());
+
+    let f = findings(&d, &prefix).await;
+    assert_eq!(
+        f[0]["status"], "open",
+        "TS-30: the report lists each status"
+    );
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["verdict"]["passing"], false);
+    assert_eq!(
+        s["job"]["verdict"]["reasons"],
+        serde_json::json!(["open-findings"])
+    );
+}
+
+#[tokio::test]
+async fn ts62_a_failed_existing_check_names_itself_in_the_verdict() {
+    use crate::services::review_test_repo::TRACK;
+    let d = Daemon::start("ok").await;
+    let (_r, prefix) = review_project(&d).await;
+    let mut checks = green_checks();
+    checks[3]["status"] = serde_json::json!("fail");
+    let (status, v) = report_checks(&d, TRACK, checks).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["failed"], serde_json::json!(["architecture"]));
+    assert_eq!(v["verdict"], serde_json::Value::Null, "no run accepted yet");
+    let run = lease(&d, &prefix);
+    let (status, v) = submit(&d, &run.run_id, run.token.expose(), &clean_matrix()).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["findingsOpened"], 0);
+    let second = lease_second(&d, &prefix);
+    let clean = serde_json::json!({"dispositions": [
+        crate::services::standards_review::run_store::tests::clean("plain", "src.rs")]});
+    let (status, v) = submit(&d, &second.run_id, second.token.expose(), &clean).await;
+    assert_eq!(status, 200, "{v}");
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["verdict"]["passing"], false);
+    assert_eq!(
+        s["job"]["verdict"]["reasons"],
+        serde_json::json!(["existing-checks-failed:architecture"])
+    );
+    assert_eq!(s["job"]["existingChecksRecorded"], true);
+
+    let (status, v) = report_checks(&d, TRACK, green_checks()).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["verdict"]["passing"], true, "the verdict re-derives");
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["verdict"]["passing"], true, "{s}");
+}
+
+#[tokio::test]
+async fn existing_checks_are_the_own_worktrees_control_token_reports_only() {
+    use crate::services::review_test_repo::{OTHER_TRACK, TRACK};
+    let d = Daemon::start("ok").await;
+    let _r = completion_project(&d);
+    let path = format!("/api/review/tracks/{TRACK}/existing-checks");
+    let body = serde_json::json!({"worktreeId": "id-feat", "checks": green_checks()}).to_string();
+    let (status, v) = report_checks(&d, TRACK, green_checks()).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (404, Some("no_review_job")),
+        "{v}"
+    );
+    let (status, _) = complete(&d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
+    assert_eq!(status, 200);
+    let prefix = d.state.manager.list()[0].prefix.clone();
+    let before = review_events(&d, &prefix);
+    let operator = operator_token(&d);
+    for bearer in [None, Some(operator.as_str())] {
+        let (status, _) = d.call_as("POST", &path, bearer, None, &body).await;
+        assert_eq!(status, 401, "only the control token reports checks");
+    }
+    let (status, v) = report_checks(&d, OTHER_TRACK, green_checks()).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (403, Some("foreign_track")),
+        "{v}"
+    );
+    let (status, v) = report_checks(&d, TRACK, serde_json::json!([])).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (422, Some("incomplete_existing_checks")),
+        "{v}"
+    );
+    let forged = serde_json::json!({"worktreeId": "id-feat", "checks": green_checks(), "verdict": "passing"});
+    let (status, v) = d.call("POST", &path, Some(forged), true).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (422, Some("bad_existing_checks")),
+        "{v}"
+    );
+    assert_eq!(
+        review_events(&d, &prefix),
+        before,
+        "refusals record nothing"
+    );
+    let (status, v) = report_checks(&d, TRACK, green_checks()).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(review_events(&d, &prefix), before + 1);
+    // Last: an unknown id makes the daemon reconcile its worktrees.
+    let elsewhere = serde_json::json!({"worktreeId": "id-elsewhere", "checks": green_checks()});
+    let (status, v) = d.call("POST", &path, Some(elsewhere), true).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (404, Some("unknown_worktree")),
+        "{v}"
+    );
+    assert_eq!(review_events(&d, &prefix), before + 1);
+}
+
+// --- Sign-off gate (TS-02, TS-38, TS-39, TS-52, TS-64, TS-73) ---------------
+
+/// `POST /api/tracks/{TRACK}/signoff` with `bearer`.
+async fn signoff(d: &Daemon, bearer: &str) -> (u16, serde_json::Value) {
+    use crate::services::review_test_repo::TRACK;
+    let path = format!("/api/tracks/{TRACK}/signoff");
+    d.call_as("POST", &path, Some(bearer), None, "").await
+}
+
+fn signoff_records(d: &Daemon, prefix: &str) -> Vec<common::domain::review_records::SignedOff> {
+    use common::adapters::review_log::ReviewEventKind;
+    let events = d.state.completion.log(prefix).events().expect("log");
+    events
+        .into_iter()
+        .filter_map(|e| match e.kind {
+            ReviewEventKind::SignedOff(s) => Some(s),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Submit a clean second run over the `plain` rule on `src.rs`.
+async fn clean_second_run(d: &Daemon, prefix: &str) {
+    let second = lease_second(d, prefix);
+    let clean = serde_json::json!({"dispositions": [
+        crate::services::standards_review::run_store::tests::clean("plain", "src.rs")]});
+    let (status, v) = submit(d, &second.run_id, second.token.expose(), &clean).await;
+    assert_eq!(status, 200, "{v}");
+}
+
+/// A review project whose first and second runs are clean and whose
+/// existing checks are green: a passing verdict.
+async fn passing_project(d: &Daemon) -> (crate::services::review_test_repo::TestRepo, String) {
+    let (r, prefix) = review_project(d).await;
+    let run = lease(d, &prefix);
+    let (status, v) = submit(d, &run.run_id, run.token.expose(), &clean_matrix()).await;
+    assert_eq!(status, 200, "{v}");
+    clean_second_run(d, &prefix).await;
+    assert_eq!(
+        review_status(d, &prefix).await["job"]["verdict"]["passing"],
+        true
+    );
+    (r, prefix)
+}
+
+#[tokio::test]
+async fn ts02_ts64_sign_off_needs_the_operator_and_a_verdict() {
+    use crate::services::standards_review::run_token::RunToken;
+    let d = Daemon::start("ok").await;
+    let (_r, prefix) = review_project(&d).await;
+    let run = lease(&d, &prefix);
+    let forged = RunToken::mint();
+    for bearer in [TOKEN, run.token.expose(), forged.expose()] {
+        let (status, v) = signoff(&d, bearer).await;
+        assert_eq!(
+            (status, v["code"].as_str()),
+            (403, Some("operator_required")),
+            "TS-64: {v}"
+        );
+    }
+    let before = review_status(&d, &prefix).await;
+    let (status, v) = signoff(&d, &operator_token(&d)).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (409, Some("no_verdict")),
+        "TS-02: {v}"
+    );
+    assert_eq!(review_status(&d, &prefix).await, before, "status unchanged");
+    assert!(signoff_records(&d, &prefix).is_empty());
+}
+
+#[tokio::test]
+async fn ts38_ts52_a_passing_fresh_verdict_is_signed_off_and_audited() {
+    let d = Daemon::start("ok").await;
+    let (r, prefix) = passing_project(&d).await;
+    let operator = operator_token(&d);
+    let (status, v) = signoff(&d, &operator).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["headSha"], r.head().as_str());
+    assert_eq!(v["baseSha"], r.main_head().as_str());
+    assert_eq!(v["appended"], true);
+    let records = signoff_records(&d, &prefix);
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].credential, "operator_session");
+    assert_eq!(records[0].head_sha, r.head());
+    assert_eq!(review_status(&d, &prefix).await["job"]["signedOff"], true);
+    let (status, v) = signoff(&d, &operator).await;
+    assert_eq!((status, v["appended"].as_bool()), (200, Some(false)), "{v}");
+    assert_eq!(signoff_records(&d, &prefix).len(), 1);
+    assert_signoff_audited(&prefix, &records[0]);
+}
+
+/// TS-52: the audit line names the credential class, job and SHAs.
+fn assert_signoff_audited(prefix: &str, record: &common::domain::review_records::SignedOff) {
+    use crate::services::standards_review::run_store::tests::capture_logs;
+    let logs = capture_logs(|| crate::track_routes::audit_signoff(prefix, record));
+    for want in [
+        "track.signed_off",
+        "operator_session",
+        &record.job_id,
+        &record.head_sha,
+        &record.base_sha,
+    ] {
+        assert!(logs.contains(want), "TS-52 {want}: {logs}");
+    }
+}
+
+#[tokio::test]
+async fn ts39_a_ref_moved_after_the_verdict_is_a_stale_verdict() {
+    let d = Daemon::start("ok").await;
+    let (r, prefix) = passing_project(&d).await;
+    r.commit_on_feat("src.rs", "fn main() {\n    later();\n}\n");
+    let (status, v) = signoff(&d, &operator_token(&d)).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (409, Some("stale_verdict")),
+        "{v}"
+    );
+    assert!(signoff_records(&d, &prefix).is_empty(), "no sign-off");
+}
+
+/// A first and second run that agree on a `plain` finding on `src.rs`;
+/// returns the open finding's id.
+async fn agreed_open_finding(d: &Daemon, prefix: &str) -> String {
+    let first = lease(d, prefix);
+    let flagged = plain_flagged("Restates main.");
+    let (status, v) = submit(d, &first.run_id, first.token.expose(), &flagged).await;
+    assert_eq!(status, 200, "{v}");
+    let second = lease_second(d, prefix);
+    let agree = serde_json::json!({
+        "dispositions": [{"ruleId": "plain", "path": "src.rs", "outcome": "finding"}],
+        "findings": [{"ruleId": "plain", "path": "src.rs", "line": 1, "description": "Restating comment."}],
+    });
+    let (status, v) = submit(d, &second.run_id, second.token.expose(), &agree).await;
+    assert_eq!(status, 200, "{v}");
+    let f = findings(d, prefix).await;
+    assert_eq!(f[0]["status"], "open");
+    f[0]["findingId"].as_str().unwrap().to_string()
+}
+
+/// Commit a fix to `src.rs`, complete the track again and review the new
+/// head: the first run dispositions finding `id` clean. Returns the head.
+async fn fix_and_rereview(
+    d: &Daemon,
+    r: &crate::services::review_test_repo::TestRepo,
+    prefix: &str,
+    id: &str,
+) -> String {
+    use crate::services::review_test_repo::TRACK;
+    let fixed = r.commit_on_feat("src.rs", "fn main() {\n    run();\n}\n");
+    let (status, v) = complete(d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
+    assert_eq!((status, v["appended"].as_bool()), (200, Some(true)), "{v}");
+    assert_eq!(
+        v["job"]["headSha"],
+        fixed.as_str(),
+        "a new job at the new head"
+    );
+    assert_eq!(report_checks(d, TRACK, green_checks()).await.0, 200);
+    let rerun = lease(d, prefix);
+    let (status, claimed) = claim(d, Some(rerun.token.expose()), "first").await;
+    assert_eq!(status, 200, "{claimed}");
+    assert_eq!(claimed["priorFindings"][0]["findingId"], id);
+    let mut body = clean_matrix();
+    body["priorFindings"] = serde_json::json!([
+        {"findingId": id, "outcome": "clean", "span": {"startLine": 1, "endLine": 3}}
+    ]);
+    let (status, v) = submit(d, &rerun.run_id, rerun.token.expose(), &body).await;
+    assert_eq!(status, 200, "{v}");
+    fixed
+}
+
+#[tokio::test]
+async fn ts73_a_fix_commit_resolves_the_finding_and_sign_off_succeeds() {
+    let d = Daemon::start("ok").await;
+    let (r, prefix) = review_project(&d).await;
+    let id = agreed_open_finding(&d, &prefix).await;
+    let operator = operator_token(&d);
+    let (status, v) = signoff(&d, &operator).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (409, Some("verdict_not_passing")),
+        "{v}"
+    );
+    assert_eq!(v["reasons"], serde_json::json!(["open-findings"]));
+
+    let fixed = fix_and_rereview(&d, &r, &prefix, &id).await;
+    assert_eq!(findings(&d, &prefix).await[0]["status"], "resolved");
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["secondRunPending"], true, "{s}");
+    clean_second_run(&d, &prefix).await;
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["verdict"]["passing"], true, "{s}");
+    let (status, v) = signoff(&d, &operator).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["headSha"], fixed.as_str());
+    assert_eq!(signoff_records(&d, &prefix)[0].finding_ids, vec![id]);
 }

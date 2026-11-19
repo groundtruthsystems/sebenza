@@ -2,7 +2,7 @@
 name: sebenza-implement
 description: Executes the next task(s) from an existing track's plan.json following the project's TDD workflow, running the test-plan scenarios a task claims and updating task, phase, and track status as work progresses. Use when the user wants to implement, start working on, or continue a track, or asks for the "next task".
 metadata:
-  version: "1.3"
+  version: "1.4"
 ---
 
 # Sebenza Implement Skill
@@ -110,6 +110,39 @@ task instead, and if none is ready, say which dependency you are waiting for and
 **For each phase:** set its `status` to `"doing"` in `plan.json` and update the corresponding
 entry in `phases_summary` in `tracks.json`.
 
+### Writing code
+
+These rules are how you write code in every task. They never produce a review finding by themselves:
+the review checks only the rules the project's own `.ai/sebenza/` documents define, and any number
+(a method length, a comment density) comes from those documents, never from this skill.
+
+- **Comment only to explain intent that isn't obvious** from the code: a reason, a constraint, a
+  surprising choice. **Never restate what the code does.**
+- **Keep methods short.** When a block needs a comment to explain what it does, **extract a
+  well-named method** instead of writing that comment. How short is short is the project's call: follow
+  its code style guides.
+- **Apply this to new and changed code only.** Leave untouched code as it is: **do not remove
+  comments from untouched code**, and do not reformat it.
+
+### Commits and the edit boundary
+
+- **Add both trailers to every commit** you make for a task, after the message body:
+
+  ```text
+  Sebenza-Track: <track_id>
+  Sebenza-Task: <task_id>
+  ```
+
+  The daemon verifies them when the track is reviewed. A commit without them, or naming another
+  track or a task the approved plan does not have, makes the track's scope unproven, and the review
+  cannot pass. Bookkeeping commits (status updates, git notes) carry the trailers of the task they
+  record.
+- **Stay inside the task's edit boundary**: the path globs in the task's `files` array in
+  `plan.json`. A task without `files` has an empty boundary. Any change outside the boundary,
+  including deleting a single comment, is an `out-of-scope-edit` finding. The boundary is the one the
+  operator approved; you cannot amend it. If the task needs a file outside it, follow the blocked
+  protocol below and ask for a plan revision rather than editing the file or `plan.json`.
+
 **For each task, you MUST:**
 
 1. Set the task `status` to `"doing"` in `plan.json`.
@@ -161,8 +194,11 @@ When every phase is `done`:
 1. **Confirm test coverage closed out:** every `TS-nn` in `test-plan.md` was executed and passed, and
    the task that claimed it carries a `commit_sha`. If any scenario was never run, the track is not
    done — say which, and go back to the phase that owns it.
-2. Set the track `status` to `"done"` in `tracks.json` (refresh `updated_at`).
-3. Stage and commit: `chore(sebenza): Mark track '<track_description>' as complete`.
+2. **Complete the track through the daemon:** run `sebenza-agentctl complete --track <track_id>`.
+   The daemon records the completion, enqueues the track's standards review and marks the track
+   `done` in `tracks.json`. **Never write the track's `status: "done"` yourself.** If the command is
+   unavailable or fails, say so and stop; do not fall back to editing `tracks.json`.
+3. Stage and commit the updated `tracks.json`: `chore(sebenza): Mark track '<track_description>' as complete`.
 4. Announce completion.
 
 ## 7. Synchronize project documentation

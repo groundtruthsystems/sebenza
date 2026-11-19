@@ -86,6 +86,20 @@ import {
   RetryInboxTriageResponseSchema,
   InboxAgentJobSchema,
   RedactInboxCommentResponseSchema,
+  CompleteTrackRequestSchema,
+  CompleteTrackResponseSchema,
+  ApproveTrackPlanResponseSchema,
+  SignOffTrackResponseSchema,
+  DecideFindingRequestSchema,
+  DecideFindingResponseSchema,
+  RecordExistingChecksRequestSchema,
+  RecordExistingChecksResponseSchema,
+  ClaimReviewRunRequestSchema,
+  ReviewRunClaimSchema,
+  SubmitReviewRunRequestSchema,
+  SubmitReviewRunResponseSchema,
+  TrackReviewStatusSchema,
+  TrackReviewFindingsSchema,
   InboxDraftHelpRequestSchema,
   InboxDraftHelpResponseSchema,
   ConvertInstructionsRequestSchema,
@@ -177,6 +191,15 @@ export const apiPaths = {
   redeliverInboxComment: "/api/inbox/:id/comments/:eventId/redeliver",
   fetchRegistry: "/api/registry",
   fetchRegistryFile: "/api/registry/file",
+  completeTrack: "/api/tracks/:id/complete",
+  approveTrackPlan: "/api/tracks/:id/plan/approve",
+  signOffTrack: "/api/tracks/:id/signoff",
+  claimReviewRun: "/api/review-runs/claim",
+  submitReviewRun: "/api/review-runs/:id/submit",
+  decideFinding: "/api/findings/:id/decision",
+  recordExistingChecks: "/api/review/tracks/:id/existing-checks",
+  fetchTrackReviewStatus: "/api/review/tracks/:id",
+  fetchTrackReviewFindings: "/api/review/tracks/:id/findings",
 } as const;
 
 /** Errors every guarded inbox decision route can return: 401/403 from the
@@ -806,7 +829,9 @@ export const apiContract = c.router(
     fetchInboxRequests: {
       method: "GET",
       path: apiPaths.fetchInboxRequests,
-      query: z.object({ filter: InboxRequestFilterSchema.optional() }).optional(),
+      query: z
+        .object({ filter: InboxRequestFilterSchema.optional() })
+        .optional(),
       responses: {
         200: InboxRequestListSchema,
         400: ErrorResponseSchema,
@@ -916,6 +941,131 @@ export const apiContract = c.router(
       responses: {
         200: RedactInboxCommentResponseSchema,
         ...inboxDecisionErrors,
+      },
+    },
+    /** Control token; the daemon resolves the worktree from its own record. */
+    completeTrack: {
+      method: "POST",
+      path: apiPaths.completeTrack,
+      body: CompleteTrackRequestSchema,
+      responses: {
+        200: CompleteTrackResponseSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    /** Operator token only; the control token gets 403 operator_required. */
+    approveTrackPlan: {
+      method: "POST",
+      path: apiPaths.approveTrackPlan,
+      body: z.object({}).optional(),
+      responses: {
+        200: ApproveTrackPlanResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    /** Operator token only; control and run tokens get 403
+     *  operator_required. 409 is no_verdict, verdict_not_passing (with
+     *  `reasons`) or stale_verdict. */
+    signOffTrack: {
+      method: "POST",
+      path: apiPaths.signOffTrack,
+      body: z.object({}).optional(),
+      responses: {
+        200: SignOffTrackResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+        503: ErrorResponseSchema,
+      },
+    },
+    /** Hub-level, run token only: the token's run names the project. */
+    claimReviewRun: {
+      method: "POST",
+      path: apiPaths.claimReviewRun,
+      body: ClaimReviewRunRequestSchema,
+      responses: {
+        200: ReviewRunClaimSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+        503: ErrorResponseSchema,
+      },
+    },
+    /** Run token only; a 422 names what is missing and fails the attempt. */
+    submitReviewRun: {
+      method: "POST",
+      path: apiPaths.submitReviewRun,
+      body: SubmitReviewRunRequestSchema,
+      responses: {
+        200: SubmitReviewRunResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+        503: ErrorResponseSchema,
+      },
+    },
+    /** Operator token only; control and run tokens get 403
+     *  operator_required. */
+    decideFinding: {
+      method: "POST",
+      path: apiPaths.decideFinding,
+      body: DecideFindingRequestSchema,
+      responses: {
+        200: DecideFindingResponseSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    /** Control token, the track's own worktree only; the daemon re-derives
+     *  the verdict from the four results. */
+    recordExistingChecks: {
+      method: "POST",
+      path: apiPaths.recordExistingChecks,
+      body: RecordExistingChecksRequestSchema,
+      responses: {
+        200: RecordExistingChecksResponseSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    fetchTrackReviewStatus: {
+      method: "GET",
+      path: apiPaths.fetchTrackReviewStatus,
+      responses: {
+        200: TrackReviewStatusSchema,
+        ...commonErrorResponses,
+      },
+    },
+    fetchTrackReviewFindings: {
+      method: "GET",
+      path: apiPaths.fetchTrackReviewFindings,
+      responses: {
+        200: TrackReviewFindingsSchema,
+        ...commonErrorResponses,
       },
     },
     fetchRegistry: {

@@ -2,7 +2,7 @@
 name: sebenza-setup
 description: Scaffolds a project for Context-Driven Development - creates the .ai/sebenza/ workspace (product, guidelines, tech stack, workflow, style guides, index.md handshake, tracks.json) and registers the project with the Sebenza daemon. Use whenever a project needs to be initialized or the Sebenza configuration is missing or broken.
 metadata:
-  version: "1.3"
+  version: "1.4"
 ---
 
 # Sebenza Setup Skill
@@ -43,9 +43,23 @@ configuration → first track). Keep it multi-line and welcoming.
 Run the resumption script: `python3 scripts/resume.py` and read the JSON from stdout. **Do NOT
 mention the script name/path to the user.**
 
-- `setup_complete: true` → announce the project is already initialized and **HALT**.
+- `setup_complete: true` → announce the project is already initialized, offer the review-rules
+  upgrade (§1.3), then **HALT**.
 - Partial setup → summarize what is complete vs. missing using human-readable names (e.g.
   `tech-stack.md`), never internal section numbers, and note that setup resumes at `next_step`.
+
+### 1.3 Review-rules upgrade (existing projects)
+
+The standards review enforces only rules tagged in the documents `index.md` lists; a category with
+no rule gets an informational note, never a finding. New projects get the default rules from the
+template guide (§2.4). An existing project gets them only as a proposal:
+
+1. Run `python3 scripts/propose_rules.py`. It prints, as a unified diff, the template rules for
+   each category the project has no rule for, plus the `index.md` line that lists the guide. It
+   writes nothing. Empty output means the rules are already adopted.
+2. Show the diff to the user and ask whether to apply it. Never apply it without an explicit yes.
+3. On a yes, apply exactly that diff with `git apply` from the project root, then commit it as
+   `sebenza(setup): Adopt the default review rules`. On a no, change nothing.
 
 ## 2. Interactive scaffolding & context gathering
 
@@ -89,6 +103,20 @@ migrating to uv as a separate track — do not migrate it as a side effect of se
 ### 2.4 Code Style Guides — `.ai/sebenza/code_styleguides/`
 Propose and copy guides from this skill's `assets/code_styleguides/` (only from there; do not
 generate rules from scratch) based on the confirmed tech stack. Offer to add more or custom rules.
+
+Always copy `general.md`: its **Review Rules** section holds the default rules the standards review
+enforces, one per category (restating comments, excessive comments, long methods). A rule is one
+line in the manifest syntax, followed by its prose:
+
+```markdown
+- [rule:<id> category=<category>] <what the rule asks>
+- [rule:<id> category=long-methods max_lines=<n>] <what the rule asks>
+```
+
+`max_lines` is required for `long-methods` and refused elsewhere. The default long-methods rule
+counts logical lines of a function body, excluding blank lines, comment-only lines and the
+signature. Tell the user every rule is theirs to edit or delete; the review enforces nothing a
+listed document does not declare.
 
 ### 2.5 Workflow Configuration — `.ai/sebenza/workflow.md`
 Offer **Default** or **Customize** (coverage %, commit frequency, summary storage). Explain that
@@ -150,6 +178,7 @@ it maps the workspace so any tool can resolve context. Write exactly:
 ## Workflow
 - [Workflow](./workflow.md)
 - [Code Style Guides](./code_styleguides/)
+- [General Code Style Guide](./code_styleguides/general.md)
 
 ## Tracks
 - [Tracks Registry](./tracks.json)
@@ -158,7 +187,8 @@ it maps the workspace so any tool can resolve context. Write exactly:
 - [Security Threat Model](./SECURITY.md)
 ```
 
-Verify every linked file exists on disk.
+Verify every linked file exists on disk. Only documents `index.md` lists are standards, so the
+general guide is listed by name.
 
 ## 4. Initialize the track registry — `.ai/sebenza/tracks.json`
 

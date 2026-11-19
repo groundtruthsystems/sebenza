@@ -601,6 +601,123 @@ fn control_token() -> Result<String> {
 }
 
 impl Http {
+    /// `POST /api/tracks/{id}/complete` — complete a track of the worktree
+    /// `worktree_id` (control token).
+    pub async fn complete_track(&self, track_id: &str, worktree_id: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/tracks/{}/complete",
+                self.hub,
+                urlencode(track_id)
+            ))
+            .bearer_auth(control_token()?)
+            .json(&json!({ "worktreeId": worktree_id }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+}
+
+impl Http {
+    /// `POST /api/tracks/{id}/plan/approve` — approve a track's committed
+    /// plan and snapshot its edit boundary (operator token).
+    pub async fn approve_track_plan(&self, track_id: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/tracks/{}/plan/approve",
+                self.hub,
+                urlencode(track_id)
+            ))
+            .bearer_auth(crate::login::operator_token()?)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `POST /api/tracks/{id}/signoff` — sign off a track through the
+    /// daemon's compare-and-swap gate (operator token).
+    pub async fn sign_off_track(&self, track_id: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/tracks/{}/signoff",
+                self.hub,
+                urlencode(track_id)
+            ))
+            .bearer_auth(crate::login::operator_token()?)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `POST /api/findings/{id}/decision` — confirm or reject a finding
+    /// the two review runs disagree on (operator token).
+    pub async fn decide_finding(&self, finding_id: &str, decision: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/findings/{}/decision",
+                self.hub,
+                urlencode(finding_id)
+            ))
+            .bearer_auth(crate::login::operator_token()?)
+            .json(&json!({ "decision": decision }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `POST /api/review/tracks/{id}/existing-checks` — report the four
+    /// existing sebenza-review checks of the worktree's track (control
+    /// token).
+    pub async fn record_existing_checks(
+        &self,
+        track_id: &str,
+        worktree_id: &str,
+        checks: &[(&str, String)],
+    ) -> Result<Value> {
+        let checks: Vec<Value> = checks
+            .iter()
+            .map(|(check, status)| json!({ "check": check, "status": status }))
+            .collect();
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/review/tracks/{}/existing-checks",
+                self.hub,
+                urlencode(track_id)
+            ))
+            .bearer_auth(control_token()?)
+            .json(&json!({ "worktreeId": worktree_id, "checks": checks }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
+    /// `GET <base>/api/review/tracks/{id}` — a track's latest review job.
+    pub async fn review_status(&self, base: &str, track_id: &str) -> Result<Value> {
+        self.get(&format!("{base}/api/review/tracks/{}", urlencode(track_id)))
+            .await
+    }
+
+    /// `GET <base>/api/review/tracks/{id}/findings` — a track's findings.
+    pub async fn review_findings(&self, base: &str, track_id: &str) -> Result<Value> {
+        self.get(&format!(
+            "{base}/api/review/tracks/{}/findings",
+            urlencode(track_id)
+        ))
+        .await
+    }
+}
+
+impl Http {
     /// `POST /api/operator/login` — start a CLI operator login.
     pub async fn operator_login_start(&self, verifier_hash: &str) -> Result<Value> {
         let resp = self

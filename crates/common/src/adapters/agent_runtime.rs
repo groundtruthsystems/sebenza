@@ -1074,6 +1074,89 @@ mod tests {
         fs::remove_dir_all(&ctl.base).ok();
     }
 
+    // TS-01: `complete` names the worktree by the id the daemon wrote into
+    // control.env and nothing else; the daemon resolves the rest itself.
+    #[test]
+    fn agentctl_complete_posts_only_its_worktree_id_to_the_track_route() {
+        if !have_python() {
+            eprintln!("python3 not found; skipping");
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = capture_one_post(listener);
+        let ctl = ctl_worktree(port, None);
+        let out = run_ctl(&ctl, &["complete", "--track", "notes_api_20261105"], "");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let (headers, body) = server.join().unwrap().expect("a POST arrived");
+        assert!(
+            headers.starts_with("POST /api/tracks/notes_api_20261105/complete "),
+            "{headers}"
+        );
+        assert!(headers.contains("Bearer tok-test"), "{headers}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v, json!({ "worktreeId": "wt-id-1" }));
+        let printed: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(printed["ok"], true);
+        fs::remove_dir_all(&ctl.base).ok();
+    }
+
+    // TS-62: the skill reports the four existing checks from its own
+    // worktree; the daemon re-derives the verdict from them.
+    #[test]
+    fn agentctl_review_checks_posts_all_four_results_with_its_worktree_id() {
+        if !have_python() {
+            eprintln!("python3 not found; skipping");
+            return;
+        }
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = capture_one_post(listener);
+        let ctl = ctl_worktree(port, None);
+        let args = [
+            "review-checks",
+            "--track",
+            "notes_api_20261105",
+            "--requirements",
+            "pass",
+            "--test-plan",
+            "fail",
+            "--coverage",
+            "not_applicable",
+            "--architecture",
+            "pass",
+        ];
+        let out = run_ctl(&ctl, &args, "");
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let (headers, body) = server.join().unwrap().expect("a POST arrived");
+        assert!(
+            headers.starts_with("POST /api/review/tracks/notes_api_20261105/existing-checks "),
+            "{headers}"
+        );
+        assert!(headers.contains("Bearer tok-test"), "{headers}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            v,
+            json!({ "worktreeId": "wt-id-1", "checks": [
+                {"check": "requirements", "status": "pass"},
+                {"check": "test_plan", "status": "fail"},
+                {"check": "coverage", "status": "not_applicable"},
+                {"check": "architecture", "status": "pass"},
+            ]})
+        );
+        let missing = run_ctl(&ctl, &args[..9], "");
+        assert!(!missing.status.success(), "every check is required");
+        fs::remove_dir_all(&ctl.base).ok();
+    }
+
     #[test]
     fn agentctl_comment_reads_its_body_from_stdin() {
         if !have_python() {

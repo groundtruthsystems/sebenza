@@ -1,0 +1,130 @@
+{
+  "$schema": "sebenza-plan-v1",
+  "track_id": "fullscreen_request_20261119",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Full-screen request route",
+      "status": "done",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-1-task-1",
+          "name": "Write tests for request full-screen route",
+          "description": "Add failing component tests for view=full and doc= entry from list, detail, direct URL, reload and unknown id.",
+          "status": "done",
+          "commit_sha": "0e82a0f"
+        },
+        {
+          "id": "phase-1-task-2",
+          "name": "Implement request full-screen route",
+          "description": "Add a History-API full-screen view to InboxView that saves and restores route, selection and scroll.",
+          "status": "done",
+          "commit_sha": "d82eee5"
+        },
+        {
+          "id": "phase-1-task-3",
+          "name": "Execute test scenarios TS-01..TS-11",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "done",
+          "test_scenarios": [
+            "TS-01",
+            "TS-02",
+            "TS-03",
+            "TS-04",
+            "TS-05",
+            "TS-06",
+            "TS-07",
+            "TS-10",
+            "TS-11"
+          ],
+          "commit_sha": "d82eee5"
+        },
+        {
+          "id": "phase-1-task-4",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "done",
+          "commit_sha": "d82eee5"
+        }
+      ],
+      "checkpoint_sha": "d82eee5"
+    },
+    {
+      "id": "phase-2",
+      "name": "Handover full screen on the shared URL pattern",
+      "status": "done",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-2-task-1",
+          "name": "Write tests for handover full-screen URL",
+          "description": "Add failing tests for handover view=full via Close, Esc and Back with nested overlays.",
+          "status": "done",
+          "commit_sha": "8f7db95"
+        },
+        {
+          "id": "phase-2-task-2",
+          "name": "Implement handover full-screen URL",
+          "description": "Move HandoverReview full screen to the view=full URL pattern while keeping its Esc stack.",
+          "status": "done",
+          "commit_sha": "42ad141"
+        },
+        {
+          "id": "phase-2-task-3",
+          "name": "Execute test scenarios TS-08..TS-09",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "done",
+          "test_scenarios": [
+            "TS-08",
+            "TS-09"
+          ],
+          "commit_sha": "42ad141"
+        },
+        {
+          "id": "phase-2-task-4",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "done",
+          "commit_sha": "42ad141"
+        }
+      ],
+      "checkpoint_sha": "42ad141"
+    },
+    {
+      "id": "phase-3",
+      "name": "Final verification",
+      "status": "done",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-3-task-1",
+          "name": "Re-run the whole test plan",
+          "description": "Re-run TS-01..TS-12 against the finished feature and record the manual browser check.",
+          "status": "done",
+          "test_scenarios": [
+            "TS-01",
+            "TS-02",
+            "TS-03",
+            "TS-04",
+            "TS-05",
+            "TS-06",
+            "TS-07",
+            "TS-08",
+            "TS-09",
+            "TS-10",
+            "TS-11",
+            "TS-12"
+          ],
+          "notes": "Full re-run 2026-11-19: cargo 542/78/505, skills 195, frontend 582, tsc clean. TS-12 (scroll restore in a real browser) deferred to operator final verification."
+        },
+        {
+          "id": "phase-3-task-2",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "done"
+        }
+      ]
+    }
+  ]
+}

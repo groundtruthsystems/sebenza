@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { Track, Tracks, WorktreeInfo } from "./types";
-import { fetchTrackFile, fetchTracks, saveTrackFile } from "./api";
+import { fetchTrackFile, fetchTracks, saveTrackFile, signOffTrack } from "./api";
 import { errorMessage } from "./utils";
 import TrackDetail from "./TrackDetail";
 import PhaseDetail from "./PhaseDetail";
@@ -107,6 +107,7 @@ export default function TracksBoard({ worktree }: { worktree: WorktreeInfo }) {
         <TrackDetail
           fetchFile={fetchFile}
           saveFile={saveFile}
+          signOff={signOffTrack}
           track={docsTrack}
           onclose={() => setDocsTrack(null)}
         />

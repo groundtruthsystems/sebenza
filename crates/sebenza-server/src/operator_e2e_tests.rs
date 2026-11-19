@@ -118,6 +118,11 @@ impl Daemon {
                 chat,
                 base.join("chat-scratch"),
             )),
+            completion: Arc::new(
+                crate::services::track_completion::TrackCompletionService::new(
+                    base.join("reviews"),
+                ),
+            ),
             frontend_dist: None,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -1,13 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import HandoverReview from "./HandoverReview";
 import { useReviewStore } from "./reviewStore";
 import { fakeApi } from "./solutionTestApi";
 import type { HandoverCard } from "./solutionApi";
 
+const ITEM_ROUTE = "/inbox?item=01ID";
+const FULL_ROUTE = "/inbox?item=01ID&handover=acme&view=full";
+const here = () => window.location.pathname + window.location.search;
+
 afterEach(cleanup);
-beforeEach(() => useReviewStore.setState({ reviews: {} }));
+beforeEach(() => {
+  useReviewStore.setState({ reviews: {} });
+  window.history.replaceState(null, "", ITEM_ROUTE);
+});
 
 const card = (over: Partial<HandoverCard> = {}): HandoverCard => ({
   project: "/code/acme",
@@ -119,6 +126,53 @@ describe("HandoverReview", () => {
     setup(card({ status: "rejected", rejection: { reason: "other", comment: "later", by: "operator_session", at: "2026-11-15T00:00:00Z" } }));
     expect(screen.getByText(/Rejected \(other\): later/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Approve and create worktree" })).toBeNull();
+  });
+
+  // TS-08 (fullscreen_request_20261119): full screen is the view=full URL, and
+  // Close, Esc and Back each leave it for the prior route.
+  it.each(["close", "esc", "back"])("enters at the handover URL and leaves it (%s)", async (how) => {
+    const user = userEvent.setup();
+    setup();
+    await user.click(screen.getByRole("button", { name: "Full screen" }));
+    expect(here()).toBe(FULL_ROUTE);
+    expect(await within(fullScreen()!).findByLabelText("Instruction for acme")).toBeInTheDocument();
+    if (how === "close") await user.click(within(fullScreen()!).getByRole("button", { name: "Exit full screen" }));
+    else if (how === "esc") await user.keyboard("{Escape}");
+    else act(() => window.history.back());
+    await waitFor(() => expect(fullScreen()).toBeNull());
+    expect(here()).toBe(ITEM_ROUTE);
+    expect(screen.getByRole("button", { name: "Full screen" })).toHaveFocus();
+  });
+
+  it("opens full screen straight from its URL, and Close lands on the item", async () => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", FULL_ROUTE);
+    setup();
+    expect(await within(fullScreen()!).findByLabelText("Instruction for acme")).toBeInTheDocument();
+    await user.click(within(fullScreen()!).getByRole("button", { name: "Exit full screen" }));
+    expect(fullScreen()).toBeNull();
+    expect(here()).toBe(ITEM_ROUTE);
+  });
+
+  it("ignores a full-screen URL for another handover", () => {
+    window.history.replaceState(null, "", "/inbox?item=01ID&handover=other&view=full");
+    setup();
+    expect(fullScreen()).toBeNull();
+  });
+
+  // TS-09: a nested overlay closes before full screen, which then leaves the URL.
+  it("closes the nested reject dialog first, then full screen and its URL", async () => {
+    const user = userEvent.setup();
+    setup();
+    await user.click(screen.getByRole("button", { name: "Full screen" }));
+    await user.click(within(fullScreen()!).getByRole("button", { name: "Reject" }));
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Reject handover acme" })).toBeNull();
+    expect(fullScreen()).not.toBeNull();
+    expect(here()).toBe(FULL_ROUTE);
+    await user.keyboard("{Escape}");
+    expect(fullScreen()).toBeNull();
+    expect(here()).toBe(ITEM_ROUTE);
   });
 
   // NFR-04: Full screen is keyboard operable and has a visible focus style.

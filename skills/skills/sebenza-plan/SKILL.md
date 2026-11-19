@@ -2,7 +2,7 @@
 name: sebenza-plan
 description: Plans a track - refines a feature's design.md, its architecture documents and test-plan.md into a spec.md and a phased plan.json whose tasks provision every test scenario, or creates a bug/chore/refactor track from scratch. Registers it in tracks.json. Use when the user wants to plan a feature, write a spec, plan work, create a new track, or plan a bug fix. For features, an approved design.md must exist first.
 metadata:
-  version: "2.1"
+  version: "2.2"
 ---
 
 # Sebenza Plan Skill
@@ -168,8 +168,8 @@ The plan is the execution roadmap: the spec broken into phases and tasks under t
          "status": "backlog",
          "blocked_reason": null,
          "tasks": [
-           { "id": "phase-1-task-1", "name": "Write tests for <x>", "description": "<one sentence>", "status": "backlog" },
-           { "id": "phase-1-task-2", "name": "Implement <x>", "description": "<one sentence>", "status": "backlog" },
+           { "id": "phase-1-task-1", "name": "Write tests for <x>", "description": "<one sentence>", "status": "backlog", "files": ["<test path globs>"] },
+           { "id": "phase-1-task-2", "name": "Implement <x>", "description": "<one sentence>", "status": "backlog", "files": ["<source path globs>"] },
            { "id": "phase-1-task-3", "name": "Execute test scenarios TS-01..TS-03", "description": "<one sentence>", "status": "backlog", "test_scenarios": ["TS-01", "TS-02", "TS-03"] },
            { "id": "phase-1-task-4", "name": "Phase verification & checkpoint", "description": "Per workflow.md", "status": "backlog" }
          ]
@@ -178,7 +178,13 @@ The plan is the execution roadmap: the spec broken into phases and tasks under t
    }
    ```
 
-5. **Fill `depends_on`** wherever a task cannot start until another is done (grammar in
+5. **Give every task a `files` edit boundary**: the repository-relative path globs its commits may
+   change (`src/payments/`, `crates/api/**/*.rs`, `docs/payments.md`). `**` spans directories,
+   `*` and `?` stay within one path segment, and a trailing `/` covers a whole directory. Leave
+   track bookkeeping (`.ai/sebenza/tracks/` and `tracks.json`) out; it is always allowed. A task
+   without `files` has an empty boundary, so any change it commits is an `out-of-scope-edit`
+   finding at review. Scope each boundary to the task, not the whole repository.
+6. **Fill `depends_on`** wherever a task cannot start until another is done (grammar in
    [`framework.md`](../../shared/framework.md#task-dependencies)):
    - a bare task id for a task in this plan, such as an "Implement" task that waits on its "Write tests" task;
    - `<track_id>/<task_id>` for a task in another track of this worktree;
@@ -187,11 +193,11 @@ The plan is the execution roadmap: the spec broken into phases and tasks under t
 
    Tasks with no real dependency get no `depends_on`. Plan order is the default sequence, so list
    only the edges that order does not already express, or that cross tracks or worktrees.
-6. **Validate the graph:** `python3 "<sebenza>/scripts/validate_plan.py" <path to plan.json>`.
+7. **Validate the graph:** `python3 "<sebenza>/scripts/validate_plan.py" <path to plan.json>`.
    - Exit 1 (a self reference, a cycle, or a reference to a task that does not exist) is a defect:
      fix it before presenting.
    - Report warnings (an unresolved cross-track reference) in one line each.
-7. Present the plan for review and run an **Approve / Revise** loop. Include one line of coverage
+8. Present the plan for review and run an **Approve / Revise** loop. Include one line of coverage
    evidence — scenarios provisioned out of scenarios defined — and one line from the validator, so
    the user can see the checks were run rather than claimed.
 
@@ -232,6 +238,20 @@ The plan is the execution roadmap: the spec broken into phases and tasks under t
    `python3 "<sebenza>/scripts/inbox.py" request --move <track_id> <track_id>/<task_id>`. Nothing is
    re-sent; the cached request just moves to the task node.
 5. **Commit:** stage `.ai/sebenza/` and commit `chore(sebenza): initialize track '<track_id>'`.
+
+## 6a. Plan approval and the boundary snapshot
+
+The operator approves the plan through its `[approval]` request (or in chat when the worktree is not
+linked). Approval is not complete until the daemon has snapshotted the edit boundary from the
+committed plan:
+
+1. Commit `plan.json` first (§6 step 5); the daemon reads it from git at the branch head, never from
+   the working tree.
+2. Once the operator has approved the `[approval]` request, ask the operator to run
+   `sebenza-cli track approve-plan <track_id>`. It needs the operator token (`sebenza-cli login`),
+   so you cannot run it yourself: the control token is refused with `operator_required`.
+3. Any later edit to the plan's tasks or boundaries makes the snapshot stale, and every commit is
+   out of scope until the operator approves the plan again. Status updates do not count as edits.
 
 ## 7. Completion & handoff
 
