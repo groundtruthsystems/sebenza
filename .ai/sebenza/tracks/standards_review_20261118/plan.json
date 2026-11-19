@@ -348,7 +348,7 @@
     {
       "id": "phase-8",
       "name": "Review Fixes",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -424,9 +424,11 @@
           "id": "phase-8-task-9",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "4e7052d"
         }
-      ]
+      ],
+      "checkpoint_sha": "4e7052d"
     },
     {
       "id": "phase-7",
