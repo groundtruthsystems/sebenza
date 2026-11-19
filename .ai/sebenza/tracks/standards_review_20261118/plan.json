@@ -110,7 +110,7 @@
     {
       "id": "phase-3",
       "name": "Review store, run API and verdict deriver",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -163,9 +163,11 @@
           "id": "phase-3-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "2e5a7df"
         }
-      ]
+      ],
+      "checkpoint_sha": "2e5a7df"
     },
     {
       "id": "phase-4",
