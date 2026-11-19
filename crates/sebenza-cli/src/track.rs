@@ -1,6 +1,10 @@
 //! `sebenza-cli track complete <track-id>`: complete a track through the
 //! daemon, as `sebenza-agentctl complete` does. The daemon records the
 //! completion and its review job and marks the track done in `tracks.json`.
+//!
+//! `sebenza-cli track approve-plan <track-id>`: the operator approves the
+//! track's committed plan, and the daemon snapshots each task's edit
+//! boundary. It needs the operator token from `sebenza-cli login`.
 
 use anyhow::{Result, anyhow};
 
@@ -13,17 +17,25 @@ enum TrackCommand {
         /// Defaults to the id in this worktree's `control.env`.
         worktree_id: Option<String>,
     },
+    ApprovePlan {
+        track_id: String,
+    },
 }
 
 fn usage() -> String {
     [
         "Usage:",
         "  sebenza-cli track complete <track-id> [--worktree-id <id>]",
+        "  sebenza-cli track approve-plan <track-id>",
         "",
         "Completes a track of the current worktree through the daemon: it records the",
         "completion, enqueues the track's standards review and marks it done in",
         "tracks.json. The worktree id defaults to the one Sebenza wrote for this",
         "worktree (<git-dir>/.ai/sebenza/control.env).",
+        "",
+        "approve-plan (operator): approves the track's plan.json as committed at its",
+        "branch head and snapshots each task's `files` edit boundary. Run it after",
+        "approving the plan's [approval] request. Needs `sebenza-cli login`.",
     ]
     .join("\n")
 }
@@ -35,6 +47,7 @@ fn parse(args: &[String]) -> Result<Option<TrackCommand>> {
     match sub {
         "--help" | "-h" => Ok(None),
         "complete" => parse_complete(&args[1..]).map(Some),
+        "approve-plan" => parse_approve_plan(&args[1..]).map(Some),
         other => Err(anyhow!("Unknown track subcommand: {other}")),
     }
 }
@@ -61,6 +74,16 @@ fn parse_complete(args: &[String]) -> Result<TrackCommand> {
         track_id,
         worktree_id,
     })
+}
+
+fn parse_approve_plan(args: &[String]) -> Result<TrackCommand> {
+    match args {
+        [id] if !id.starts_with('-') => Ok(TrackCommand::ApprovePlan {
+            track_id: id.clone(),
+        }),
+        [] => Err(anyhow!("track approve-plan requires a <track-id>")),
+        _ => Err(anyhow!("track approve-plan takes exactly one <track-id>")),
+    }
 }
 
 /// The worktree id Sebenza wrote into `<git-dir>/.ai/sebenza/control.env`.
@@ -103,16 +126,37 @@ pub async fn run(args: &[String], port: u16, cwd: &str) -> i32 {
 }
 
 async fn run_inner(cmd: TrackCommand, port: u16, cwd: &str) -> Result<()> {
-    let TrackCommand::Complete {
-        track_id,
-        worktree_id,
-    } = cmd;
+    match cmd {
+        TrackCommand::Complete {
+            track_id,
+            worktree_id,
+        } => complete(&track_id, worktree_id, port, cwd).await,
+        TrackCommand::ApprovePlan { track_id } => approve_plan(&track_id, port).await,
+    }
+}
+
+async fn approve_plan(track_id: &str, port: u16) -> Result<()> {
+    let approved = Http::new(port).approve_track_plan(track_id).await?;
+    println!("{}", approval_summary(track_id, &approved));
+    Ok(())
+}
+
+fn approval_summary(track_id: &str, approved: &serde_json::Value) -> String {
+    let tasks = approved["tasks"].as_array().map_or(0, Vec::len);
+    format!(
+        "Plan of {track_id} approved at {} (plan sha256 {}); edit boundary snapshotted for {tasks} task(s).",
+        approved["headSha"].as_str().unwrap_or("?"),
+        approved["planSha256"].as_str().unwrap_or("?"),
+    )
+}
+
+async fn complete(track_id: &str, worktree_id: Option<String>, port: u16, cwd: &str) -> Result<()> {
     let worktree_id = match worktree_id {
         Some(id) => id,
         None => worktree_id_from(cwd)?,
     };
     let done = Http::new(port)
-        .complete_track(&track_id, &worktree_id)
+        .complete_track(track_id, &worktree_id)
         .await?;
     let job = &done["job"];
     let verb = if done["appended"] == true {
@@ -161,6 +205,32 @@ mod tests {
         assert!(parse(&a(&["complete", "a", "--force"])).is_err());
         assert!(parse(&a(&["complete", "a", "--worktree-id"])).is_err());
         assert!(parse(&a(&["finish", "a"])).is_err());
+    }
+
+    #[test]
+    fn approve_plan_takes_exactly_one_track() {
+        assert_eq!(
+            parse(&a(&["approve-plan", "t_20261118"])).unwrap(),
+            Some(TrackCommand::ApprovePlan {
+                track_id: "t_20261118".into()
+            })
+        );
+        assert!(parse(&a(&["approve-plan"])).is_err());
+        assert!(parse(&a(&["approve-plan", "a", "b"])).is_err());
+        assert!(parse(&a(&["approve-plan", "--force"])).is_err());
+    }
+
+    #[test]
+    fn the_approval_summary_names_the_head_hash_and_task_count() {
+        let v = serde_json::json!({
+            "headSha": "abc", "planSha256": "def",
+            "tasks": [{"taskId": "a", "files": []}, {"taskId": "b", "files": ["src/"]}]
+        });
+        let s = approval_summary("t_1", &v);
+        assert!(
+            s.contains("abc") && s.contains("def") && s.contains("2 task(s)"),
+            "{s}"
+        );
     }
 
     #[test]

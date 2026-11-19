@@ -50,7 +50,16 @@ pub struct Trailers {
 /// Blockers about `pins` themselves: a base that is missing or not under
 /// the head, or a head not reachable from `branch`.
 pub fn prove_pins(git: &Git, pins: &SnapshotPins, branch: &str) -> Result<Vec<Blocker>, GitError> {
-    todo!()
+    let (base, head) = (pins.base_sha.as_str(), pins.head_sha.as_str());
+    if !is_commit(git, base)? || !is_commit(git, head)? || !is_ancestor(git, base, head)? {
+        return Ok(vec![Blocker::at_commit(Reason::MissingBase, base)]);
+    }
+    let branch_ref = format!("refs/heads/{branch}");
+    if is_commit(git, &branch_ref)? && is_ancestor(git, head, &branch_ref)? {
+        Ok(Vec::new())
+    } else {
+        Ok(vec![Blocker::at_commit(Reason::HeadOffBranch, head)])
+    }
 }
 
 /// Prove the commits of `inputs` belong to `track_id` under `approval`,
@@ -61,7 +70,30 @@ pub fn prove_scope(
     inputs: &ReviewInputs,
     approval: Option<&PlanApproved>,
 ) -> Result<ScopeProof, GitError> {
-    todo!()
+    let Some(approval) = approval else {
+        return Ok(blocked(vec![Blocker::whole(Reason::PlanNotApproved)]));
+    };
+    let changes: Vec<&ScopeCommit> = inputs
+        .commits
+        .iter()
+        .filter(|c| c.kind == CommitKind::Change)
+        .collect();
+    let trailers = commit_trailers(git, &changes)?;
+    let mut blockers = merge_blockers(&inputs.commits);
+    blockers.extend(trailer_blockers(track_id, approval, &changes, &trailers));
+    if !blockers.is_empty() {
+        return Ok(blocked(blockers));
+    }
+    let out_of_scope = if is_stale(git, &inputs.pins.head_sha, track_id, approval)? {
+        stale_findings(&inputs.files)
+    } else {
+        let edits = edits_outside(git, approval, &changes, &trailers)?;
+        boundary_findings(&inputs.files, &edits)
+    };
+    Ok(ScopeProof {
+        blockers: Vec::new(),
+        out_of_scope,
+    })
 }
 
 fn blocked(mut blockers: Vec<Blocker>) -> ScopeProof {

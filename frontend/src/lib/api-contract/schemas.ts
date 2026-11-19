@@ -1334,6 +1334,17 @@ export const CompleteTrackResponseSchema = z.object({
   job: ReviewJobKeySchema,
 });
 
+/** `POST /api/tracks/:id/plan/approve` — the plan as committed at the
+ *  branch head and each task's edit boundary (`files` globs). */
+export const ApproveTrackPlanResponseSchema = z.object({
+  ok: z.literal(true),
+  trackId: z.string(),
+  headSha: z.string(),
+  planSha256: z.string(),
+  planContentSha256: z.string(),
+  tasks: z.array(z.object({ taskId: z.string(), files: z.array(z.string()) })),
+});
+
 /** The kind of a standards-review run; attempts are counted per kind. */
 export const ReviewRunKindSchema = z.enum(["first", "second"]);
 
@@ -1471,6 +1482,7 @@ export const ReviewJobStatusSchema = z.object({
     "running",
     "verdict",
     "standards-unavailable",
+    "scope-unproven",
     "review-failed",
   ]),
   attempts: z.object({ first: z.number(), second: z.number() }),
@@ -1480,6 +1492,7 @@ export const ReviewJobStatusSchema = z.object({
       reason: z.string(),
       path: z.string().nullish(),
       line: z.number().nullish(),
+      commit: z.string().nullish(),
     }),
   ),
   openRun: z
@@ -1511,7 +1524,7 @@ export const ReviewFindingSchema = z.object({
     "resolved-out-of-scope",
     "rule-withdrawn",
   ]),
-  origin: z.enum(["agent", "standards-change", "measured"]),
+  origin: z.enum(["agent", "standards-change", "measured", "boundary"]),
   anchor: ReviewAnchorSchema,
   description: z.string(),
 });

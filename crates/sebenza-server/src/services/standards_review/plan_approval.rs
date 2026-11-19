@@ -57,7 +57,14 @@ pub fn approve_plan(
     branch: &str,
     credential: &str,
 ) -> Result<PlanApproved, ApprovalError> {
-    todo!()
+    let head = git.commit_sha(&format!("refs/heads/{branch}"))?;
+    let bytes =
+        plan_at(git, &head, track_id)?.ok_or_else(|| ApprovalError::NoPlan(head.clone()))?;
+    let mut approved = snapshot(track_id, &head, &bytes)?;
+    approved.credential = credential.to_string();
+    let event = ReviewEventKind::PlanApproved(approved.clone());
+    log.transact(|_| Ok::<_, std::io::Error>((Some(event), ())))?;
+    Ok(approved)
 }
 
 /// The plan.json blob of `track_id` at commit `sha`, when it is a regular
@@ -84,12 +91,26 @@ pub fn snapshot(
     head_sha: &str,
     bytes: &[u8],
 ) -> Result<PlanApproved, ApprovalError> {
-    todo!()
+    let text = std::str::from_utf8(bytes).map_err(|_| invalid("not UTF-8"))?;
+    let plan: Value = serde_json::from_str(text).map_err(|e| invalid(&e.to_string()))?;
+    if plan["track_id"] != track_id {
+        return Err(invalid("its track_id names another track"));
+    }
+    Ok(PlanApproved {
+        track_id: track_id.to_string(),
+        head_sha: head_sha.to_string(),
+        plan_sha256: sha256_hex(text),
+        plan_content_sha256: content_sha256(&plan),
+        boundaries: boundaries(&plan)?,
+        credential: String::new(),
+    })
 }
 
 /// The hash of `plan` without its [`PROGRESS_FIELDS`].
 pub fn content_sha256(plan: &Value) -> String {
-    todo!()
+    let mut content = plan.clone();
+    strip_progress(&mut content);
+    sha256_hex(&content.to_string())
 }
 
 /// The content hash of a plan.json blob, `None` when it is not JSON.

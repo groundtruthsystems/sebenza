@@ -111,6 +111,15 @@ class Schemas(unittest.TestCase):
         self.assertFalse(self.plan_ok(plan_with(task("a", request=dict(good, raised_at="yesterday")))))
         self.assertFalse(self.tracks_ok(tracks_with(request=dict(good, status="nope"))))
 
+    def test_files_boundary_is_optional_and_relative(self):
+        self.assertTrue(self.plan_ok(plan_with(task("a"))), "files is optional")
+        good = ["src/", "crates/**/*.rs", "Cargo.toml", "**"]
+        self.assertTrue(self.plan_ok(plan_with(task("a", files=good))))
+        self.assertTrue(self.plan_ok(plan_with(task("a", files=[]))), "an empty boundary")
+        for bad in ("/etc/passwd", "../x", "a/../b", "a//b", "./a", "a\\b", ""):
+            self.assertFalse(self.plan_ok(plan_with(task("a", files=[bad]))), bad)
+        self.assertFalse(self.plan_ok(plan_with(task("a", files="src/"))))
+
     def test_ts54_every_existing_plan_and_tracks_file_still_validates(self):
         plans = glob.glob(os.path.join(REPO, ".ai", "sebenza", "tracks", "*", "plan.json"))
         tracks = [os.path.join(REPO, ".ai", "sebenza", "tracks.json")]

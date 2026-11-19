@@ -53,7 +53,7 @@ Usage:
   sebenza-cli inbox        Draft notes, triage worktree requests, convert to worktrees
   sebenza-cli login        Sign in as the operator (confirm the code in the dashboard)
   sebenza-cli project      List, add, or remove projects served by the dashboard
-  sebenza-cli track        Complete a track through the daemon (enqueues its review)
+  sebenza-cli track        Complete a track (enqueues its review); approve its plan (operator)
   sebenza-cli review       Show a track's standards review status and findings (read-only)
   sebenza-cli completion   Generate shell completion script (bash, zsh)
 

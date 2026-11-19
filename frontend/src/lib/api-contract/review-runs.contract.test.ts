@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { apiContract, apiPaths } from "./contract";
 import {
+  ApproveTrackPlanResponseSchema,
+  ReviewFindingSchema,
+  ReviewJobStatusSchema,
   SubmitReviewRunRequestSchema,
   TrackReviewStatusSchema,
 } from "./schemas";
@@ -46,5 +49,28 @@ describe("review runs contract", () => {
     expect(
       TrackReviewStatusSchema.parse({ trackId: "t_1", job: null }).job,
     ).toBeNull();
+  });
+
+  it("lists plan approval and parses its boundary snapshot", () => {
+    expect(apiPaths.approveTrackPlan).toBe("/api/tracks/:id/plan/approve");
+    expect(apiContract.approveTrackPlan.method).toBe("POST");
+    const got = ApproveTrackPlanResponseSchema.parse({
+      ok: true,
+      trackId: "t_1",
+      headSha: "h",
+      planSha256: "p",
+      planContentSha256: "c",
+      tasks: [{ taskId: "task-1", files: ["src/"] }],
+    });
+    expect(got.tasks[0].files).toEqual(["src/"]);
+  });
+
+  it("knows the scope-unproven state and boundary findings", () => {
+    expect(
+      ReviewJobStatusSchema.shape.state.safeParse("scope-unproven").success,
+    ).toBe(true);
+    expect(ReviewFindingSchema.shape.origin.safeParse("boundary").success).toBe(
+      true,
+    );
   });
 });

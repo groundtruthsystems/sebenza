@@ -12,12 +12,24 @@ pub fn in_boundary(globs: &[String], path: &str) -> bool {
 
 /// Whether `glob` matches `path`.
 pub fn glob_matches(glob: &str, path: &str) -> bool {
-    todo!()
+    let glob = match glob.strip_suffix('/') {
+        Some(dir) => format!("{dir}/**"),
+        None => glob.to_string(),
+    };
+    let globs: Vec<&str> = glob.split('/').collect();
+    let parts: Vec<&str> = path.split('/').collect();
+    segments_match(&globs, &parts)
 }
 
 /// Whether `glob` is a relative, normalised path pattern.
 pub fn valid_glob(glob: &str) -> bool {
-    todo!()
+    let body = glob.strip_suffix('/').unwrap_or(glob);
+    !body.is_empty()
+        && !body.starts_with('/')
+        && !body.contains('\\')
+        && body
+            .split('/')
+            .all(|s| !s.is_empty() && s != "." && s != "..")
 }
 
 fn segments_match(globs: &[&str], parts: &[&str]) -> bool {

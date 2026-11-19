@@ -737,6 +737,29 @@ describe("inbox priority, comments and requests", () => {
     expect(JSON.parse(seen[0].body)).toEqual(submission);
   });
 
+  it("approves a track plan at the hub with the operator token", async () => {
+    const { clearOperatorToken } = await import("./operator");
+    clearOperatorToken();
+    const seen = recordFetch({
+      token: "op_1",
+      expiresAt: 4_000_000_000,
+      ok: true,
+      trackId: "t_1",
+      headSha: "h",
+      planSha256: "p",
+      planContentSha256: "c",
+      tasks: [{ taskId: "task-1", files: ["src/"] }],
+    });
+    window.__SEBENZA_CONTROL_TOKEN__ = "control";
+    const api = await loadApiAt("/myproject/");
+    const got = await api.approveTrackPlan("t_1");
+    expect(got.tasks[0].taskId).toBe("task-1");
+    const call = seen[seen.length - 1];
+    expect(call.url).toMatch(/^[^?]*\/api\/tracks\/t_1\/plan\/approve$/);
+    expect(call.url).not.toContain("/myproject/");
+    expect(call.auth).toBe("Bearer op_1");
+  });
+
   it("reads a track's review status and findings under the project prefix", async () => {
     const job = {
       trackId: "t_1",

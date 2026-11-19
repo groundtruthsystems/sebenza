@@ -972,6 +972,16 @@ export async function completeTrack(trackId: string, worktreeId: string) {
   });
 }
 
+/** Approve a track's committed plan and snapshot each task's edit boundary
+ *  (operator only). */
+export async function approveTrackPlan(trackId: string) {
+  return hubApi.approveTrackPlan({
+    params: { id: trackId },
+    body: {},
+    extraHeaders: await operatorHeaders(),
+  });
+}
+
 /** Claim a standards-review run with its single-use run token. */
 export async function claimReviewRun(
   runToken: string,

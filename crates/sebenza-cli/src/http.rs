@@ -621,6 +621,23 @@ impl Http {
 }
 
 impl Http {
+    /// `POST /api/tracks/{id}/plan/approve` — approve a track's committed
+    /// plan and snapshot its edit boundary (operator token).
+    pub async fn approve_track_plan(&self, track_id: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/tracks/{}/plan/approve",
+                self.hub,
+                urlencode(track_id)
+            ))
+            .bearer_auth(crate::login::operator_token()?)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
     /// `GET <base>/api/review/tracks/{id}` — a track's latest review job.
     pub async fn review_status(&self, base: &str, track_id: &str) -> Result<Value> {
         self.get(&format!("{base}/api/review/tracks/{}", urlencode(track_id)))
