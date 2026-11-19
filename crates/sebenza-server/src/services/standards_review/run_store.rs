@@ -914,6 +914,41 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn ts20_omitting_an_open_prior_finding_is_rejected_by_id() {
+        let (e, id) = with_open_finding("store-ts20");
+        e.r.commit_on_feat("src/a.rs", "fn a() { b(); }\n");
+        let run = next_job(&e);
+        match e.submit(&run, &all_clean(&["src.rs", "src/a.rs"])) {
+            Err(RunError::Rejected(r)) => {
+                assert_eq!(r.code, "incomplete-matrix");
+                assert!(
+                    r.problems.iter().any(|p| p.contains(&id)),
+                    "{:?}",
+                    r.problems
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(status_of(&e, &id), FindingStatus::Open);
+    }
+
+    #[test]
+    fn ts33_a_symbol_moved_to_another_file_keeps_its_finding() {
+        let (e, id) = with_open_finding("store-ts33");
+        e.r.commit_on_feat("src/a.rs", "// moved\n");
+        e.r.commit_on_feat("src/b.rs", "fn a() {}\n");
+        let run = next_job(&e);
+        let paths = ["src.rs", "src/a.rs", "src/b.rs"];
+        let mut body = with_finding(&paths, "src/b.rs", "Function a is too long.");
+        body["priorFindings"] =
+            json!([{"findingId": id, "outcome": "clean", "span": {"startLine": 1, "endLine": 1}}]);
+        let ok = e.submit(&run, &body).unwrap();
+        assert_eq!(ok.findings_opened, 0, "the finding follows the symbol");
+        assert_eq!(status_of(&e, &id), FindingStatus::Open);
+        assert_eq!(e.view().track_findings(TRACK).len(), 1);
+    }
+
+    #[test]
     fn a_prior_dispositioned_clean_is_resolved_and_a_regression_is_new() {
         let (e, id) = with_open_finding("store-resolve");
         e.r.commit_on_feat("src/a.rs", "fn a() { short(); }\n");
