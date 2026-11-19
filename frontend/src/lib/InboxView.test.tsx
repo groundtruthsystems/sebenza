@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
@@ -673,5 +673,198 @@ describe("InboxView graph tab", () => {
     await userEvent.click(await screen.findByText("Rework the scorer"));
     const tabs = await screen.findByRole("tablist", { name: "Item view" });
     expect(within(tabs).getAllByRole("tab").map((t) => t.textContent)).toEqual(["Notes", "Graph"]);
+  });
+});
+
+describe("InboxView full screen", () => {
+  const ids = Array.from({ length: 30 }, (_, i) => `req-${String(i + 1).padStart(2, "0")}`);
+  const listed = [
+    summary({ id: "req-a", title: "Sample request A" }),
+    summary({ id: "req-b", title: "Sample request B" }),
+    summary({ id: "req-s", title: "Sample solution" }),
+    ...ids.map((id) => summary({ id, title: `Sample request ${id}` })),
+  ];
+  const notes = [
+    { id: "n1", type: "general", title: "Problem", body: "Slow invoices", hash: "h1" },
+    { id: "n2", type: "constraints", title: "Constraints", body: "Only synthetic data", hash: "h2" },
+  ];
+  const items: Record<string, unknown> = {
+    "req-a": full({ id: "req-a", title: "Sample request A", body: "Body of A" }),
+    "req-b": full({ id: "req-b", title: "Sample request B", body: "Body of B" }),
+    "req-s": full({ id: "req-s", title: "Sample solution", kind: "solution", body: "Brief body", notes, listHash: "lh" }),
+  };
+  const fsRegion = () => screen.queryByRole("region", { name: "Full-screen request" });
+  const list = () => screen.getByRole("list", { name: "Requests" });
+  const row = (id: string) => list().querySelector<HTMLElement>(`[data-item-id="${id}"]`);
+
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/inbox");
+    drafts.mockResolvedValue({ drafts: listed });
+    draft.mockImplementation((id: string) =>
+      id in items ? Promise.resolve(items[id]) : Promise.reject(new Error("Not found (404)")),
+    );
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+
+  afterEach(() => {
+    window.history.replaceState(null, "", "/inbox");
+  });
+
+  async function openFromList(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(await screen.findByText("Sample request B"));
+    await waitFor(() => expect(row("req-b")).toHaveAttribute("aria-current", "true"));
+    list().scrollTop = 300;
+    await user.click(screen.getByRole("button", { name: "Open Sample request B full screen" }));
+    expect(await screen.findByRole("region", { name: "Full-screen request" })).toBeInTheDocument();
+    list().scrollTop = 0;
+  }
+
+  function expectListRestored() {
+    expect(fsRegion()).toBeNull();
+    expect(window.location.pathname + window.location.search).toBe("/inbox");
+    expect(row("req-b")).toHaveAttribute("aria-current", "true");
+    expect(list().scrollTop).toBe(300);
+  }
+
+  // TS-01: entry from the list saves route, selection and scroll; Close restores them.
+  it("opens from the list and Close restores the list context", async () => {
+    const user = userEvent.setup();
+    const push = vi.spyOn(window.history, "pushState");
+    render(<InboxView />);
+    await openFromList(user);
+    expect(push).toHaveBeenCalledWith(
+      expect.objectContaining({ fullscreen: { route: "/inbox", selection: "req-b", scroll: 300 } }),
+      "",
+      "/inbox?item=req-b&view=full",
+    );
+    expect(within(fsRegion()!).getByRole("heading", { name: "Sample request B" })).toBeInTheDocument();
+    const length = window.history.length;
+    await user.click(screen.getByRole("button", { name: "Close full screen" }));
+    expectListRestored();
+    expect(window.history.length).toBe(length);
+    push.mockRestore();
+  });
+
+  // TS-02: Esc and browser Back restore the list context too.
+  it("restores the list context on Esc and on Back", async () => {
+    const user = userEvent.setup();
+    render(<InboxView />);
+    await openFromList(user);
+    await user.keyboard("{Escape}");
+    expectListRestored();
+    await user.click(screen.getByRole("button", { name: "Open Sample request B full screen" }));
+    expect(await screen.findByRole("region", { name: "Full-screen request" })).toBeInTheDocument();
+    list().scrollTop = 0;
+    act(() => window.history.back());
+    await waitFor(() => expect(fsRegion()).toBeNull());
+    expectListRestored();
+  });
+
+  // TS-03: entry from the detail returns to the detail on Close, Esc and Back.
+  it.each(["close", "esc", "back"])("returns to the request detail (%s)", async (how) => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/inbox?item=req-b");
+    render(<InboxView />);
+    expect(await screen.findByLabelText("Draft body")).toHaveValue("Body of B");
+    await user.click(screen.getByRole("button", { name: "Open request full screen" }));
+    expect(window.location.search).toBe("?item=req-b&view=full");
+    expect(await screen.findByRole("region", { name: "Full-screen request" })).toBeInTheDocument();
+    if (how === "close") await user.click(screen.getByRole("button", { name: "Close full screen" }));
+    else if (how === "esc") await user.keyboard("{Escape}");
+    else act(() => window.history.back());
+    await waitFor(() => expect(fsRegion()).toBeNull());
+    expect(window.location.search).toBe("?item=req-b");
+    expect(row("req-b")).toHaveAttribute("aria-current", "true");
+    expect(screen.getByLabelText("Draft body")).toHaveValue("Body of B");
+  });
+
+  // TS-04: the brief, the requirements and a note each open full screen via doc=.
+  it.each([
+    ["brief", "Open brief full screen", "Brief body"],
+    ["requirements", "Open requirements full screen", "# R"],
+    ["n2", "Open note Constraints full screen", "Only synthetic data"],
+  ])("opens the %s document full screen and returns to the detail", async (key, opener, text) => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/inbox?item=req-s");
+    render(<InboxView />);
+    await user.click(await screen.findByRole("button", { name: opener }));
+    expect(new URLSearchParams(window.location.search).get("doc")).toBe(key);
+    const region = await screen.findByRole("region", { name: "Full-screen request" });
+    expect(await within(region).findByText(text)).toBeInTheDocument();
+    await user.click(within(region).getByRole("button", { name: "Close full screen" }));
+    expect(fsRegion()).toBeNull();
+    expect(window.location.search).toBe("?item=req-s");
+    expect(row("req-s")).toHaveAttribute("aria-current", "true");
+  });
+
+  // TS-05: after a direct load, Close and Esc land on the request, selected and in view.
+  it.each(["close", "esc"])("lands on the request after a direct load (%s)", async (how) => {
+    const user = userEvent.setup();
+    window.history.replaceState(null, "", "/inbox?item=req-a&view=full");
+    render(<InboxView />);
+    const region = await screen.findByRole("region", { name: "Full-screen request" });
+    expect(await within(region).findByRole("heading", { name: "Sample request A" })).toBeInTheDocument();
+    await screen.findByText("Sample request B");
+    if (how === "close") await user.click(screen.getByRole("button", { name: "Close full screen" }));
+    else await user.keyboard("{Escape}");
+    expect(fsRegion()).toBeNull();
+    expect(window.location.search).toBe("?item=req-a");
+    await waitFor(() => expect(row("req-a")).toHaveAttribute("aria-current", "true"));
+    const scrolled = vi.mocked(Element.prototype.scrollIntoView).mock.contexts;
+    expect(scrolled).toContain(row("req-a"));
+  });
+
+  // TS-06: after a direct load, Back follows browser history without re-entering.
+  it("follows browser history on Back after a direct load", async () => {
+    window.history.replaceState(null, "", "/elsewhere");
+    window.history.pushState(null, "", "/inbox?item=req-a&view=full");
+    render(<InboxView />);
+    expect(await screen.findByRole("region", { name: "Full-screen request" })).toBeInTheDocument();
+    const push = vi.spyOn(window.history, "pushState");
+    const replace = vi.spyOn(window.history, "replaceState");
+    act(() => window.history.back());
+    await waitFor(() => expect(fsRegion()).toBeNull());
+    expect(window.location.pathname).toBe("/elsewhere");
+    expect(push).not.toHaveBeenCalled();
+    expect(replace).not.toHaveBeenCalled();
+    push.mockRestore();
+    replace.mockRestore();
+  });
+
+  // TS-07: an unknown or inaccessible id, or an unknown doc key, shows not-found.
+  it.each([
+    ["/inbox?item=req-missing&view=full", "Not found (404)"],
+    ["/inbox?item=req-locked&view=full", "Forbidden (403)"],
+  ])("shows not-found for %s", async (url, error) => {
+    draft.mockImplementation((id: string) =>
+      id in items ? Promise.resolve(items[id]) : Promise.reject(new Error(error)),
+    );
+    window.history.replaceState(null, "", url);
+    render(<InboxView />);
+    const region = await screen.findByRole("region", { name: "Full-screen request" });
+    expect(await within(region).findByRole("alert")).toHaveTextContent(/not found/i);
+    expect(within(region).getByRole("button", { name: "Close full screen" })).toBeInTheDocument();
+  });
+
+  it("shows not-found for an unknown document of a valid request", async () => {
+    window.history.replaceState(null, "", "/inbox?item=req-a&view=full&doc=nope");
+    render(<InboxView />);
+    const region = await screen.findByRole("region", { name: "Full-screen request" });
+    expect(await within(region).findByRole("alert")).toHaveTextContent(/document was not found/i);
+  });
+
+  // TS-11: focus returns to the opener; Close has an accessible name.
+  it("returns focus to the control that opened it", async () => {
+    const user = userEvent.setup();
+    render(<InboxView />);
+    await screen.findByText("Sample request B");
+    const opener = screen.getByRole("button", { name: "Open Sample request B full screen" });
+    opener.focus();
+    await user.keyboard("{Enter}");
+    const close = await screen.findByRole("button", { name: "Close full screen" });
+    expect(close).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(fsRegion()).toBeNull();
+    expect(opener).toHaveFocus();
   });
 });
