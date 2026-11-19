@@ -44,6 +44,12 @@ pub struct TestRepo {
     pub worktree: PathBuf,
 }
 
+impl Drop for TestRepo {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.base);
+    }
+}
+
 pub fn git(dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")
         .args([
