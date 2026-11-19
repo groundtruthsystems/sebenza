@@ -48,15 +48,15 @@ The daemon owns track completion: one fsynced review-log event records the compl
 - NFR-04: The review agent sees only a read-only head export with symlinks and `.git` removed (D-04).
 
 ## Acceptance Criteria
-- AC-01 (FR-01..FR-05, FR-14, FR-22; note "Acceptance Criteria" 1): TS-01..TS-06, TS-37a, TS-60, TS-63, TS-65..TS-70
+- AC-01 (FR-01..FR-05, FR-14, FR-22; note "Acceptance Criteria" 1): TS-01..TS-06, TS-37, TS-60, TS-63, TS-65..TS-70
 - AC-02 (FR-06..FR-10; note item 2): TS-07, TS-08, TS-17, TS-31
-- AC-03 (FR-12, FR-17..FR-19, FR-22; note item 3): TS-18..TS-22, TS-29a, TS-29b, TS-30a, TS-30b, TS-32..TS-36, TS-38..TS-40, TS-58, TS-61, TS-62
+- AC-03 (FR-12, FR-17..FR-19, FR-22; note item 3): TS-18..TS-22, TS-29, TS-72, TS-30, TS-73, TS-32..TS-36, TS-38..TS-40, TS-58, TS-61, TS-62
 - AC-04 (FR-23; note item 4): TS-41
 - AC-05 (FR-23; note item 5): TS-42
 - AC-06 (FR-15, FR-16, FR-25; note item 6; D-01, D-03): TS-23..TS-28, TS-46, TS-48
 - AC-08 (FR-07, FR-26; D-02): TS-09..TS-11, TS-47, TS-51
 - AC-09 (FR-08, FR-09, FR-20, FR-21): TS-08, TS-12..TS-16, TS-43..TS-45, TS-59
-- AC-10 (FR-11, FR-13, NFR-02..NFR-04; security): TS-37b, TS-49, TS-50, TS-52, TS-53, TS-57, TS-64, TS-71
+- AC-10 (FR-11, FR-13, NFR-02..NFR-04; security): TS-74, TS-49, TS-50, TS-52, TS-53, TS-57, TS-64, TS-71
 - AC-11 (FR-24, FR-27; regression and parity): TS-54, TS-55, TS-56
 
 ## Out of Scope

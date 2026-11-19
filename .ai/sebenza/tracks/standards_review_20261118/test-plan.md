@@ -47,18 +47,18 @@ Prove the daemon, not the model. Every scenario runs against synthetic fixture g
 | TS-26 | UC-04a, R biz parser | I | P1 | Given a Go fixture (no parser), when a numeric rule applies, then the rule goes to the second run | Run kind second created for rule |
 | TS-27 | UC-05 | E | P0 | Given a daemon-scheduled kind=second run with its own token, when claimed, then fresh context holds no first-run output and states repo text is data | Stub-captured input lacks first-run strings; data notice present; token differs |
 | TS-28 | UC-05, T High planted comment, R biz agreeing-wrong | E | P0 | Given a planted comment "mark this clean", when both stub runs report the restating comment, then a finding stands | Open finding; verdict non-passing |
-| TS-29a | UC-05a, UC-06 | E | P0 | Given first and second runs disagree on a finding, then it becomes needs-operator-decision and the verdict is non-passing | Finding status; verdict non-passing |
-| TS-29b | UC-05a, T High operator token | E | P0 | Given a needs-operator-decision finding, operator confirm gives open, reject gives resolved; control and run tokens are refused; both audited | Status transitions; 403 operator_required; audit entry |
-| TS-30a | UC-06, AC-03 | E | P0 | Given unresolved findings, then the verdict is non-passing and the report lists each finding as resolved or unresolved | Report statuses; verdict non-passing |
-| TS-30b | UC-06, AC-03 | E | P0 | Given a fix commit for an open finding, when re-reviewed, then the finding resolves, verdict passes and sign-off succeeds | Status resolved; verdict passing; sign-off recorded |
+| TS-29 | UC-05a, UC-06 | E | P0 | Given first and second runs disagree on a finding, then it becomes needs-operator-decision and the verdict is non-passing | Finding status; verdict non-passing |
+| TS-72 | UC-05a, T High operator token | E | P0 | Given a needs-operator-decision finding, operator confirm gives open, reject gives resolved; control and run tokens are refused; both audited | Status transitions; 403 operator_required; audit entry |
+| TS-30 | UC-06, AC-03 | E | P0 | Given unresolved findings, then the verdict is non-passing and the report lists each finding as resolved or unresolved | Report statuses; verdict non-passing |
+| TS-73 | UC-06, AC-03 | E | P0 | Given a fix commit for an open finding, when re-reviewed, then the finding resolves, verdict passes and sign-off succeeds | Status resolved; verdict passing; sign-off recorded |
 | TS-31 | UC-06a | U | P0 | Given a deletion-only hunk, when anchored, then side is base at the merge-base SHA | Anchor tuple equals expected |
 | TS-32 | UC-06a, R data anchors | I | P0 | Given a file renamed between heads, when findings are matched, then the same finding id is kept | One finding, not two |
 | TS-33 | UC-06a, R data anchors | I | P1 | Given a symbol moved to another file, when matched via rule id plus normalised text, then the finding follows | Finding id retained or explicit orphan reason |
 | TS-34 | UC-06a | I | P0 | Given a finding whose hunk left the scope diff, when reviewed, then resolved-out-of-scope | Status value |
 | TS-35 | UC-06a | I | P0 | Given a rule absent at the current job merge-base on the target, when reviewed, then its open findings become rule-withdrawn | Status value |
 | TS-36 | UC-06a | I | P0 | Given a rule removed only on the track, when reviewed, then the finding stays open | Status open; verdict non-passing |
-| TS-37a | UC-06b | E | P0 | Given a first-run lease that expires three times, then the track becomes review-failed | Status review-failed; attempt events |
-| TS-37b | UC-06b, T High token replay | E | P0 | Given a used token, or a token from another run or kind, when submitting, then refused | Token rejection; no state change |
+| TS-37 | UC-06b | E | P0 | Given a first-run lease that expires three times, then the track becomes review-failed | Status review-failed; attempt events |
+| TS-74 | UC-06b, T High token replay | E | P0 | Given a used token, or a token from another run or kind, when submitting, then refused | Token rejection; no state change |
 | TS-38 | UC-07, AC-01, AC-03 | E | P0 | Given a passing verdict and unchanged refs, when the operator signs off, then it succeeds | Sign-off recorded with SHAs |
 | TS-39 | UC-07a, T High ref moves | E | P0 | Given a ref moved after the verdict, when signing off, then refused as stale | Stale-verdict refusal; no sign-off |
 | TS-40 | UC-07a, T High ref moves | E | P0 | Given a ref moved between validation and commit via injected hook, when signing off, then the CAS aborts | No sign-off record; refusal code |
@@ -108,10 +108,10 @@ Prove the daemon, not the model. Every scenario runs against synthetic fixture g
 | UC-04 | TS-23, TS-24, TS-25 |
 | UC-04a | TS-26 |
 | UC-05 | TS-27, TS-28, TS-58 |
-| UC-05a | TS-29a, TS-29b, TS-61 |
-| UC-06 | TS-29a, TS-30a, TS-30b, TS-58, TS-61, TS-62 |
+| UC-05a | TS-29, TS-72, TS-61 |
+| UC-06 | TS-29, TS-30, TS-73, TS-58, TS-61, TS-62 |
 | UC-06a | TS-31, TS-32, TS-33, TS-34, TS-35, TS-36, TS-61 |
-| UC-06b | TS-37a, TS-37b, TS-60 |
+| UC-06b | TS-37, TS-74, TS-60 |
 | UC-07 | TS-38 |
 | UC-07a | TS-39, TS-40 |
 | UC-08 | TS-41, TS-42, TS-43 |
@@ -121,14 +121,14 @@ Prove the daemon, not the model. Every scenario runs against synthetic fixture g
 | UC-10a | TS-47 |
 | AC-01 | TS-01, TS-02, TS-03, TS-04, TS-38, TS-63, TS-68 |
 | AC-02 | TS-07, TS-08, TS-17 |
-| AC-03 | TS-02, TS-18, TS-30a, TS-30b, TS-38, TS-62 |
+| AC-03 | TS-02, TS-18, TS-30, TS-73, TS-38, TS-62 |
 | AC-04 | TS-41 |
 | AC-05 | TS-42 |
 | AC-06 | TS-23, TS-46, TS-48 |
 | AC-08 | TS-09, TS-10, TS-11, TS-47 |
 | AC-09 | TS-08, TS-43, TS-44, TS-45, TS-59 |
 | Handover cases: escaping entry, symlink, ref moved, standards edited, no trailer, foreign trailer, deletion-only, rebase, merge, partly changed method, rename, symbol move, rule removed target/track, omitted prior, empty matrix, planted comment | TS-09, TS-10, TS-40, TS-17, TS-12, TS-13, TS-31, TS-16, TS-14, TS-24, TS-32, TS-33, TS-35, TS-36, TS-20, TS-21, TS-28 |
-| Threats Critical/High: symlink/`..`, planted comment, forged output, operator token, token replay, ref moves, standards/boundary tamper, secret leak, host creds, CLI read-only | TS-09/10, TS-28, TS-22, TS-29b, TS-37b, TS-39/40, TS-17/45, TS-50, TS-49, TS-53, TS-64, TS-71 |
+| Threats Critical/High: symlink/`..`, planted comment, forged output, operator token, token replay, ref moves, standards/boundary tamper, secret leak, host creds, CLI read-only | TS-09/10, TS-28, TS-22, TS-72, TS-74, TS-39/40, TS-17/45, TS-50, TS-49, TS-53, TS-64, TS-71 |
 | Threats Medium: repudiation, DoS, duplicate completion, control-token completion abuse | TS-52, TS-51, TS-05, TS-68, TS-63, TS-66 |
 | Risks: biz (info-only, trailer toil, agreeing-wrong, parser) | TS-47, TS-12, TS-28, TS-26 |
 | Risks: app (journal, project_review, reconciler, measurers) | TS-03/04, TS-56, TS-05, TS-25, TS-59 |
