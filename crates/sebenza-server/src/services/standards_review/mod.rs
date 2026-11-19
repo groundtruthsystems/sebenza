@@ -20,6 +20,7 @@
 //!   matrix check, and the bounds and scan on finding descriptions.
 //! - [`findings`], [`matcher`] and [`deriver`]: the finding transition
 //!   table, the finding matcher and the daemon-only verdict.
+//! - [`measure`]: the in-tree method-length measurers (FR-15, D-03).
 //! - [`views`]: the JSON the run API and review routes return.
 
 pub mod boundary;
@@ -30,6 +31,7 @@ pub mod git_pinned;
 pub mod jobs;
 pub mod manifest;
 pub mod matcher;
+pub mod measure;
 pub mod objects;
 pub mod plan_approval;
 pub mod reasons;

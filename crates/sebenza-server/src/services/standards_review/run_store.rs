@@ -12,6 +12,7 @@
 use super::deriver::{Derivation, DeriveInputs, MeasuredFinding, derive};
 use super::free_text::TextScanner;
 use super::jobs::{Job, JobState, ReviewView, Run};
+use super::measure::{Measurement, measure, read_sources};
 use super::reasons::Blocker;
 use super::resolver::ResolveError;
 use super::run_context::{RunContext, job_git, job_pins, resolve_context};
@@ -216,9 +217,13 @@ impl ReviewRuns {
         let (run, job) = authenticate(&view, token, &expect, now)?;
         let context = self.context(project_key, token, &expect, now, (&view, job))?;
         let matrix = context.matrix(run.leased.kind);
+        let measured = match run.leased.kind {
+            RunKind::First => self.measure_job(job, &context)?,
+            RunKind::Second => Measurement::default(),
+        };
         match validate(body, &matrix, self.scanner.as_ref()) {
             Ok(valid) => {
-                let derived = derive_for(job, &context, &valid);
+                let derived = derive_for(job, &context, &valid, &measured.findings);
                 let accepted = accepted(job, run, &derived);
                 let event = |r: &Run| submitted(r, &context, valid, derived);
                 self.commit(project_key, token, &expect, now, event)?;
@@ -251,6 +256,15 @@ impl ReviewRuns {
             };
             Ok((Some(ReviewEventKind::ExistingChecksRecorded(event)), true))
         })
+    }
+
+    /// Measure the job's numeric rules from its head blobs (FR-15).
+    fn measure_job(&self, job: &Job, context: &RunContext) -> Result<Measurement, RunError> {
+        let git = job_git(job)?;
+        let max_blob = self.settings.limits.max_blob_bytes;
+        let sources =
+            read_sources(&git, &context.in_scope_files(), max_blob).map_err(ResolveError::from)?;
+        Ok(measure(&context.inputs.manifest.rules, &sources))
     }
 
     /// Prove the job's pins, then resolve its context and prove its scope,
@@ -428,11 +442,14 @@ fn blocker_records(blockers: &[Blocker]) -> Vec<BlockerRecord> {
         .collect()
 }
 
-fn derive_for(job: &Job, context: &RunContext, valid: &ValidSubmission) -> Derivation {
+fn derive_for(
+    job: &Job,
+    context: &RunContext,
+    valid: &ValidSubmission,
+    measured: &[MeasuredFinding],
+) -> Derivation {
     let (rules, scope) = (context.rule_ids(), context.scope_paths());
     let change = context.inputs.standards_change.as_ref();
-    // Phase 5's measurers and second-run scheduling fill these two.
-    let measured: Vec<MeasuredFinding> = Vec::new();
     let second_run_pending = false;
     derive(
         &DeriveInputs {
@@ -444,7 +461,7 @@ fn derive_for(job: &Job, context: &RunContext, valid: &ValidSubmission) -> Deriv
             standards_change: change.map(|c| c.paths.as_slice()),
             priors: &context.priors,
             submission: valid,
-            measured_findings: &measured,
+            measured_findings: measured,
             boundary_findings: &context.scope.out_of_scope,
             second_run_pending,
             existing_checks: job.existing_checks.as_deref(),
@@ -520,7 +537,7 @@ pub(crate) mod tests {
     use crate::services::standards_review::git_pinned::Git;
     use crate::services::standards_review::plan_approval::approve_plan;
     use crate::services::track_completion::{CompletionTarget, TrackCompletionService};
-    use common::domain::review_records::FindingStatus;
+    use common::domain::review_records::{FindingOrigin, FindingStatus};
     use common::domain::solution::CredentialClass;
     use serde_json::{Value, json};
 
@@ -1197,6 +1214,48 @@ pub(crate) mod tests {
             "re-approval clears them"
         );
         assert_eq!(v.finding(&first).unwrap().status, FindingStatus::Resolved);
+    }
+
+    /// A function `name` with `n` one-line statements in its body.
+    pub(crate) fn long_function(path: &str, name: &str, n: usize) -> String {
+        let body: String = (0..n).map(|i| format!("    step{i}();\n")).collect();
+        match path.rsplit_once('.').map(|(_, e)| e) {
+            Some("py") => {
+                let body: String = (0..n).map(|i| format!("    x{i} = {i}\n")).collect();
+                format!("def {name}():\n{body}")
+            }
+            Some("ts") => format!("function {name}() {{\n{body}}}\n"),
+            _ => format!("fn {name}() {{\n{body}}}\n"),
+        }
+    }
+
+    #[test]
+    fn ts23_a_measured_breach_overrides_the_runs_clean_in_each_language() {
+        let e = Env::new("store-ts23");
+        let paths = ["src/big.rs", "web/big.ts", "tools/big.py"];
+        for p in paths {
+            e.r.commit_on_feat(p, &long_function(p, "big", 21));
+        }
+        e.complete();
+        let run = e.lease();
+        let mut all = vec!["src.rs", "src/a.rs"];
+        all.extend(paths);
+        let ok = e.submit(&run, &all_clean(&all)).unwrap();
+        assert_eq!(ok.findings_opened, 3, "clean is overridden");
+        let v = e.view();
+        let findings = v.track_findings(TRACK);
+        let mut got: Vec<&str> = findings
+            .iter()
+            .map(|f| f.record.anchor.path.as_str())
+            .collect();
+        got.sort();
+        assert_eq!(got, vec!["src/big.rs", "tools/big.py", "web/big.ts"]);
+        for f in &findings {
+            assert_eq!(f.record.origin, FindingOrigin::Measured);
+            assert_eq!(f.record.rule_id, "short");
+            assert_eq!(f.record.anchor.line, 1, "the first added line");
+        }
+        assert!(!ok.verdict.passing);
     }
 
     pub(crate) fn capture_logs<T>(f: impl FnOnce() -> T) -> String {

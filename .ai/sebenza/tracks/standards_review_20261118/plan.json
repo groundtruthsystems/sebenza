@@ -231,20 +231,20 @@
     {
       "id": "phase-5",
       "name": "Standards stage, second run, measurers and template defaults",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-5-task-1",
           "name": "Write tests for measurers, second run and the standards stage",
           "description": "Add failing tests for method-length measurers, second-run scheduling and agreement, notes for absent rules and sandbox egress.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-5-task-2",
           "name": "Implement numeric-rule measurers",
           "description": "Add in-tree method-length measurers for Rust, TS/JS and Python with fallback to the second run.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-5-task-3",
