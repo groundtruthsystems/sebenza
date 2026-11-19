@@ -362,13 +362,14 @@
           "id": "phase-8-task-2",
           "name": "Check edits hidden in target merges",
           "description": "Regression test: a target merge with a manual edit and no trailers must be caught. Treat a merge that introduces changes beyond the automatic merge (git merge-tree --write-tree) as a Change commit for trailers and the edit boundary.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "9ae9f0f"
         },
         {
           "id": "phase-8-task-3",
           "name": "Fail closed on binary in-scope files",
           "description": "Regression test: a NUL byte or a -diff attribute must not hide a reviewable file. Raise an unreviewable-binary blocker naming the path, and run the diff with --text and attributes neutralised.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-8-task-4",
