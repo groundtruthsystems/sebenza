@@ -199,6 +199,9 @@ pub struct RunLeased {
 pub enum AttemptCause {
     LeaseExpired,
     Rejected,
+    /// The job's inputs could not be resolved from git; the run ends at
+    /// once rather than waiting out its lease.
+    InputsUnavailable,
 }
 
 /// A run that ended without an accepted submission. Idempotent on
@@ -213,7 +216,7 @@ pub struct AttemptFailed {
     pub attempt: u32,
     pub lease_id: String,
     pub cause: AttemptCause,
-    /// A kebab-case rejection code; `None` for an expiry.
+    /// A kebab-case rejection or input-failure code; `None` for an expiry.
     pub reason: Option<String>,
 }
 

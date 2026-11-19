@@ -56,6 +56,8 @@ pub enum Reason {
     /// Git calls an in-scope file binary, yet it is a source file or its
     /// blob is valid UTF-8.
     UnreviewableBinary,
+    /// An in-scope file became, or stopped being, a symlink or submodule.
+    TypeChange,
 }
 
 impl Reason {
@@ -72,7 +74,7 @@ impl Reason {
             | Reason::MissingBase
             | Reason::HeadOffBranch
             | Reason::PlanNotApproved => BlockCode::ScopeUnproven,
-            Reason::UnreviewableBinary => BlockCode::Unreviewable,
+            Reason::UnreviewableBinary | Reason::TypeChange => BlockCode::Unreviewable,
             _ => BlockCode::StandardsUnavailable,
         }
     }

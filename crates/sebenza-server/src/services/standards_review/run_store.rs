@@ -17,6 +17,7 @@
 use super::deriver::{Derivation, DeriveInputs, MeasuredFinding, PriorFinding, derive, verdict_of};
 use super::findings::{Actor, TransitionRefused, check_transition};
 use super::free_text::TextScanner;
+use super::git_pinned::GitError;
 use super::jobs::{Finding, Job, JobState, ReviewView, Run};
 use super::measure::{Measurement, measure, read_sources};
 use super::reasons::Blocker;
@@ -266,7 +267,8 @@ impl ReviewRuns {
         let (run, job) = authenticate(&view, token, &expect, now)?;
         let context = self.context(project_key, token, &expect, now, (&view, job))?;
         let kind = run.leased.kind;
-        let measured = self.measure_job(kind, job, &context)?;
+        let measured = self.measure_job(kind, job, &context);
+        let measured = self.fail_unresolved(project_key, token, &expect, now, measured)?;
         let valid = match validate(body, &context.matrix(kind), self.scanner.as_ref()) {
             Ok(valid) => valid,
             Err(rejection) => return self.reject(project_key, token, &expect, now, rejection),
@@ -387,9 +389,42 @@ impl ReviewRuns {
         Ok(measure(&context.inputs.manifest.rules, &sources))
     }
 
+    /// [`ReviewRuns::resolve_checked`], ending the run as a failed attempt
+    /// when its inputs cannot be resolved.
+    fn context(
+        &self,
+        project_key: &str,
+        token: &str,
+        expect: &Expect,
+        now: u64,
+        (view, job): (&ReviewView, &Job),
+    ) -> Result<RunContext, RunError> {
+        let resolved = self.resolve_checked(project_key, token, expect, now, (view, job));
+        self.fail_unresolved(project_key, token, expect, now, resolved)
+    }
+
+    /// End the run as an `inputs-unavailable` attempt when `result` is an
+    /// input error, so the job does not wait out the lease.
+    fn fail_unresolved<T>(
+        &self,
+        project_key: &str,
+        token: &str,
+        expect: &Expect,
+        now: u64,
+        result: Result<T, RunError>,
+    ) -> Result<T, RunError> {
+        let Err(RunError::Inputs(e)) = result else {
+            return result;
+        };
+        let reason = Some(input_failure(&e));
+        let event = |r: &Run| failure(r, AttemptCause::InputsUnavailable, reason);
+        self.commit(project_key, token, expect, now, event)?;
+        Err(RunError::Inputs(e))
+    }
+
     /// Prove the job's pins, then resolve its context and prove its scope,
     /// ending the run as blocked at the first step that finds a blocker.
-    fn context(
+    fn resolve_checked(
         &self,
         project_key: &str,
         token: &str,
@@ -557,6 +592,18 @@ fn failure(run: &Run, cause: AttemptCause, reason: Option<&str>) -> ReviewEventK
         cause,
         reason: reason.map(String::from),
     })
+}
+
+/// A stable code for why inputs could not be resolved; git's own message
+/// may name paths, so it is not recorded.
+fn input_failure(e: &ResolveError) -> &'static str {
+    let ResolveError::Git(git) = e;
+    match git {
+        GitError::Spawn(_) => "git-spawn-failed",
+        GitError::Timeout => "git-timeout",
+        GitError::OutputTooLarge => "git-output-too-large",
+        GitError::Failed(_) => "git-failed",
+    }
 }
 
 fn blocker_records(blockers: &[Blocker]) -> Vec<BlockerRecord> {
@@ -993,6 +1040,34 @@ pub(crate) mod tests {
             .collect();
         assert_eq!(files, vec!["src.rs", "src/a.rs"]);
         assert!(c.context.required_priors(RunKind::First).is_empty());
+    }
+
+    #[test]
+    fn ts63_an_input_error_fails_the_attempt_at_once_with_its_reason() {
+        let e = Env::new("store-inputs-error");
+        e.complete();
+        let run = e.lease();
+        std::fs::remove_dir_all(&e.r.worktree).unwrap();
+        let err = e
+            .runs
+            .claim("proj", run.token.expose(), RunKind::First, NOW + 1)
+            .unwrap_err();
+        assert!(matches!(err, RunError::Inputs(_)), "{err}");
+        let failed: Vec<AttemptFailed> = e
+            .runs
+            .log("proj")
+            .events()
+            .unwrap()
+            .into_iter()
+            .filter_map(|ev| match ev.kind {
+                ReviewEventKind::AttemptFailed(f) => Some(f),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(failed.len(), 1, "no wait for the lease");
+        assert_eq!(failed[0].cause, AttemptCause::InputsUnavailable);
+        assert_eq!(failed[0].reason.as_deref(), Some("git-failed"));
+        assert_eq!(e.lease().attempt, 2, "the next attempt is leasable now");
     }
 
     #[test]

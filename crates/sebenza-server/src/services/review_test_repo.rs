@@ -243,6 +243,16 @@ impl TestRepo {
         commit_all(&self.repo, "symlink")
     }
 
+    /// Replace `rel` with a symlink to `target` on the track branch and
+    /// commit.
+    pub fn symlink_on_feat(&self, rel: &str, target: &str) -> String {
+        let p = self.worktree.join(rel);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&p);
+        std::os::unix::fs::symlink(target, &p).unwrap();
+        commit_all(&self.worktree, "symlink")
+    }
+
     /// Commit a submodule entry (mode 160000) at `rel` on `main`.
     pub fn gitlink_on_main(&self, rel: &str) -> String {
         let sha = self.main_head();

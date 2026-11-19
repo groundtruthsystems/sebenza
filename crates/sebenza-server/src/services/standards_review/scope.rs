@@ -237,6 +237,7 @@ pub fn scope_diff(
         }
     }
     blockers.extend(unreviewable_binaries(git, &files, limits.max_blob_bytes)?);
+    blockers.extend(type_changes(&files));
     blockers.sort();
     Ok(ScopeDiff { files, blockers })
 }
@@ -379,6 +380,8 @@ fn utf8_blobs<'a>(
 /// One file's section of the patch.
 #[derive(Debug, Default)]
 struct PatchBlock {
+    /// Its `diff --git` line.
+    header: String,
     binary: bool,
     /// (old start, old lines, new start, new lines) per hunk.
     ranges: Vec<(u32, u32, u32, u32)>,
@@ -419,7 +422,10 @@ fn parse_patch(patch: &str) -> Vec<PatchBlock> {
     let mut blocks: Vec<PatchBlock> = Vec::new();
     for line in patch.lines() {
         if line.starts_with("diff --git ") {
-            blocks.push(PatchBlock::default());
+            blocks.push(PatchBlock {
+                header: line.to_string(),
+                ..PatchBlock::default()
+            });
         } else if let Some(block) = blocks.last_mut() {
             if line.starts_with("Binary files ") || line == "GIT binary patch" {
                 block.binary = true;
@@ -454,6 +460,7 @@ fn attach_hunks(
     pins: &SnapshotPins,
     max_hunks: usize,
 ) -> Result<Option<Blocker>, GitError> {
+    let blocks = pair_type_changes(files, blocks);
     if blocks.len() != files.len() {
         return Err(GitError::Failed("raw and patch diffs disagree".to_string()));
     }
@@ -476,6 +483,37 @@ fn attach_hunks(
             .collect();
     }
     Ok((total > max_hunks).then(|| Blocker::whole(Reason::TooManyHunks)))
+}
+
+/// A type change is one raw entry but two patch blocks under one header:
+/// the old file deleted, then the new one added. Fold each pair into one.
+fn pair_type_changes(files: &[DiffFile], blocks: Vec<PatchBlock>) -> Vec<PatchBlock> {
+    let mut blocks = blocks.into_iter().peekable();
+    let mut paired = Vec::with_capacity(files.len());
+    for file in files {
+        let Some(mut block) = blocks.next() else {
+            break;
+        };
+        let twin =
+            blocks.next_if(|b| file.status == FileStatus::TypeChanged && b.header == block.header);
+        if let Some(twin) = twin {
+            block.binary |= twin.binary;
+            block.ranges.extend(twin.ranges);
+        }
+        paired.push(block);
+    }
+    paired.extend(blocks);
+    paired
+}
+
+/// A blocker per file that became, or stopped being, a symlink or a
+/// submodule: neither side of such a change is reviewable source.
+fn type_changes(files: &[DiffFile]) -> Vec<Blocker> {
+    files
+        .iter()
+        .filter(|f| f.status == FileStatus::TypeChanged)
+        .map(|f| Blocker::at(Reason::TypeChange, f.path()))
+        .collect()
 }
 
 /// The anchor of a hunk with the given ranges in `file`.
@@ -690,6 +728,22 @@ mod tests {
         let d = diff(&r, &ReviewLimits::default());
         assert!(file(&d, "img/logo.png").binary);
         assert!(binary_blockers(&d).is_empty(), "{:?}", d.blockers);
+    }
+
+    #[test]
+    fn a_file_turned_into_a_symlink_is_a_blocker_not_an_error() {
+        let r = TestRepo::new("scope-typechange");
+        r.commit_on_main("lib.rs", "fn lib() {}\n");
+        r.merge_main_into_feat();
+        r.symlink_on_feat("lib.rs", "/etc/passwd");
+        r.commit_on_feat("src/after.rs", "fn after() {}\n");
+        let d = diff(&r, &ReviewLimits::default());
+        assert_eq!(file(&d, "lib.rs").status, FileStatus::TypeChanged);
+        assert_eq!(d.blockers, vec![Blocker::at(Reason::TypeChange, "lib.rs")]);
+        assert!(
+            !file(&d, "src/after.rs").hunks.is_empty(),
+            "later files keep their hunks"
+        );
     }
 
     #[test]
