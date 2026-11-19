@@ -1,0 +1,410 @@
+{
+  "$schema": "sebenza-plan-v1",
+  "track_id": "standards_review_20261118",
+  "phases": [
+    {
+      "id": "phase-1",
+      "name": "Review log, completion transition and reconciler",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-1-task-1",
+          "name": "Write tests for the review log and completion",
+          "description": "Add failing tests for fsynced append, torn-tail recovery, idempotent completion, projection CAS and the reconciler.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-2",
+          "name": "Implement the review log and track_completion service",
+          "description": "Add the per-project append-only review log and the daemon completion transition with tracks.json projection.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-3",
+          "name": "Implement the reconciler and complete route",
+          "description": "Add the startup and periodic reconciler plus POST /tracks/{id}/complete, agentctl complete and sebenza-cli track complete.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-1-task-4",
+          "name": "Execute test scenarios TS-01..TS-70",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-01",
+            "TS-03",
+            "TS-04",
+            "TS-05",
+            "TS-06",
+            "TS-63",
+            "TS-65",
+            "TS-66",
+            "TS-67",
+            "TS-68",
+            "TS-69",
+            "TS-70"
+          ]
+        },
+        {
+          "id": "phase-1-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-2",
+      "name": "Snapshot and input resolver",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-2-task-1",
+          "name": "Write tests for the snapshot resolver",
+          "description": "Add failing tests over temp git repos for pinned objects, path containment, symlinks, submodules, caps and standards_rev.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-2",
+          "name": "Implement the snapshot and input resolver",
+          "description": "Pin head, merge-base and target, load index.md-listed standards from git objects, and build the manifest and in-scope hunks with anchors.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-2-task-3",
+          "name": "Execute test scenarios TS-07..TS-57",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-07",
+            "TS-09",
+            "TS-10",
+            "TS-11",
+            "TS-17",
+            "TS-31",
+            "TS-51",
+            "TS-57"
+          ]
+        },
+        {
+          "id": "phase-2-task-4",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-3",
+      "name": "Review store, run API and verdict deriver",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-3-task-1",
+          "name": "Write tests for runs, submissions and finding lifecycle",
+          "description": "Add failing tests for run tokens, leases, attempts, matrix validation, redaction, the transition table and the matcher.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-2",
+          "name": "Implement the run store and claim/submit API",
+          "description": "Add review jobs and runs with single-use hashed tokens, leases, per-kind attempts and strict submission validation.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-3",
+          "name": "Implement the verdict deriver and finding matcher",
+          "description": "Derive findings and verdicts in the daemon, with rename and text-hash matching, out-of-scope and rule-withdrawn handling.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-3-task-4",
+          "name": "Execute test scenarios TS-18..TS-61",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-18",
+            "TS-19",
+            "TS-20",
+            "TS-21",
+            "TS-22",
+            "TS-32",
+            "TS-33",
+            "TS-34",
+            "TS-35",
+            "TS-36",
+            "TS-37a",
+            "TS-37b",
+            "TS-50",
+            "TS-56",
+            "TS-60",
+            "TS-61"
+          ]
+        },
+        {
+          "id": "phase-3-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-4",
+      "name": "Trailers, edit boundary and writing guidance",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-4-task-1",
+          "name": "Write tests for scope proof and the edit boundary",
+          "description": "Add failing tests for trailer verification, target merges, plan approval snapshots and out-of-scope edits.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-2",
+          "name": "Implement scope proof and plan approval",
+          "description": "Verify trailers and first-parent scope on claim and add operator-token plan approval with a per-task boundary snapshot.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-3",
+          "name": "Update sebenza-implement and sebenza-plan skills",
+          "description": "Add the writing guidance, trailers, edit boundary and daemon completion to sebenza-implement, and plan approval to sebenza-plan.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-4-task-4",
+          "name": "Execute test scenarios TS-08..TS-64",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-08",
+            "TS-12",
+            "TS-13",
+            "TS-14",
+            "TS-15",
+            "TS-16",
+            "TS-41",
+            "TS-42",
+            "TS-43",
+            "TS-44",
+            "TS-45",
+            "TS-59",
+            "TS-64"
+          ]
+        },
+        {
+          "id": "phase-4-task-5",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-5",
+      "name": "Standards stage, second run, measurers and template defaults",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-5-task-1",
+          "name": "Write tests for measurers, second run and the standards stage",
+          "description": "Add failing tests for method-length measurers, second-run scheduling and agreement, notes for absent rules and sandbox egress.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-2",
+          "name": "Implement numeric-rule measurers",
+          "description": "Add in-tree method-length measurers for Rust, TS/JS and Python with fallback to the second run.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-3",
+          "name": "Implement second-run scheduling, decisions and the sandboxed launch",
+          "description": "Schedule kind=second runs, reconcile agreement, add the operator decision route and launch claude read-only with allowlisted egress.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-4",
+          "name": "Update sebenza-review and sebenza-setup skills",
+          "description": "Add the standards stage to sebenza-review, ship the three default rules in setup templates with a diff-only upgrade, and adopt them here.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-5-task-5",
+          "name": "Execute test scenarios TS-23..TS-71",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-23",
+            "TS-24",
+            "TS-25",
+            "TS-26",
+            "TS-27",
+            "TS-28",
+            "TS-29a",
+            "TS-29b",
+            "TS-30a",
+            "TS-46",
+            "TS-47",
+            "TS-48",
+            "TS-49",
+            "TS-53",
+            "TS-55",
+            "TS-58",
+            "TS-62",
+            "TS-71"
+          ]
+        },
+        {
+          "id": "phase-5-task-6",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-6",
+      "name": "Compare-and-swap sign-off gate",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-6-task-1",
+          "name": "Write tests for the sign-off gate",
+          "description": "Add failing tests for refusal without a verdict, stale refs, refs moved mid-commit, audit records and contract parity.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6-task-2",
+          "name": "Implement the sign-off gate and parity",
+          "description": "Add operator-token CAS sign-off, audit records, and mirror every new route in the ts-rest contract and sebenza-cli.",
+          "status": "backlog"
+        },
+        {
+          "id": "phase-6-task-3",
+          "name": "Execute test scenarios TS-02..TS-54",
+          "description": "Run and record evidence for every scenario this phase delivers.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-02",
+            "TS-30b",
+            "TS-38",
+            "TS-39",
+            "TS-40",
+            "TS-52",
+            "TS-54"
+          ]
+        },
+        {
+          "id": "phase-6-task-4",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    },
+    {
+      "id": "phase-7",
+      "name": "Final verification",
+      "status": "backlog",
+      "blocked_reason": null,
+      "tasks": [
+        {
+          "id": "phase-7-task-1",
+          "name": "Re-run the whole test plan",
+          "description": "Re-run all 74 scenarios against the finished feature and close any traceability gap.",
+          "status": "backlog",
+          "test_scenarios": [
+            "TS-01",
+            "TS-03",
+            "TS-04",
+            "TS-05",
+            "TS-06",
+            "TS-63",
+            "TS-65",
+            "TS-66",
+            "TS-67",
+            "TS-68",
+            "TS-69",
+            "TS-70",
+            "TS-07",
+            "TS-09",
+            "TS-10",
+            "TS-11",
+            "TS-17",
+            "TS-31",
+            "TS-51",
+            "TS-57",
+            "TS-18",
+            "TS-19",
+            "TS-20",
+            "TS-21",
+            "TS-22",
+            "TS-32",
+            "TS-33",
+            "TS-34",
+            "TS-35",
+            "TS-36",
+            "TS-37a",
+            "TS-37b",
+            "TS-50",
+            "TS-56",
+            "TS-60",
+            "TS-61",
+            "TS-08",
+            "TS-12",
+            "TS-13",
+            "TS-14",
+            "TS-15",
+            "TS-16",
+            "TS-41",
+            "TS-42",
+            "TS-43",
+            "TS-44",
+            "TS-45",
+            "TS-59",
+            "TS-64",
+            "TS-23",
+            "TS-24",
+            "TS-25",
+            "TS-26",
+            "TS-27",
+            "TS-28",
+            "TS-29a",
+            "TS-29b",
+            "TS-30a",
+            "TS-46",
+            "TS-47",
+            "TS-48",
+            "TS-49",
+            "TS-53",
+            "TS-55",
+            "TS-58",
+            "TS-62",
+            "TS-71",
+            "TS-02",
+            "TS-30b",
+            "TS-38",
+            "TS-39",
+            "TS-40",
+            "TS-52",
+            "TS-54"
+          ]
+        },
+        {
+          "id": "phase-7-task-2",
+          "name": "Phase verification & checkpoint",
+          "description": "Per workflow.md",
+          "status": "backlog"
+        }
+      ]
+    }
+  ]
+}
