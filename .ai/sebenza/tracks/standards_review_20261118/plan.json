@@ -5,7 +5,7 @@
     {
       "id": "phase-1",
       "name": "Review log, completion transition and reconciler",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -54,9 +54,11 @@
           "id": "phase-1-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "e959dd1"
         }
-      ]
+      ],
+      "checkpoint_sha": "e959dd1"
     },
     {
       "id": "phase-2",
