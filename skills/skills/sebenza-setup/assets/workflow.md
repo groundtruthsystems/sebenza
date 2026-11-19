@@ -29,7 +29,9 @@ they are built:
     technical, data, and security** domains (each contributed and verified by
     its specialist architect). As the **last** step, the `test-architect` turns
     those use cases and that architecture into a `test-plan.md` of `TS-nn`
-    scenarios with a traceability table. The outputs are an approved `design.md`,
+    scenarios with a traceability table. Two fresh-context reviewers then check
+    the whole: one challenges whether the feature needs to be this big, one
+    checks that a newcomer can follow the documents. The outputs are an approved `design.md`,
     one `<domain>-architecture.md` per domain, and `test-plan.md`. A feature
     MUST NOT proceed to planning without them.
 2.  **Plan (Spec & Plan) — `sebenza-plan`:** Only after the design is
