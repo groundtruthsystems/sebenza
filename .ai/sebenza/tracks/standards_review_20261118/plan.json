@@ -316,7 +316,8 @@
           "id": "phase-6-task-2",
           "name": "Implement the sign-off gate and parity",
           "description": "Add operator-token CAS sign-off, audit records, and mirror every new route in the ts-rest contract and sebenza-cli.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "7b4a82a"
         },
         {
           "id": "phase-6-task-3",
