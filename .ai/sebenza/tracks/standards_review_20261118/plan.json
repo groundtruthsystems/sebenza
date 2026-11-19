@@ -179,13 +179,14 @@
           "id": "phase-4-task-1",
           "name": "Write tests for scope proof and the edit boundary",
           "description": "Add failing tests for trailer verification, target merges, plan approval snapshots and out-of-scope edits.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "8d896bc"
         },
         {
           "id": "phase-4-task-2",
           "name": "Implement scope proof and plan approval",
           "description": "Verify trailers and first-parent scope on claim and add operator-token plan approval with a per-task boundary snapshot.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-4-task-3",
