@@ -81,7 +81,7 @@
       "description": "Standards review at track completion: daemon completion outbox, pinned-snapshot standards review in sebenza-review, implement writing guidance, sign-off gate (AC-01..AC-06, AC-08, AC-09)",
       "status": "doing",
       "created_at": "2026-11-19T04:05:11Z",
-      "updated_at": "2026-11-19T17:04:20Z",
+      "updated_at": "2026-11-19T17:04:33Z",
       "phases_summary": [
         {
           "id": "phase-1",
@@ -128,8 +128,8 @@
       ],
       "progress": {
         "total_tasks": 31,
-        "completed_tasks": 11,
-        "percentage": 35.5
+        "completed_tasks": 12,
+        "percentage": 38.7
       },
       "design_path": "./tracks/standards_review_20261118/design.md",
       "test_plan_path": "./tracks/standards_review_20261118/test-plan.md",
