@@ -140,6 +140,11 @@ impl Daemon {
                 Default::default(),
                 std::env::temp_dir().join(format!("sebenza-chat-test-{}", std::process::id())),
             )),
+            completion: Arc::new(
+                crate::services::track_completion::TrackCompletionService::new(
+                    base.join("reviews"),
+                ),
+            ),
             frontend_dist: None,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -760,4 +765,133 @@ async fn ts57_two_targets_convert_with_instructions_and_launch_architect_first()
         assert_eq!(h["architectFirst"], true, "{h}");
         assert!(h["systemInstruction"].is_string(), "{h}");
     }
+}
+
+// --- Track completion (TS-01, TS-63, TS-65, TS-66) -------------------------
+
+/// A real repo served by the daemon, whose worktree `id-feat` on `feat`
+/// carries the track `TRACK`.
+fn completion_project(d: &Daemon) -> crate::services::review_test_repo::TestRepo {
+    let r = crate::services::review_test_repo::TestRepo::new("e2e");
+    let app = d.state.manager.add_ephemeral(&r.repo.to_string_lossy());
+    app.runtime
+        .lock()
+        .unwrap()
+        .upsert_worktree(common::services::project_runtime::UpsertInput {
+            worktree_id: "id-feat".into(),
+            kind: Default::default(),
+            branch: "feat".into(),
+            label: None,
+            base_branch: Some("main".into()),
+            path: r.worktree.to_string_lossy().to_string(),
+            profile: None,
+            agent_name: Some("claude".into()),
+            agent_terminal_stale: false,
+            runtime: "host".into(),
+            source: common::domain::model::WorktreeSource::Ui,
+            oneshot: None,
+            tabs: vec![],
+            active_tab_id: None,
+        });
+    r
+}
+
+fn completion_log(d: &Daemon) -> common::adapters::review_log::ReviewState {
+    let app = d.state.manager.list().into_iter().next().expect("project");
+    d.state.completion.log(&app.prefix).open().expect("log")
+}
+
+async fn complete(d: &Daemon, track: &str, body: serde_json::Value) -> (u16, serde_json::Value) {
+    d.call(
+        "POST",
+        &format!("/api/tracks/{track}/complete"),
+        Some(body),
+        true,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn ts01_agentctl_complete_enqueues_one_job_and_projects_done() {
+    use crate::services::review_test_repo::{OTHER_TRACK, TRACK};
+    let d = Daemon::start("ok").await;
+    let r = completion_project(&d);
+    let (status, v) = complete(&d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["appended"], true);
+    assert_eq!(v["projected"], "applied");
+    assert_eq!(v["job"]["headSha"], r.head());
+    assert_eq!(v["job"]["baseSha"], r.main_head());
+    assert_eq!(v["job"]["standardsRev"].as_str().map(str::len), Some(64));
+    let log = completion_log(&d);
+    assert_eq!(log.job_count(TRACK), 1);
+    assert_eq!(log.completions[0].credential.as_deref(), Some("control"));
+    assert_eq!(r.track_status(TRACK), "done");
+    assert_eq!(r.track_status(OTHER_TRACK), "doing");
+}
+
+#[tokio::test]
+async fn ts63_the_control_token_can_only_enqueue() {
+    use crate::services::review_test_repo::TRACK;
+    let d = Daemon::start("ok").await;
+    let _r = completion_project(&d);
+    let forged = serde_json::json!({"worktreeId": "id-feat", "status": "signed-off"});
+    let (status, _) = complete(&d, TRACK, forged).await;
+    assert_eq!(
+        status, 422,
+        "no status, sign-off or finding field is accepted"
+    );
+    assert_eq!(completion_log(&d).completions.len(), 0);
+    let (status, v) = complete(&d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
+    assert_eq!(status, 200, "{v}");
+    let keys: Vec<_> = v.as_object().unwrap().keys().cloned().collect();
+    assert_eq!(keys, vec!["appended", "job", "ok", "projected"]);
+    let log = completion_log(&d);
+    assert_eq!(log.completions.len(), 1);
+    assert_eq!(log.completions[0].credential.as_deref(), Some("control"));
+}
+
+#[tokio::test]
+async fn ts65_completing_again_at_the_same_head_is_idempotent() {
+    use crate::services::review_test_repo::TRACK;
+    let d = Daemon::start("ok").await;
+    let _r = completion_project(&d);
+    let body = serde_json::json!({"worktreeId": "id-feat"});
+    let (s1, first) = complete(&d, TRACK, body.clone()).await;
+    let (s2, again) = complete(&d, TRACK, body).await;
+    assert_eq!((s1, s2), (200, 200));
+    assert_eq!(again["appended"], false);
+    assert_eq!(again["projected"], "already_done");
+    assert_eq!(again["job"], first["job"]);
+    assert_eq!(completion_log(&d).job_count(TRACK), 1);
+}
+
+#[tokio::test]
+async fn ts66_another_worktrees_track_is_refused_and_appends_nothing() {
+    use crate::services::review_test_repo::OTHER_TRACK;
+    let d = Daemon::start("ok").await;
+    let _r = completion_project(&d);
+    let (status, v) = complete(
+        &d,
+        OTHER_TRACK,
+        serde_json::json!({"worktreeId": "id-feat"}),
+    )
+    .await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (403, Some("foreign_track")),
+        "{v}"
+    );
+    let (status, v) = complete(
+        &d,
+        OTHER_TRACK,
+        serde_json::json!({"worktreeId": "id-elsewhere"}),
+    )
+    .await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (404, Some("unknown_worktree")),
+        "{v}"
+    );
+    assert_eq!(completion_log(&d).completions.len(), 0);
 }

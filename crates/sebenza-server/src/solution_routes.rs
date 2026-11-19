@@ -413,7 +413,8 @@ impl From<crate::services::project_review::ReviewError> for ApiError {
     }
 }
 
-fn control_only(headers: &HeaderMap) -> Result<(), ApiError> {
+/// Accept only the shared control token (agentctl routes).
+pub(crate) fn control_only(headers: &HeaderMap) -> Result<(), ApiError> {
     let token = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())

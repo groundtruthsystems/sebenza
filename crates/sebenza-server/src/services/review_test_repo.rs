@@ -1,0 +1,157 @@
+//! Test fixture: a real git repository with a `main` branch holding a Sebenza
+//! workspace, and a linked worktree on `feat` carrying one track.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+pub const TRACK: &str = "t_20261118";
+pub const OTHER_TRACK: &str = "o_20261101";
+
+pub struct TestRepo {
+    pub base: PathBuf,
+    pub repo: PathBuf,
+    pub worktree: PathBuf,
+}
+
+pub fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args([
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// The `tracks.json` a skill writes: two tracks, in key order and indented
+/// like Python's `json.dump(indent=2)`.
+pub fn tracks_json(own_status: &str, branch: &str) -> String {
+    format!(
+        r#"{{
+  "$schema": "sebenza-tracks-v1",
+  "tracks": [
+    {{
+      "track_id": "{OTHER_TRACK}",
+      "description": "Other",
+      "status": "doing",
+      "updated_at": "2026-11-01T00:00:00Z"
+    }},
+    {{
+      "track_id": "{TRACK}",
+      "description": "Mine",
+      "status": "{own_status}",
+      "updated_at": "2026-11-18T00:00:00Z",
+      "origin": {{
+        "branch": "{branch}"
+      }}
+    }}
+  ]
+}}
+"#
+    )
+}
+
+impl TestRepo {
+    pub fn new(name: &str) -> TestRepo {
+        let base = std::env::temp_dir().join(format!(
+            "sebenza-review-repo-{}-{name}-{}",
+            std::process::id(),
+            common::util::id::random_ulid()
+        ));
+        let repo = base.join("repo");
+        std::fs::create_dir_all(repo.join(".ai/sebenza/code_styleguides")).unwrap();
+        git(&repo, &["init", "-q", "-b", "main"]);
+        write(&repo, ".ai/sebenza/index.md", INDEX);
+        write(&repo, ".ai/sebenza/workflow.md", "# Workflow\n");
+        write(
+            &repo,
+            ".ai/sebenza/code_styleguides/general.md",
+            "# General\n",
+        );
+        write(&repo, ".ai/sebenza/tracks.json", "{\"tracks\": []}\n");
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "init"]);
+        let worktree = base.join("wt-feat");
+        git(
+            &repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feat",
+                worktree.to_str().unwrap(),
+            ],
+        );
+        let worktree = worktree.canonicalize().unwrap();
+        std::fs::create_dir_all(worktree.join(".ai/sebenza/tracks").join(TRACK)).unwrap();
+        write(
+            &worktree,
+            ".ai/sebenza/tracks.json",
+            &tracks_json("doing", "feat"),
+        );
+        write(&worktree, "src.rs", "fn main() {}\n");
+        git(&worktree, &["add", "-A"]);
+        git(&worktree, &["commit", "-q", "-m", "feat work"]);
+        TestRepo {
+            base,
+            repo: repo.canonicalize().unwrap(),
+            worktree,
+        }
+    }
+
+    pub fn head(&self) -> String {
+        git(&self.worktree, &["rev-parse", "HEAD"])
+    }
+
+    pub fn main_head(&self) -> String {
+        git(&self.repo, &["rev-parse", "main"])
+    }
+
+    pub fn tracks_path(&self) -> PathBuf {
+        self.worktree.join(".ai/sebenza/tracks.json")
+    }
+
+    /// Commit `content` at `rel` on `main`.
+    pub fn commit_on_main(&self, rel: &str, content: &str) -> String {
+        write(&self.repo, rel, content);
+        git(&self.repo, &["add", "-A"]);
+        git(&self.repo, &["commit", "-q", "-m", "main change"]);
+        self.main_head()
+    }
+
+    pub fn track_status(&self, track: &str) -> String {
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(self.tracks_path()).unwrap()).unwrap();
+        v["tracks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["track_id"] == track)
+            .map(|t| t["status"].as_str().unwrap_or_default().to_string())
+            .unwrap_or_default()
+    }
+}
+
+pub fn write(dir: &Path, rel: &str, content: &str) {
+    let p = dir.join(rel);
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    std::fs::write(p, content).unwrap();
+}
+
+const INDEX: &str = "# Project Context\n\n## Workflow\n- [Workflow](./workflow.md)\n- [Code Style Guides](./code_styleguides/)\n\n## Tracks\n- [Tracks Registry](./tracks.json)\n- [Tracks Directory](./tracks/)\n";

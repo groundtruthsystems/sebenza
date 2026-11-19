@@ -16,6 +16,7 @@ mod services;
 #[cfg(test)]
 mod solution_e2e_tests;
 mod solution_routes;
+mod track_routes;
 
 // Reusable modules live in the `common` crate; alias them at the crate root so
 // existing `crate::config` / `crate::domain` / `crate::util` paths keep working.
@@ -243,6 +244,9 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         solution,
         reviews,
         chat_gate: chat_gate.clone(),
+        completion: Arc::new(services::track_completion::TrackCompletionService::new(
+            common::adapters::review_log::default_review_root(),
+        )),
         frontend_dist,
     };
 
@@ -252,6 +256,8 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
             state.clone(),
         )));
     server::spawn_background_loops(state.clone());
+    // Completion repair: at startup, then every five minutes (FR-04).
+    services::completion_reconciler::spawn(state.clone());
     // Dismissal notices: rebuilt from the log now, then retried on a timer.
     services::notice_dispatcher::spawn(state.inbox.clone(), notify_config.poll_secs);
     // The capability probe runs in the background; chat answers 503 until it passes.

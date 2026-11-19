@@ -66,6 +66,8 @@ pub struct AppState {
     pub reviews: Arc<crate::services::project_review::ProjectReviewService>,
     /// The handover-chat zero-tool gate: off until its probe passes.
     pub chat_gate: Arc<crate::services::chat::gate::ChatGate>,
+    /// Track completion: the review log and its `tracks.json` projection.
+    pub completion: Arc<crate::services::track_completion::TrackCompletionService>,
     pub frontend_dist: Option<PathBuf>,
 }
 
@@ -337,6 +339,10 @@ pub fn build_router(state: AppState) -> Router {
         .route(
             "/api/runtime/review/{job}",
             get(crate::solution_routes::poll_review),
+        )
+        .route(
+            "/api/tracks/{id}/complete",
+            post(crate::track_routes::complete_track),
         )
         // Inbox (global; drafts precede any project).
         .route(

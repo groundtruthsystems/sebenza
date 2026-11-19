@@ -5,14 +5,14 @@
     {
       "id": "phase-1",
       "name": "Review log, completion transition and reconciler",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-1-task-1",
           "name": "Write tests for the review log and completion",
           "description": "Add failing tests for fsynced append, torn-tail recovery, idempotent completion, projection CAS and the reconciler.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-2",
