@@ -383,13 +383,14 @@
           "id": "phase-8-task-5",
           "name": "Handle symlink type changes in scope",
           "description": "Regression test: a file-to-symlink type change in scope yields a blocker instead of an error, and resolver input errors fail the attempt immediately with a recorded reason.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "72a67a9"
         },
         {
           "id": "phase-8-task-6",
           "name": "Refresh the latest job on re-completion",
           "description": "Regression test: completing at A, B, then A again makes the A job latest. Decide the latest job by the most recent completion event while keeping job-key dedup.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-8-task-7",
