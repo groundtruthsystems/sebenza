@@ -298,7 +298,6 @@ fn hunk_view(h: &Hunk) -> HunkView {
 #[cfg(test)]
 mod tests {
     use super::super::run_store::tests::{Env, clean};
-    use super::super::submission::tests::green_checks;
     use super::*;
     use crate::services::review_test_repo::TRACK;
 
@@ -343,8 +342,7 @@ mod tests {
             clean("plain", "src.rs"), clean("plain", "src/a.rs"),
             clean("short", "src.rs"),
             {"ruleId": "short", "path": "src/a.rs", "outcome": "finding"}],
-            "findings": [{"ruleId": "short", "path": "src/a.rs", "line": 1, "description": "Too long."}],
-            "existingChecks": green_checks()});
+            "findings": [{"ruleId": "short", "path": "src/a.rs", "line": 1, "description": "Too long."}]});
         e.runs
             .submit(
                 "proj",

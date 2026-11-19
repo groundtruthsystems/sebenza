@@ -8,6 +8,7 @@ import {
   TaskGraphSchema,
 } from "./api-contract";
 import type {
+  ExistingCheck,
   InboxAgentJob,
   InboxRequestFilter,
   SaveTrackFileResponse,
@@ -968,6 +969,20 @@ export async function completeTrack(trackId: string, worktreeId: string) {
   return hubApi.completeTrack({
     params: { id: trackId },
     body: { worktreeId },
+    extraHeaders: inboxAuthHeaders(),
+  });
+}
+
+/** Report the four existing sebenza-review checks of the worktree's track;
+ *  the daemon re-derives the verdict from them. */
+export async function recordExistingChecks(
+  trackId: string,
+  worktreeId: string,
+  checks: ExistingCheck[],
+) {
+  return hubApi.recordExistingChecks({
+    params: { id: trackId },
+    body: { worktreeId, checks },
     extraHeaders: inboxAuthHeaders(),
   });
 }

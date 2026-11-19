@@ -195,7 +195,6 @@ impl RunContext {
                 .iter()
                 .map(|p| p.finding.record.finding_id.clone())
                 .collect(),
-            existing_checks: kind == RunKind::First,
         }
     }
 

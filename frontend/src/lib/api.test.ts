@@ -658,6 +658,38 @@ describe("inbox priority, comments and requests", () => {
     expect(JSON.parse(seen[0].body)).toEqual({ worktreeId: "wt-id-1" });
   });
 
+  it("reports the existing checks with the control token", async () => {
+    const seen = recordFetch({
+      ok: true,
+      trackId: "t_20261118",
+      jobId: "job_1",
+      failed: ["coverage"],
+      verdict: null,
+    });
+    window.__SEBENZA_CONTROL_TOKEN__ = "tok";
+    const api = await loadApiAt("/inbox");
+    const checks = [
+      { check: "requirements", status: "pass" },
+      { check: "test_plan", status: "pass" },
+      { check: "coverage", status: "fail" },
+      { check: "architecture", status: "not_applicable" },
+    ] as const;
+    const got = await api.recordExistingChecks("t_20261118", "wt-id-1", [
+      ...checks,
+    ]);
+    expect(got.failed).toEqual(["coverage"]);
+    expect(got.verdict).toBeNull();
+    expect(seen[0].url).toContain(
+      "/api/review/tracks/t_20261118/existing-checks",
+    );
+    expect(seen[0].method).toBe("POST");
+    expect(seen[0].auth).toBe("Bearer tok");
+    expect(JSON.parse(seen[0].body)).toEqual({
+      worktreeId: "wt-id-1",
+      checks,
+    });
+  });
+
   it("claims a review run with the run token, not the control token", async () => {
     const claim = {
       runId: "run_1",

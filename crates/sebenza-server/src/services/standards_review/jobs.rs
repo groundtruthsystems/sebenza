@@ -14,9 +14,9 @@
 use super::findings::{Actor, check_transition};
 use common::adapters::review_log::{ReviewEvent, ReviewEventKind, TrackCompleted};
 use common::domain::review_records::{
-    AttemptCause, AttemptFailed, BlockerRecord, FindingDecided, FindingRecord, FindingStatus,
-    JobBlocked, PairRef, PlanApproved, RunKind, RunLeased, RunSubmitted, TransitionRecord,
-    VerdictRecord,
+    AttemptCause, AttemptFailed, BlockerRecord, ExistingChecksRecorded, FindingDecided,
+    FindingRecord, FindingStatus, JobBlocked, PairRef, PlanApproved, RunKind, RunLeased,
+    RunSubmitted, TransitionRecord, VerdictRecord,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -151,11 +151,7 @@ impl ReviewView {
             ReviewEventKind::AttemptFailed(f) => self.fail_attempt(f),
             ReviewEventKind::JobBlocked(b) => self.block(b),
             ReviewEventKind::RunSubmitted(s) => self.accept(s),
-            ReviewEventKind::ExistingChecksRecorded(c) => {
-                if let Some(job) = self.job_mut(&c.job_id) {
-                    job.existing_checks = Some(c.failed.clone());
-                }
-            }
+            ReviewEventKind::ExistingChecksRecorded(c) => self.record_checks(c),
             ReviewEventKind::PlanApproved(a) => self.approvals.push(a.clone()),
             ReviewEventKind::FindingDecided(d) => self.decide(d),
         }
@@ -221,6 +217,15 @@ impl ReviewView {
             && let Some(job) = self.job_mut(&b.job_id)
         {
             job.blocked = Some(b.blockers.clone());
+        }
+    }
+
+    fn record_checks(&mut self, c: &ExistingChecksRecorded) {
+        if let Some(job) = self.job_mut(&c.job_id) {
+            job.existing_checks = Some(c.failed.clone());
+            if c.verdict.is_some() {
+                job.latest_verdict = c.verdict.clone();
+            }
         }
     }
 
@@ -381,9 +386,7 @@ fn is_scope_block(blockers: &[BlockerRecord]) -> bool {
 pub(crate) mod tests {
     use super::*;
     use common::adapters::review_log::CompletionSource;
-    use common::domain::review_records::{
-        AnchorRecord, AnchorSide, ExistingChecksRecorded, FindingOrigin,
-    };
+    use common::domain::review_records::{AnchorRecord, AnchorSide, FindingOrigin};
 
     pub(crate) fn completion(track: &str, head: &str) -> TrackCompleted {
         TrackCompleted {
@@ -644,6 +647,7 @@ pub(crate) mod tests {
                 ExistingChecksRecorded {
                     job_id: j2.clone(),
                     failed: vec![],
+                    verdict: None,
                 },
             )),
         ];
@@ -658,6 +662,24 @@ pub(crate) mod tests {
         assert_eq!(job.verdict().unwrap().reasons, vec!["open-findings"]);
         assert_eq!(job.existing_checks, Some(vec![]));
         assert_eq!(view.latest_job("t1").unwrap().id, j2);
+        let rederived = VerdictRecord {
+            passing: false,
+            reasons: vec!["existing-checks-failed:coverage".into()],
+        };
+        let mut later = events.clone();
+        later.push(ev(ReviewEventKind::ExistingChecksRecorded(
+            ExistingChecksRecorded {
+                job_id: j2.clone(),
+                failed: vec!["coverage".into()],
+                verdict: Some(rederived.clone()),
+            },
+        )));
+        let job = ReviewView::fold(&later).job(&j2).cloned().unwrap();
+        assert_eq!(
+            job.verdict(),
+            Some(&rederived),
+            "checks re-derive the verdict"
+        );
         assert_eq!(view.run("run-2").unwrap().end, Some(RunEnd::Submitted));
         assert_eq!(
             view.job(&j1).unwrap().manifest_rule_ids(),

@@ -266,12 +266,8 @@ impl ReviewRuns {
             RunKind::Second => second_outcome(job, &context, &valid),
         };
         let accepted = accepted(job, run, &outcome.derived);
-        let failed = valid.failed_checks.clone();
         let event = |r: &Run| submitted(r, &context, valid, outcome);
         self.commit(project_key, token, &expect, now, event)?;
-        if let Some(failed) = failed {
-            self.record_existing_checks(project_key, &job.id, failed)?;
-        }
         Ok(accepted)
     }
 
@@ -331,23 +327,31 @@ impl ReviewRuns {
         })
     }
 
-    /// Record the existing sebenza-review check results of `job_id`.
-    /// Returns false when the job is unknown.
+    /// Record the existing sebenza-review check results on the latest job
+    /// of `track_id`, re-deriving its verdict once a run was accepted.
+    /// Returns `None` when the track has no review job.
     pub fn record_existing_checks(
         &self,
         project_key: &str,
-        job_id: &str,
+        track_id: &str,
         failed: Vec<String>,
-    ) -> std::io::Result<bool> {
+    ) -> std::io::Result<Option<ExistingChecksRecorded>> {
         self.log(project_key).transact(|events| {
-            if ReviewView::fold(events).job(job_id).is_none() {
-                return Ok((None, false));
-            }
-            let event = ExistingChecksRecorded {
-                job_id: job_id.to_string(),
-                failed,
+            let view = ReviewView::fold(events);
+            let Some(job) = view.latest_job(track_id) else {
+                return Ok((None, None));
             };
-            Ok((Some(ReviewEventKind::ExistingChecksRecorded(event)), true))
+            let verdict = job.verdict().map(|_| {
+                let statuses = track_statuses(&view, job, None);
+                verdict_of(&statuses, job.second_run_pending(), Some(&failed))
+            });
+            let event = ExistingChecksRecorded {
+                job_id: job.id.clone(),
+                failed,
+                verdict,
+            };
+            let kind = ReviewEventKind::ExistingChecksRecorded(event.clone());
+            Ok((Some(kind), Some(event)))
         })
     }
 
@@ -613,7 +617,7 @@ fn derive_for(
             measured_findings: measured,
             boundary_findings: &context.scope.out_of_scope,
             second_run_pending,
-            existing_checks: valid.failed_checks.as_deref(),
+            existing_checks: job.existing_checks.as_deref(),
         },
         || format!("f_{}", random_ulid()),
     )
@@ -687,22 +691,27 @@ fn verdict_after_decision(
     finding_id: &str,
     to: FindingStatus,
 ) -> VerdictRecord {
-    let statuses: Vec<FindingStatus> = view
-        .track_findings(&job.completion.track_id)
-        .iter()
-        .map(|f| {
-            if f.record.finding_id == finding_id {
-                to
-            } else {
-                f.status
-            }
-        })
-        .collect();
+    let statuses = track_statuses(view, job, Some((finding_id, to)));
     verdict_of(
         &statuses,
         job.second_run_pending(),
         job.existing_checks.as_deref(),
     )
+}
+
+/// Every finding status of `job`'s track, with `moved` applied.
+fn track_statuses(
+    view: &ReviewView,
+    job: &Job,
+    moved: Option<(&str, FindingStatus)>,
+) -> Vec<FindingStatus> {
+    view.track_findings(&job.completion.track_id)
+        .iter()
+        .map(|f| match moved {
+            Some((id, to)) if f.record.finding_id == id => to,
+            _ => f.status,
+        })
+        .collect()
 }
 
 fn accepted(job: &Job, run: &Run, derived: &Derivation) -> Accepted {
@@ -774,7 +783,6 @@ pub(crate) mod tests {
     use crate::services::standards_review::free_text::ContentScanner;
     use crate::services::standards_review::git_pinned::Git;
     use crate::services::standards_review::plan_approval::approve_plan;
-    use crate::services::standards_review::submission::tests::green_checks;
     use crate::services::track_completion::{CompletionTarget, TrackCompletionService};
     use common::domain::review_records::{FindingOrigin, FindingStatus, PairRef};
     use common::domain::solution::CredentialClass;
@@ -828,10 +836,21 @@ pub(crate) mod tests {
             self.complete_unapproved();
         }
 
+        /// Complete the track and report its existing checks all green.
         pub(crate) fn complete_unapproved(&self) {
             self.completion
                 .complete(&target(&self.r), TRACK, CredentialClass::Control)
                 .unwrap();
+            self.record_checks(&[]);
+        }
+
+        /// Report the existing checks of the track's latest job, `failed`
+        /// failing.
+        pub(crate) fn record_checks(&self, failed: &[&str]) -> Option<ExistingChecksRecorded> {
+            let failed = failed.iter().map(|c| c.to_string()).collect();
+            self.runs
+                .record_existing_checks("proj", TRACK, failed)
+                .unwrap()
         }
 
         pub(crate) fn approve(&self) {
@@ -904,7 +923,7 @@ pub(crate) mod tests {
             .iter()
             .flat_map(|rule| paths.iter().map(move |p| clean(rule, p)))
             .collect();
-        json!({ "dispositions": pairs, "existingChecks": green_checks() })
+        json!({ "dispositions": pairs })
     }
 
     fn with_finding(paths: &[&str], path: &str, text: &str) -> Value {
@@ -1052,7 +1071,7 @@ pub(crate) mod tests {
         assert_eq!(
             job.existing_checks,
             Some(vec![]),
-            "recorded from the submission"
+            "recorded through their own route"
         );
         assert!(job.second_run_pending());
         let second = e.second();
@@ -1075,9 +1094,11 @@ pub(crate) mod tests {
         assert!(!e.view().latest_job(TRACK).unwrap().second_run_pending());
         assert!(e.runs.lease_next_second("proj", NOW).unwrap().is_none());
         assert!(
-            !e.runs
-                .record_existing_checks("proj", "job_unknown", vec![])
+            e.runs
+                .record_existing_checks("proj", "t_unknown", vec![])
                 .unwrap()
+                .is_none(),
+            "a track without a job records nothing"
         );
     }
 
@@ -1085,10 +1106,10 @@ pub(crate) mod tests {
     fn ts62_a_failing_existing_check_blocks_passing_by_name() {
         let e = Env::new("store-ts62");
         e.complete();
+        let recorded = e.record_checks(&["test_plan"]).unwrap();
+        assert_eq!(recorded.verdict, None, "no run accepted yet");
         let run = e.lease();
-        let mut body = all_clean(&["src.rs", "src/a.rs"]);
-        body["existingChecks"][1]["status"] = json!("fail");
-        let ok = e.submit(&run, &body).unwrap();
+        let ok = e.submit(&run, &all_clean(&["src.rs", "src/a.rs"])).unwrap();
         assert_eq!(ok.findings_opened, 0);
         assert!(
             ok.verdict
@@ -1104,14 +1125,50 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_first_run_without_its_existing_checks_is_rejected() {
-        let e = Env::new("store-no-checks");
+    fn ts62_checks_reported_after_the_runs_re_derive_the_verdict() {
+        let e = Env::new("store-ts62-late");
         e.complete();
         let run = e.lease();
+        e.submit(&run, &all_clean(&["src.rs", "src/a.rs"])).unwrap();
+        let second = e.second();
+        let ok = e
+            .submit(&second, &second_body(&["src.rs", "src/a.rs"], &[]))
+            .unwrap();
+        assert!(ok.verdict.passing);
+        let recorded = e.record_checks(&["coverage"]).unwrap();
+        let failing = VerdictRecord {
+            passing: false,
+            reasons: vec!["existing-checks-failed:coverage".into()],
+        };
+        assert_eq!(recorded.verdict, Some(failing.clone()));
+        let job = e.view().latest_job(TRACK).cloned().unwrap();
+        assert_eq!(job.verdict(), Some(&failing));
+        e.record_checks(&[]);
+        let job = e.view().latest_job(TRACK).cloned().unwrap();
+        assert!(job.verdict().unwrap().passing, "a later report replaces it");
+    }
+
+    #[test]
+    fn unreported_existing_checks_keep_the_verdict_non_passing() {
+        let e = Env::new("store-no-checks");
+        e.approve();
+        e.completion
+            .complete(&target(&e.r), TRACK, CredentialClass::Control)
+            .unwrap();
+        let run = e.lease();
+        let ok = e.submit(&run, &all_clean(&["src.rs", "src/a.rs"])).unwrap();
+        assert!(
+            ok.verdict
+                .reasons
+                .contains(&"existing-checks-missing".to_string()),
+            "{:?}",
+            ok.verdict
+        );
         let mut body = all_clean(&["src.rs", "src/a.rs"]);
-        body.as_object_mut().unwrap().remove("existingChecks");
-        match e.submit(&run, &body) {
-            Err(RunError::Rejected(r)) => assert_eq!(r.code, "incomplete-existing-checks"),
+        body["existingChecks"] = json!([]);
+        let second = e.second();
+        match e.submit(&second, &body) {
+            Err(RunError::Rejected(r)) => assert_eq!(r.code, "schema"),
             other => panic!("{other:?}"),
         }
     }
@@ -1361,7 +1418,6 @@ pub(crate) mod tests {
         let run = next_job(&e);
         let body = json!({
             "dispositions": [clean("plain", "src.rs"), clean("plain", "src/a.rs")],
-            "existingChecks": green_checks(),
         });
         e.submit(&run, &body).unwrap();
         assert_eq!(status_of(&e, &id), FindingStatus::RuleWithdrawn);
@@ -1758,7 +1814,7 @@ pub(crate) mod tests {
             .unwrap();
         let m = c.context.matrix(RunKind::Second);
         assert_eq!(m.rule_ids, vec!["plain", "short"]);
-        assert!(!m.existing_checks && m.priors.is_empty());
+        assert!(m.priors.is_empty());
     }
 
     const ALL_RULES: &str = "# General\n- [rule:short category=long-methods max_lines=20] Short.\n- [rule:plain category=restating-comments] Plain.\n- [rule:sparse category=excessive-comments] Sparse.\n";
@@ -1790,7 +1846,6 @@ pub(crate) mod tests {
                 {"ruleId": "plain", "path": "src/a.rs", "line": 2, "description": "Restates the step."},
                 {"ruleId": "sparse", "path": "src/a.rs", "line": 3, "description": "Too many comments."}
             ],
-            "existingChecks": green_checks(),
         });
         e.submit(&first, &body).unwrap();
         let second = e.second();
@@ -1842,7 +1897,6 @@ pub(crate) mod tests {
         let first = e.lease();
         let body = json!({
             "dispositions": [clean("plain", "src.rs"), clean("plain", "src/a.rs")],
-            "existingChecks": green_checks(),
         });
         let ok = e.submit(&first, &body).unwrap();
         assert_eq!(ok.findings_opened, 0, "no rule, no finding");

@@ -87,7 +87,7 @@ fn parse_approve_plan(args: &[String]) -> Result<TrackCommand> {
 }
 
 /// The worktree id Sebenza wrote into `<git-dir>/.ai/sebenza/control.env`.
-fn worktree_id_from(cwd: &str) -> Result<String> {
+pub(crate) fn worktree_id_from(cwd: &str) -> Result<String> {
     let git_dir = common::adapters::git::GitGateway::new()
         .resolve_worktree_git_dir(cwd)
         .map_err(|e| anyhow!("not inside a git worktree: {e}"))?;

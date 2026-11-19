@@ -13,6 +13,7 @@ use crate::domain::inbox_events::{InboxEventKind, WorktreeKey};
 use crate::server::AppState;
 use crate::services::inbox_convert::{ConversionRunner, ConversionTarget, SEBENZA_INDEX_REL_PATH};
 use crate::services::inbox_service::InboxService;
+use crate::services::standards_review::existing_checks::tests::green_checks;
 use crate::services::system_agent::apply::TriageApplier;
 use crate::services::system_agent::{SystemAgentService, stub_agent_for_tests};
 use common::adapters::inbox_store::InboxStore;
@@ -925,8 +926,21 @@ async fn review_project(d: &Daemon) -> (crate::services::review_test_repo::TestR
     assert_eq!(status, 200, "{v}");
     let (status, v) = complete(d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
     assert_eq!(status, 200, "{v}");
+    let (status, v) = report_checks(d, TRACK, green_checks()).await;
+    assert_eq!(status, 200, "{v}");
     let prefix = d.state.manager.list()[0].prefix.clone();
     (r, prefix)
+}
+
+/// `POST /api/review/tracks/{track}/existing-checks` from `id-feat`.
+async fn report_checks(
+    d: &Daemon,
+    track: &str,
+    checks: serde_json::Value,
+) -> (u16, serde_json::Value) {
+    let body = serde_json::json!({"worktreeId": "id-feat", "checks": checks});
+    let path = format!("/api/review/tracks/{track}/existing-checks");
+    d.call("POST", &path, Some(body), true).await
 }
 
 fn operator_token(d: &Daemon) -> String {
@@ -1020,7 +1034,6 @@ async fn ts08_a_one_file_track_is_reviewed_on_that_file_only() {
     let stub = serde_json::json!({
         "dispositions": [clean("plain", "src.rs"), {"ruleId": "short", "path": "src.rs", "outcome": "finding"}],
         "findings": [{"ruleId": "short", "path": "src.rs", "line": 2, "description": "main does too much."}],
-        "existingChecks": crate::services::standards_review::submission::tests::green_checks(),
     });
     let (status, v) = submit(&d, &run.run_id, run.token.expose(), &stub).await;
     assert_eq!(status, 200, "{v}");
@@ -1108,7 +1121,7 @@ fn clean_matrix() -> serde_json::Value {
     serde_json::json!({ "dispositions": [
         clean("plain", "src.rs"),
         clean("short", "src.rs"),
-    ], "existingChecks": crate::services::standards_review::submission::tests::green_checks()})
+    ]})
 }
 
 async fn review_status(d: &Daemon, prefix: &str) -> serde_json::Value {
@@ -1332,7 +1345,6 @@ async fn the_findings_route_lists_the_tracks_findings_with_status() {
             {"ruleId": "short", "path": "src.rs", "outcome": "finding"}
         ],
         "findings": [{"ruleId": "short", "path": "src.rs", "line": 1, "description": "main is too long."}],
-        "existingChecks": crate::services::standards_review::submission::tests::green_checks(),
     });
     let (status, v) = submit(&d, &run.run_id, run.token.expose(), &body).await;
     assert_eq!(
@@ -1363,8 +1375,8 @@ async fn the_findings_route_lists_the_tracks_findings_with_status() {
 // --- Second run, decisions and existing checks (TS-27..TS-30, TS-58, TS-62,
 // TS-72) ---------------------------------------------------------------------
 
-/// A first run flagging `plain` on `src.rs` with `text`, checks as given.
-fn plain_flagged(text: &str, checks: serde_json::Value) -> serde_json::Value {
+/// A first run flagging `plain` on `src.rs` with `text`.
+fn plain_flagged(text: &str) -> serde_json::Value {
     use crate::services::standards_review::run_store::tests::clean;
     serde_json::json!({
         "dispositions": [
@@ -1372,7 +1384,6 @@ fn plain_flagged(text: &str, checks: serde_json::Value) -> serde_json::Value {
             clean("short", "src.rs"),
         ],
         "findings": [{"ruleId": "plain", "path": "src.rs", "line": 1, "description": text}],
-        "existingChecks": checks,
     })
 }
 
@@ -1409,11 +1420,10 @@ async fn findings(d: &Daemon, prefix: &str) -> Vec<serde_json::Value> {
 #[tokio::test]
 async fn ts27_ts58_the_second_run_gets_a_fresh_context_and_gates_the_verdict() {
     use crate::services::standards_review::run_store::tests::clean;
-    use crate::services::standards_review::submission::tests::green_checks;
     let d = Daemon::start("ok").await;
     let (_r, prefix) = review_project(&d).await;
     let first = lease(&d, &prefix);
-    let body = plain_flagged("FIRST-RUN-MARKER restates main.", green_checks());
+    let body = plain_flagged("FIRST-RUN-MARKER restates main.");
     assert_eq!(
         submit(&d, &first.run_id, first.token.expose(), &body)
             .await
@@ -1455,11 +1465,10 @@ async fn ts27_ts58_the_second_run_gets_a_fresh_context_and_gates_the_verdict() {
 #[tokio::test]
 async fn ts29_ts30_ts72_disagreement_goes_to_the_operator_who_alone_decides() {
     use crate::services::standards_review::run_token::RunToken;
-    use crate::services::standards_review::submission::tests::green_checks;
     let d = Daemon::start("ok").await;
     let (r, prefix) = review_project(&d).await;
     let first = lease(&d, &prefix);
-    let body = plain_flagged("Restates main.", green_checks());
+    let body = plain_flagged("Restates main.");
     assert_eq!(
         submit(&d, &first.run_id, first.token.expose(), &body)
             .await
@@ -1545,15 +1554,17 @@ async fn ts29_ts30_ts72_disagreement_goes_to_the_operator_who_alone_decides() {
 
 #[tokio::test]
 async fn ts62_a_failed_existing_check_names_itself_in_the_verdict() {
-    use crate::services::standards_review::submission::tests::green_checks;
+    use crate::services::review_test_repo::TRACK;
     let d = Daemon::start("ok").await;
     let (_r, prefix) = review_project(&d).await;
-    let run = lease(&d, &prefix);
-    let mut body = clean_matrix();
     let mut checks = green_checks();
     checks[3]["status"] = serde_json::json!("fail");
-    body["existingChecks"] = checks;
-    let (status, v) = submit(&d, &run.run_id, run.token.expose(), &body).await;
+    let (status, v) = report_checks(&d, TRACK, checks).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["failed"], serde_json::json!(["architecture"]));
+    assert_eq!(v["verdict"], serde_json::Value::Null, "no run accepted yet");
+    let run = lease(&d, &prefix);
+    let (status, v) = submit(&d, &run.run_id, run.token.expose(), &clean_matrix()).await;
     assert_eq!(status, 200, "{v}");
     assert_eq!(v["findingsOpened"], 0);
     let second = lease_second(&d, &prefix);
@@ -1568,4 +1579,70 @@ async fn ts62_a_failed_existing_check_names_itself_in_the_verdict() {
         serde_json::json!(["existing-checks-failed:architecture"])
     );
     assert_eq!(s["job"]["existingChecksRecorded"], true);
+
+    let (status, v) = report_checks(&d, TRACK, green_checks()).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(v["verdict"]["passing"], true, "the verdict re-derives");
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["verdict"]["passing"], true, "{s}");
+}
+
+#[tokio::test]
+async fn existing_checks_are_the_own_worktrees_control_token_reports_only() {
+    use crate::services::review_test_repo::{OTHER_TRACK, TRACK};
+    let d = Daemon::start("ok").await;
+    let _r = completion_project(&d);
+    let path = format!("/api/review/tracks/{TRACK}/existing-checks");
+    let body = serde_json::json!({"worktreeId": "id-feat", "checks": green_checks()}).to_string();
+    let (status, v) = report_checks(&d, TRACK, green_checks()).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (404, Some("no_review_job")),
+        "{v}"
+    );
+    let (status, _) = complete(&d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
+    assert_eq!(status, 200);
+    let prefix = d.state.manager.list()[0].prefix.clone();
+    let before = review_events(&d, &prefix);
+    let operator = operator_token(&d);
+    for bearer in [None, Some(operator.as_str())] {
+        let (status, _) = d.call_as("POST", &path, bearer, None, &body).await;
+        assert_eq!(status, 401, "only the control token reports checks");
+    }
+    let (status, v) = report_checks(&d, OTHER_TRACK, green_checks()).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (403, Some("foreign_track")),
+        "{v}"
+    );
+    let (status, v) = report_checks(&d, TRACK, serde_json::json!([])).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (422, Some("incomplete_existing_checks")),
+        "{v}"
+    );
+    let forged = serde_json::json!({"worktreeId": "id-feat", "checks": green_checks(), "verdict": "passing"});
+    let (status, v) = d.call("POST", &path, Some(forged), true).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (422, Some("bad_existing_checks")),
+        "{v}"
+    );
+    assert_eq!(
+        review_events(&d, &prefix),
+        before,
+        "refusals record nothing"
+    );
+    let (status, v) = report_checks(&d, TRACK, green_checks()).await;
+    assert_eq!(status, 200, "{v}");
+    assert_eq!(review_events(&d, &prefix), before + 1);
+    // Last: an unknown id makes the daemon reconcile its worktrees.
+    let elsewhere = serde_json::json!({"worktreeId": "id-elsewhere", "checks": green_checks()});
+    let (status, v) = d.call("POST", &path, Some(elsewhere), true).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (404, Some("unknown_worktree")),
+        "{v}"
+    );
+    assert_eq!(review_events(&d, &prefix), before + 1);
 }

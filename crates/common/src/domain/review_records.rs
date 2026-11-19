@@ -306,6 +306,10 @@ pub struct ExistingChecksRecorded {
     pub job_id: String,
     /// The ids of failed checks; empty when all passed.
     pub failed: Vec<String>,
+    /// The job's verdict re-derived with these results, once a run of the
+    /// job has been accepted; `None` before that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<VerdictRecord>,
 }
 
 /// One task's edit boundary: the path globs its commits may change.

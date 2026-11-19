@@ -2,7 +2,7 @@
 name: sebenza-review
 description: Reviews a completed Sebenza track or phase against its spec.md, design.md, architecture documents, test-plan.md, and acceptance criteria - checking requirement coverage, test-plan scenario coverage, tests/coverage, and (for features) architecture conformance via the specialist architect subagents - then reports a verdict. Use when the user wants to review, verify, or quality-check finished Sebenza work before sign-off.
 metadata:
-  version: "1.2"
+  version: "1.3"
 ---
 
 # Sebenza Review Skill
@@ -75,6 +75,38 @@ Assess each and gather concrete evidence (cite files/commits where possible):
    `<domain>-architecture.md` plus the relevant implementation, and collect a per-domain verdict + findings.
    Security/data findings for PHI/PII systems are must-fix.
 
+## 4a. Standards stage
+
+The daemon reviews a completed track's changes against the project's own rules: the rules tagged in
+the documents `.ai/sebenza/index.md` lists, read at the merge-base. It runs a sandboxed, read-only
+agent on the head snapshot, then a second, independent run, and the daemon derives the standards
+verdict from both. This skill only reports. It **never sets the verdict** and never edits a finding
+or a standards document; the daemon derives every status. The sandboxed agent's instructions are
+in [`standards-stage.md`](standards-stage.md); you do not run them yourself.
+
+1. **Report the existing checks.** The sandboxed agent cannot run tests or coverage, so the four
+   checks of §4 are yours to report, once they are done:
+   `sebenza-agentctl review-checks --track <track_id> --requirements <s> --test-plan <s> --coverage <s> --architecture <s>`.
+   Each `<s>` is `pass`, `fail` or `not_applicable`: requirements from dimensions 1 and 1a, test
+   plan from 4, coverage from 3, architecture from 6 (`not_applicable` for a non-feature track). Any
+   must-fix finding in a dimension is `fail`. A failed check keeps the daemon's verdict non-passing
+   and is named in it. Report again after a fix; the latest report replaces the earlier one. Outside
+   a Sebenza-managed worktree the operator can run
+   `sebenza-cli review checks <track_id> --requirements <s> --test-plan <s> --coverage <s> --architecture <s>`.
+   A `no_review_job` answer means the track was never completed through the daemon
+   (`sebenza-agentctl complete`); say so.
+2. **Read the daemon's result.** Run `sebenza-cli review status <track_id>` for the job's state,
+   attempts, blockers, informational notes and the daemon-derived verdict, and
+   `sebenza-cli review findings <track_id>` for every finding with its status.
+3. **Report each finding as resolved or unresolved.** `resolved` and `rule-withdrawn` are resolved;
+   `open` and `needs-operator-decision` are unresolved. A `needs-operator-decision` finding waits for
+   the operator's `sebenza-cli review decide`; never decide it. List the informational notes (a
+   category the project has no rule for) as notes, never as findings, and suggest the
+   `sebenza-setup` review-rules upgrade for them.
+4. **An unreachable daemon is `not-run`.** If either command cannot reach the daemon, or the job
+   is still queued or running, report the standards stage as `not-run` with the reason.
+   Never report it as clean, and never stand in for the daemon by reviewing the rules yourself.
+
 ## 5. Report the verdict
 
 Present a structured review:
@@ -101,6 +133,11 @@ TEST PLAN COVERAGE            <passed>/<total> scenarios
 ARCHITECTURE CONFORMANCE (features)
   Business: <verdict>  Application: <verdict>  Technical: <verdict>
   Data: <verdict>      Security: <verdict>  Test plan: <verdict>
+
+STANDARDS STAGE               <daemon verdict: passing | not passing (<reasons>) | not-run (<why>)>
+  Existing checks reported: requirements <s>  test plan <s>  coverage <s>  architecture <s>
+  ✓ <finding id> resolved   ✗ <finding id> unresolved (<status>) — <rule> <path:line>
+  Notes: <category without a rule, or "none">
 
 FINDINGS (most severe first)
   1. [severity] <finding> — <file:line / commit> — <suggested fix>

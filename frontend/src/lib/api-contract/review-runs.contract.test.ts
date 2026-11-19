@@ -3,6 +3,7 @@ import { apiContract, apiPaths } from "./contract";
 import {
   ApproveTrackPlanResponseSchema,
   DecideFindingRequestSchema,
+  RecordExistingChecksRequestSchema,
   ReviewFindingSchema,
   ReviewJobStatusSchema,
   SubmitReviewRunRequestSchema,
@@ -91,23 +92,43 @@ describe("review runs contract", () => {
     }
   });
 
-  it("closes the existing checks a first run reports", () => {
-    const base = {
+  it("refuses existing checks in a submission: the skill reports them", () => {
+    const withChecks = {
       dispositions: [],
       existingChecks: [{ check: "coverage", status: "not_applicable" }],
     };
-    expect(SubmitReviewRunRequestSchema.safeParse(base).success).toBe(true);
+    expect(SubmitReviewRunRequestSchema.safeParse(withChecks).success).toBe(
+      false,
+    );
+  });
+
+  it("lists the existing-checks route and closes its body", () => {
+    expect(apiPaths.recordExistingChecks).toBe(
+      "/api/review/tracks/:id/existing-checks",
+    );
+    expect(apiContract.recordExistingChecks.method).toBe("POST");
+    const base = {
+      worktreeId: "wt-1",
+      checks: [{ check: "coverage", status: "not_applicable" }],
+    };
+    expect(RecordExistingChecksRequestSchema.safeParse(base).success).toBe(
+      true,
+    );
     for (const bad of [
       { check: "lint", status: "pass" },
       { check: "coverage", status: "skipped" },
       { check: "coverage", status: "pass", note: "x" },
     ]) {
       expect(
-        SubmitReviewRunRequestSchema.safeParse({
-          ...base,
-          existingChecks: [bad],
-        }).success,
+        RecordExistingChecksRequestSchema.safeParse({ ...base, checks: [bad] })
+          .success,
       ).toBe(false);
     }
+    expect(
+      RecordExistingChecksRequestSchema.safeParse({
+        ...base,
+        verdict: "passing",
+      }).success,
+    ).toBe(false);
   });
 });

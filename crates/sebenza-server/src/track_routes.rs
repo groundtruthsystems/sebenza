@@ -1,8 +1,10 @@
 //! `POST /api/tracks/{id}/complete` (FR-01): `sebenza-agentctl complete`,
-//! and `POST /api/tracks/{id}/plan/approve` (FR-20): `sebenza-cli track
-//! approve-plan`.
+//! `POST /api/review/tracks/{id}/existing-checks` (FR-18): `sebenza-agentctl
+//! review-checks`, and `POST /api/tracks/{id}/plan/approve` (FR-20):
+//! `sebenza-cli track approve-plan`.
 //!
-//! The control token completes a track; it grants nothing else. The caller
+//! The control token completes a track and reports the results of its
+//! existing sebenza-review checks; it grants nothing else. The caller
 //! names its worktree by the id the daemon wrote into that worktree's
 //! `control.env`, and the daemon resolves the path, branch and target from
 //! its own record of that worktree, never from the request. Only a track
@@ -16,6 +18,7 @@
 
 use crate::server::{ApiError, AppState};
 use crate::services::completion_reconciler::project_worktrees;
+use crate::services::standards_review::existing_checks::{ExistingChecksBody, failed_checks};
 use crate::services::standards_review::git_pinned::Git;
 use crate::services::standards_review::plan_approval::{ApprovalError, approve_plan};
 use crate::services::track_completion::check_own_track;
@@ -24,7 +27,7 @@ use crate::services::tracks_projection::Projected;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
-use common::domain::review_records::PlanApproved;
+use common::domain::review_records::{ExistingChecksRecorded, PlanApproved};
 use common::domain::solution::CredentialClass;
 use serde::Deserialize;
 
@@ -83,6 +86,80 @@ fn complete_blocking(
             Err(err)
         }
     }
+}
+
+/// `POST /api/review/tracks/{id}/existing-checks` — control token only. The
+/// body is parsed here so a malformed report gets a coded 422.
+pub async fn record_existing_checks(
+    State(state): State<AppState>,
+    Path(track_id): Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    crate::solution_routes::control_only(&headers)?;
+    let report: ExistingChecksBody = serde_json::from_str(&body)
+        .map_err(|e| ApiError::coded(422, "bad_existing_checks", e.to_string()))?;
+    let failed = failed_checks(&report.checks)
+        .map_err(|p| ApiError::coded(422, "incomplete_existing_checks", p.join("; ")))?;
+    tokio::task::spawn_blocking(move || {
+        checks_blocking(&state, &track_id, &report.worktree_id, failed)
+    })
+    .await
+    .map_err(|_| ApiError::new(500, "task panicked".to_string()))?
+    .map(Json)
+}
+
+/// Record `failed` on the latest job of the caller's own track.
+fn checks_blocking(
+    state: &AppState,
+    track_id: &str,
+    worktree_id: &str,
+    failed: Vec<String>,
+) -> Result<serde_json::Value, ApiError> {
+    let target = resolve_target(state, worktree_id).ok_or_else(|| {
+        ApiError::coded(
+            404,
+            "unknown_worktree",
+            "This worktree is not one the daemon manages.".to_string(),
+        )
+    })?;
+    check_own_track(&target, track_id).map_err(completion_error)?;
+    let recorded = state
+        .review_runs()
+        .record_existing_checks(&target.project_key, track_id, failed)
+        .map_err(|e| ApiError::coded(500, "review_log", e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::coded(
+                404,
+                "no_review_job",
+                "The track has no review job: complete it first.".to_string(),
+            )
+        })?;
+    audit_checks(&target, track_id, &recorded);
+    Ok(checks_json(track_id, &recorded))
+}
+
+fn checks_json(track_id: &str, r: &ExistingChecksRecorded) -> serde_json::Value {
+    serde_json::json!({
+        "ok": true,
+        "trackId": track_id,
+        "jobId": r.job_id,
+        "failed": r.failed,
+        "verdict": r.verdict,
+    })
+}
+
+fn audit_checks(target: &CompletionTarget, track_id: &str, r: &ExistingChecksRecorded) {
+    tracing::info!(
+        audit = "review.existing_checks.recorded",
+        credential = CredentialClass::Control.as_str(),
+        project = %target.project_key,
+        branch = %target.branch,
+        track = %track_id,
+        job = %r.job_id,
+        failed = %r.failed.join(","),
+        "track audit"
+    );
 }
 
 /// The daemon's record of the worktree with id `worktree_id`, reconciling

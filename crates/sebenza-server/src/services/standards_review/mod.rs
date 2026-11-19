@@ -20,6 +20,8 @@
 //! - [`run_context`]: what a run reads and the matrix it must cover.
 //! - [`submission`] and [`free_text`]: the closed submission schema, its
 //!   matrix check, and the bounds and scan on finding descriptions.
+//! - [`existing_checks`]: the four existing sebenza-review checks the
+//!   skill reports through their own route (FR-18).
 //! - [`findings`], [`matcher`] and [`deriver`]: the finding transition
 //!   table, the finding matcher and the daemon-only verdict.
 //! - [`measure`]: the in-tree method-length measurers (FR-15, D-03).
@@ -29,6 +31,7 @@
 
 pub mod boundary;
 pub mod deriver;
+pub mod existing_checks;
 pub mod findings;
 pub mod free_text;
 pub mod git_pinned;

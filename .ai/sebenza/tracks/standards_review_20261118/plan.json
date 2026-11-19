@@ -259,7 +259,7 @@
           "id": "phase-5-task-4",
           "name": "Update sebenza-review and sebenza-setup skills",
           "description": "Add the standards stage to sebenza-review, ship the three default rules in setup templates with a diff-only upgrade, and adopt them here.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-5-task-5",

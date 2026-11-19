@@ -1450,22 +1450,6 @@ export const SubmitReviewRunRequestSchema = z
           .strict(),
       )
       .optional(),
-    /** First runs only: each existing sebenza-review check exactly once. */
-    existingChecks: z
-      .array(
-        z
-          .object({
-            check: z.enum([
-              "requirements",
-              "test_plan",
-              "coverage",
-              "architecture",
-            ]),
-            status: z.enum(["pass", "fail", "not_applicable"]),
-          })
-          .strict(),
-      )
-      .optional(),
   })
   .strict();
 
@@ -1477,6 +1461,34 @@ export type SubmitReviewRunRequest = z.infer<
 export const ReviewVerdictSchema = z.object({
   passing: z.boolean(),
   reasons: z.array(z.string()),
+});
+
+/** One existing sebenza-review check's result. */
+export const ExistingCheckSchema = z
+  .object({
+    check: z.enum(["requirements", "test_plan", "coverage", "architecture"]),
+    status: z.enum(["pass", "fail", "not_applicable"]),
+  })
+  .strict();
+
+export type ExistingCheck = z.infer<typeof ExistingCheckSchema>;
+
+/** `POST /api/review/tracks/:id/existing-checks` — the worktree asking and
+ *  each of the four existing checks exactly once (the daemon checks that). */
+export const RecordExistingChecksRequestSchema = z
+  .object({
+    worktreeId: z.string(),
+    checks: z.array(ExistingCheckSchema),
+  })
+  .strict();
+
+export const RecordExistingChecksResponseSchema = z.object({
+  ok: z.literal(true),
+  trackId: z.string(),
+  jobId: z.string(),
+  failed: z.array(z.string()),
+  /** Re-derived once a run of the job was accepted; null before that. */
+  verdict: ReviewVerdictSchema.nullable(),
 });
 
 export const SubmitReviewRunResponseSchema = z.object({

@@ -656,6 +656,34 @@ impl Http {
         self.read_json(resp).await
     }
 
+    /// `POST /api/review/tracks/{id}/existing-checks` — report the four
+    /// existing sebenza-review checks of the worktree's track (control
+    /// token).
+    pub async fn record_existing_checks(
+        &self,
+        track_id: &str,
+        worktree_id: &str,
+        checks: &[(&str, String)],
+    ) -> Result<Value> {
+        let checks: Vec<Value> = checks
+            .iter()
+            .map(|(check, status)| json!({ "check": check, "status": status }))
+            .collect();
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/review/tracks/{}/existing-checks",
+                self.hub,
+                urlencode(track_id)
+            ))
+            .bearer_auth(control_token()?)
+            .json(&json!({ "worktreeId": worktree_id, "checks": checks }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
     /// `GET <base>/api/review/tracks/{id}` — a track's latest review job.
     pub async fn review_status(&self, base: &str, track_id: &str) -> Result<Value> {
         self.get(&format!("{base}/api/review/tracks/{}", urlencode(track_id)))

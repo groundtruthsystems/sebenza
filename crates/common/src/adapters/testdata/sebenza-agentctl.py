@@ -40,6 +40,10 @@ def read_env_file(path):
     return env
 
 
+REVIEW_CHECKS = ("requirements", "test_plan", "coverage", "architecture")
+CHECK_STATUSES = ("pass", "fail", "not_applicable")
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="sebenza-agentctl")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -108,6 +112,13 @@ def build_parser():
     # then marks the track done in tracks.json. Skills never write `done`.
     complete = subparsers.add_parser("complete", help="mark a track of this worktree complete and enqueue its standards review")
     complete.add_argument("--track", required=True, help="the track id under .ai/sebenza/tracks/")
+
+    # The sebenza-review skill runs the four existing checks here, where tests and
+    # coverage can run, and reports them; the sandboxed review agent cannot.
+    checks = subparsers.add_parser("review-checks", help="report the existing sebenza-review checks of a completed track")
+    checks.add_argument("--track", required=True, help="the track id under .ai/sebenza/tracks/")
+    for flag in REVIEW_CHECKS:
+        checks.add_argument(f"--{flag.replace('_', '-')}", dest=flag, required=True, choices=CHECK_STATUSES)
 
     return parser
 
@@ -397,6 +408,22 @@ def send_complete(args, control_env):
     return 0 if status == 200 else 1
 
 
+def review_checks_url(control_env, track_id):
+    base = control_env["SEBENZA_CONTROL_URL"]
+    marker = "/api/runtime/events"
+    root = base[: base.index(marker)] if marker in base else base.rstrip("/")
+    return f"{root}/api/review/tracks/{urllib.parse.quote(track_id, safe='')}/existing-checks"
+
+
+def send_review_checks(args, control_env):
+    """Report the four existing checks of a track; print the daemon's JSON answer."""
+    checks = [{"check": c, "status": getattr(args, c)} for c in REVIEW_CHECKS]
+    status, body = http_json(review_checks_url(control_env, args.track), control_env,
+                             {"worktreeId": control_env["SEBENZA_WORKTREE_ID"], "checks": checks})
+    print(json.dumps(body, indent=2))
+    return 0 if status == 200 else 1
+
+
 def send_review(args, control_env, sleep=None, clock=None):
     """Start a review, wait for it, print its JSON, and exit by outcome."""
     import time
@@ -466,6 +493,9 @@ def main():
 
     if parsed.command == "complete":
         return send_complete(parsed, control_env)
+
+    if parsed.command == "review-checks":
+        return send_review_checks(parsed, control_env)
 
     if parsed.command == "codex-session-start":
         send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="idle"), control_env), control_env)

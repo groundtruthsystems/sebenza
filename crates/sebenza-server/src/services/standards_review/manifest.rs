@@ -282,4 +282,38 @@ mod tests {
         let json = serde_json::to_string(&build_manifest("r", &docs).0).unwrap();
         assert!(!json.contains("SECRET-PROSE"));
     }
+
+    /// The three default rules as `(category, rule id, max_lines)`.
+    fn defaults(path: &str, text: &str) -> Vec<(String, String, Option<u32>)> {
+        let (manifest, blockers) = build_manifest("r", &[doc(path, text)]);
+        assert!(blockers.is_empty(), "{path}: {blockers:?}");
+        let mut rules: Vec<_> = manifest
+            .rules
+            .into_iter()
+            .map(|r| (r.category, r.rule_id, r.max_lines))
+            .collect();
+        rules.sort();
+        rules
+    }
+
+    #[test]
+    fn ts46_the_setup_template_ships_the_three_default_rules_and_this_repository_adopts_them() {
+        let template = defaults(
+            "template",
+            include_str!(
+                "../../../../../skills/skills/sebenza-setup/assets/code_styleguides/general.md"
+            ),
+        );
+        let categories: Vec<&str> = template.iter().map(|r| r.0.as_str()).collect();
+        assert_eq!(
+            categories,
+            vec![EXCESSIVE_COMMENTS, LONG_METHODS, RESTATING_COMMENTS]
+        );
+        assert_eq!(template[1].2, Some(20), "D-03: 20 logical lines");
+        let here = defaults(
+            "here",
+            include_str!("../../../../../.ai/sebenza/code_styleguides/general.md"),
+        );
+        assert_eq!(here, template);
+    }
 }

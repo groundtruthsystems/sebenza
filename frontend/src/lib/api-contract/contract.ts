@@ -91,6 +91,8 @@ import {
   ApproveTrackPlanResponseSchema,
   DecideFindingRequestSchema,
   DecideFindingResponseSchema,
+  RecordExistingChecksRequestSchema,
+  RecordExistingChecksResponseSchema,
   ClaimReviewRunRequestSchema,
   ReviewRunClaimSchema,
   SubmitReviewRunRequestSchema,
@@ -193,6 +195,7 @@ export const apiPaths = {
   claimReviewRun: "/api/review-runs/claim",
   submitReviewRun: "/api/review-runs/:id/submit",
   decideFinding: "/api/findings/:id/decision",
+  recordExistingChecks: "/api/review/tracks/:id/existing-checks",
   fetchTrackReviewStatus: "/api/review/tracks/:id",
   fetchTrackReviewFindings: "/api/review/tracks/:id/findings",
 } as const;
@@ -1011,6 +1014,22 @@ export const apiContract = c.router(
         403: ErrorResponseSchema,
         404: ErrorResponseSchema,
         409: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+      },
+    },
+    /** Control token, the track's own worktree only; the daemon re-derives
+     *  the verdict from the four results. */
+    recordExistingChecks: {
+      method: "POST",
+      path: apiPaths.recordExistingChecks,
+      body: RecordExistingChecksRequestSchema,
+      responses: {
+        200: RecordExistingChecksResponseSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        422: ErrorResponseSchema,
         500: ErrorResponseSchema,
       },
     },
