@@ -297,4 +297,15 @@ describe("TrackDetail", () => {
       expect(onclose).not.toHaveBeenCalled();
     });
   });
+
+  // TS-10 (fullscreen_request_20261119): track views get no full screen, even with view=full in the URL.
+  it("offers no full-screen control or view", async () => {
+    window.history.replaceState(null, "", "/?view=full");
+    const fetchFile = fetchFileFor({ "./tracks/inbox_20260914/spec.md": "# Spec\n\nThe requirements." });
+    render(<TrackDetail fetchFile={fetchFile} track={track} onclose={() => {}} />);
+    await waitFor(() => expect(screen.getByText("The requirements.")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: /full screen/i })).toBeNull();
+    expect(screen.queryByRole("region", { name: /full-screen/i })).toBeNull();
+    window.history.replaceState(null, "", "/");
+  });
 });

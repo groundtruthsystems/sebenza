@@ -30,6 +30,15 @@ import CoordinatorTab from "./CoordinatorTab";
 import DesignTab from "./DesignTab";
 import { solutionApi } from "./solutionApi";
 import NotesPanel, { NoteAdder, isDefaultOnly, notesChangedSinceConversion } from "./NotesPanel";
+import RequestFullscreen, { FullscreenOpeners } from "./RequestFullscreen";
+import {
+  closeFullscreen,
+  focusOpener,
+  openFullscreen,
+  setOriginProvider,
+  useFullscreenReturn,
+  useInboxRoute,
+} from "./fullscreenRoute";
 import Toggle from "./Toggle";
 import ConvertDraftDialog, { type ConvertTarget } from "./ConvertDraftDialog";
 import { fetchProjects } from "./api";
@@ -180,6 +189,13 @@ export default function InboxView() {
   const loadedRef = useRef<DraftLike>({ body: "", bodyHash: "" });
   const debouncer = useMemo(() => createDebouncer(AUTOSAVE_MS), []);
 
+  const route = useInboxRoute();
+  const listRef = useRef<HTMLUListElement>(null);
+  const selectedRef = useRef(selectedId);
+  selectedRef.current = selectedId;
+  /** A request to scroll into view once its row is listed. */
+  const [revealId, setRevealId] = useState<string | null>(null);
+
   const refresh = useCallback(async () => {
     try {
       const data = await fetchInboxDrafts({
@@ -303,6 +319,45 @@ export default function InboxView() {
       setStatus((err as Error).message);
     }
   }, [debouncer]);
+
+  useEffect(() => {
+    setOriginProvider(() => ({
+      selection: selectedRef.current,
+      scroll: listRef.current?.scrollTop ?? 0,
+    }));
+    return () => setOriginProvider(null);
+  }, []);
+
+  useFullscreenReturn(route, {
+    restore: (origin) => {
+      if (origin.selection && origin.selection !== selectedRef.current) void open(origin.selection);
+      if (listRef.current) listRef.current.scrollTop = origin.scroll;
+      focusOpener();
+    },
+    reveal: (item) => {
+      if (!item) return;
+      if (item !== selectedRef.current) void open(item);
+      setRevealId(item);
+    },
+  });
+
+  useEffect(() => {
+    if (!revealId) return;
+    const row = [...(listRef.current?.querySelectorAll<HTMLElement>("[data-item-id]") ?? [])].find(
+      (el) => el.dataset.itemId === revealId,
+    );
+    if (!row) return;
+    row.scrollIntoView({ block: "nearest" });
+    row.focus();
+    setRevealId(null);
+  }, [revealId, drafts]);
+
+  const fullItem = route.full && !route.handover ? route.item : null;
+
+  // A handover lives on the Design tab, so its full-screen URL opens that tab.
+  useEffect(() => {
+    if (route.handover) setPageTab("design");
+  }, [route.handover]);
 
   /** Re-read the open item after a note write changed its shape, so the
    *  plain editor and its save token match the server again. */
@@ -640,6 +695,9 @@ export default function InboxView() {
   return (
     <div className="flex h-dvh bg-surface text-primary">
       <NavRail active="inbox" projectBase={projectBase} />
+      {fullItem && (
+        <RequestFullscreen item={fullItem} doc={route.doc} onClose={() => closeFullscreen(fullItem)} />
+      )}
       {showNewDialog && (
         <NewDraftDialog
           loading={creating}
@@ -727,7 +785,7 @@ export default function InboxView() {
           </div>
         </div>
 
-        <ul className="list-none overflow-y-auto flex-1 min-h-0 p-2">
+        <ul ref={listRef} aria-label="Requests" className="list-none overflow-y-auto flex-1 min-h-0 p-2">
           {drafts.length === 0 && (
             <li className="px-3 py-4 text-xs text-muted text-center">
               No drafts yet.
@@ -736,9 +794,11 @@ export default function InboxView() {
           {drafts.map((d) => {
             const isActive = d.id === selectedId;
             return (
-              <li key={d.id} className="mb-0.5">
+              <li key={d.id} className="mb-0.5 relative group">
                 <button
                   type="button"
+                  data-item-id={d.id}
+                  aria-current={isActive ? "true" : undefined}
                   onClick={() => void open(d.id)}
                   className={`w-full px-3 py-2.5 rounded-md border cursor-pointer flex flex-col gap-1 text-left text-sm bg-transparent hover:bg-hover ${
                     isActive ? "bg-active border-accent" : "border-transparent"
@@ -794,6 +854,16 @@ export default function InboxView() {
                     )}
                   </span>
                 </button>
+                <button
+                  type="button"
+                  aria-label={`Open ${d.isRaw ? "(unparseable)" : d.title || "(untitled)"} full screen`}
+                  title="Full screen"
+                  data-fullscreen-opener={`row:${d.id}`}
+                  onClick={() => openFullscreen(d.id)}
+                  className="absolute bottom-1.5 right-1.5 h-5 w-5 rounded border border-edge bg-surface text-[11px] leading-none text-muted cursor-pointer opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-primary"
+                >
+                  &#x2922;
+                </button>
               </li>
             );
           })}
@@ -825,6 +895,13 @@ export default function InboxView() {
           {draft && !draft.raw && (
             <div className="flex items-center gap-2 shrink-0">
               {status && <span className="text-[11px] text-muted">{status}</span>}
+              <Btn
+                aria-label="Open request full screen"
+                data-fullscreen-opener={`detail:${draft.id}`}
+                onClick={() => openFullscreen(draft.id)}
+              >
+                Full screen
+              </Btn>
               <Btn
                 variant={showHelp ? "accent-outline" : "default"}
                 onClick={() => setShowHelp((v) => !v)}
@@ -928,6 +1005,11 @@ export default function InboxView() {
             )}
             <div className="flex-1 min-h-0 flex">
               <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+                <FullscreenOpeners
+                  request={draft}
+                  isSolution={draft.kind === "solution"}
+                  onOpen={(doc) => openFullscreen(draft.id, { doc })}
+                />
                 <div role="tablist" aria-label="Item view" className="flex border-b border-edge bg-sidebar">
                   {tabsFor(draft).map((t) => (
                     <button

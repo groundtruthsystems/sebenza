@@ -16,7 +16,6 @@ export interface HandoverReviewState {
   comment: string;
   /** The reader's scroll offset, restored in either mode. */
   scrollTop: number;
-  fullscreen: boolean;
   chatOpen: boolean;
 }
 
@@ -27,7 +26,6 @@ export const EMPTY_REVIEW: HandoverReviewState = {
   reason: "other",
   comment: "",
   scrollTop: 0,
-  fullscreen: false,
   chatOpen: false,
 };
 

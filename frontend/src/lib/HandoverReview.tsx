@@ -1,11 +1,13 @@
 // One project's handover under review, in the normal card or full screen
 // (FR-11, FR-15, FR-16). Full screen is a mode of the same review: both modes
 // read and write the same review store, so the instruction edit, the reject
-// form and the reading position carry across. Leaving full screen is a
-// visible button or Esc (after any open dialog).
+// form and the reading position carry across. Full screen is the URL
+// `&handover=<slug>&view=full` (fullscreen_request_20261119); leaving it is a
+// visible button, Esc (after any open dialog) or browser Back.
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import ChatPanel from "./ChatPanel";
 import { useEscLayer } from "./escStack";
+import { closeFullscreen, focusOpener, openFullscreen, useInboxRoute } from "./fullscreenRoute";
 import { renderDraftMarkdown } from "./inboxMarkdown";
 import ReviewControls, { focusRing } from "./ReviewControls";
 import { useHandoverReview } from "./reviewStore";
@@ -33,7 +35,8 @@ export default function HandoverReview({
   const [review, patch] = useHandoverReview(draftId, h.slug);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const full = review.fullscreen;
+  const route = useInboxRoute();
+  const full = route.full && route.item === draftId && route.handover === h.slug;
   /** The chat thread, or null while chat is unavailable (503): no entry point. */
   const [chat, setChat] = useState<ChatThread | null>(null);
   const [chatChecked, setChatChecked] = useState(false);
@@ -49,7 +52,13 @@ export default function HandoverReview({
       live = false;
     };
   }, [api, draftId, h.slug]);
-  useEscLayer("fullscreen", full, () => patch({ fullscreen: false }));
+  const leave = () => closeFullscreen(draftId);
+  useEscLayer("fullscreen", full, leave);
+  const wasFull = useRef(full);
+  useEffect(() => {
+    if (wasFull.current && !full) focusOpener();
+    wasFull.current = full;
+  }, [full]);
 
   /** Load the instruction. A pending edit is kept unless `fresh` (after a
    *  save, the saved text is the new baseline). */
@@ -132,7 +141,8 @@ export default function HandoverReview({
     <button
       type="button"
       className={`px-2 py-0.5 rounded border border-edge ${focusRing}`}
-      onClick={() => patch({ fullscreen: !full })}
+      data-fullscreen-opener={`handover:${h.slug}`}
+      onClick={() => (full ? leave() : openFullscreen(draftId, { handover: h.slug }))}
     >
       {full ? "Exit full screen" : "Full screen"}
     </button>
