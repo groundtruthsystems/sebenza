@@ -997,6 +997,16 @@ export async function approveTrackPlan(trackId: string) {
   });
 }
 
+/** Sign off a track through the daemon's gate (operator only): refused
+ *  unless its verdict passes and its refs are the reviewed ones. */
+export async function signOffTrack(trackId: string) {
+  return hubApi.signOffTrack({
+    params: { id: trackId },
+    body: {},
+    extraHeaders: await operatorHeaders(),
+  });
+}
+
 /** Settle a finding the two review runs disagree on (operator only):
  *  `confirm` keeps it open, `reject` resolves it. */
 export async function decideReviewFinding(

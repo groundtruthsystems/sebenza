@@ -170,6 +170,13 @@ project reviewer, on a read-only snapshot of this worktree. At most **3 rounds**
    It files one `[<track_id>/verification]` request on the origin item that says how review ended and
    lists every finding still open. Then **stop**: the operator verifies and decides; do not mark the
    track done until they answer.
+3. **Sign-off is the operator's, through the daemon's gate.** Once they accept, the operator runs
+   `sebenza-cli track signoff <track_id>` with the operator token from `sebenza-cli login`. The
+   daemon signs off only while the standards verdict passes and the track ref and its merge-base
+   are still the ones reviewed. It refuses with `no_verdict` (no review yet), `verdict_not_passing`
+   (with the reasons) or `stale_verdict` (the track or target moved since the review: complete the
+   track again and review the new head). Never sign off yourself, and never treat a PASS here as
+   the sign-off.
 
 ## 6. Offer follow-up
 
@@ -182,5 +189,6 @@ Based on the verdict, offer next steps (do not act without confirmation):
   findings recorded there are picked up at close-out and folded into the project's running threat
   register (`SECURITY.md`), so an unresolved security concern outlives the track rather than
   disappearing with it.
-- **PASS** — confirm the work is ready for sign-off; if the track is complete, offer archival via
+- **PASS** — confirm the work is ready for sign-off, which the operator gives with
+  `sebenza-cli track signoff <track_id>` (§5a step 3); once signed off, offer archival via
   `sebenza-implement`'s cleanup step.

@@ -1534,6 +1534,8 @@ export const ReviewJobStatusSchema = z.object({
   verdict: ReviewVerdictSchema.nullable(),
   existingChecksRecorded: z.boolean(),
   secondRunPending: z.boolean(),
+  /** The operator signed this job off through the gate. */
+  signedOff: z.boolean(),
   /** Informational only: never a finding, never a verdict input. */
   notes: z.array(
     z.object({ code: z.string(), category: z.string(), message: z.string() }),
@@ -1577,6 +1579,22 @@ export const DecideFindingResponseSchema = z.object({
   status: ReviewFindingSchema.shape.status,
   verdict: ReviewVerdictSchema,
 });
+
+/** `POST /api/tracks/:id/signoff` — the operator's compare-and-swap gate:
+ *  it signs off the latest job only while its verdict passes and the track
+ *  ref and merge-base are the reviewed ones. `appended` is false when the
+ *  job was already signed off. */
+export const SignOffTrackResponseSchema = z.object({
+  ok: z.literal(true),
+  appended: z.boolean(),
+  trackId: z.string(),
+  jobId: z.string(),
+  headSha: z.string(),
+  baseSha: z.string(),
+  findingIds: z.array(z.string()),
+});
+
+export type SignOffTrackResponse = z.infer<typeof SignOffTrackResponseSchema>;
 
 /** `GET /api/review/tracks/:id/findings` — every finding with its status. */
 export const TrackReviewFindingsSchema = z.object({

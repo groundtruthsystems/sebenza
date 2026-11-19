@@ -1720,7 +1720,6 @@ async fn ts02_ts64_sign_off_needs_the_operator_and_a_verdict() {
 
 #[tokio::test]
 async fn ts38_ts52_a_passing_fresh_verdict_is_signed_off_and_audited() {
-    use crate::services::standards_review::run_store::tests::capture_logs;
     let d = Daemon::start("ok").await;
     let (r, prefix) = passing_project(&d).await;
     let operator = operator_token(&d);
@@ -1737,13 +1736,19 @@ async fn ts38_ts52_a_passing_fresh_verdict_is_signed_off_and_audited() {
     let (status, v) = signoff(&d, &operator).await;
     assert_eq!((status, v["appended"].as_bool()), (200, Some(false)), "{v}");
     assert_eq!(signoff_records(&d, &prefix).len(), 1);
-    let logs = capture_logs(|| crate::track_routes::audit_signoff(&prefix, &records[0]));
+    assert_signoff_audited(&prefix, &records[0]);
+}
+
+/// TS-52: the audit line names the credential class, job and SHAs.
+fn assert_signoff_audited(prefix: &str, record: &common::domain::review_records::SignedOff) {
+    use crate::services::standards_review::run_store::tests::capture_logs;
+    let logs = capture_logs(|| crate::track_routes::audit_signoff(prefix, record));
     for want in [
         "track.signed_off",
         "operator_session",
-        records[0].job_id.as_str(),
-        records[0].head_sha.as_str(),
-        records[0].base_sha.as_str(),
+        &record.job_id,
+        &record.head_sha,
+        &record.base_sha,
     ] {
         assert!(logs.contains(want), "TS-52 {want}: {logs}");
     }
@@ -1763,33 +1768,61 @@ async fn ts39_a_ref_moved_after_the_verdict_is_a_stale_verdict() {
     assert!(signoff_records(&d, &prefix).is_empty(), "no sign-off");
 }
 
-#[tokio::test]
-async fn ts73_a_fix_commit_resolves_the_finding_and_sign_off_succeeds() {
-    use crate::services::review_test_repo::TRACK;
-    let d = Daemon::start("ok").await;
-    let (r, prefix) = review_project(&d).await;
-    let first = lease(&d, &prefix);
+/// A first and second run that agree on a `plain` finding on `src.rs`;
+/// returns the open finding's id.
+async fn agreed_open_finding(d: &Daemon, prefix: &str) -> String {
+    let first = lease(d, prefix);
     let flagged = plain_flagged("Restates main.");
-    assert_eq!(
-        submit(&d, &first.run_id, first.token.expose(), &flagged)
-            .await
-            .0,
-        200
-    );
-    let second = lease_second(&d, &prefix);
+    let (status, v) = submit(d, &first.run_id, first.token.expose(), &flagged).await;
+    assert_eq!(status, 200, "{v}");
+    let second = lease_second(d, prefix);
     let agree = serde_json::json!({
         "dispositions": [{"ruleId": "plain", "path": "src.rs", "outcome": "finding"}],
         "findings": [{"ruleId": "plain", "path": "src.rs", "line": 1, "description": "Restating comment."}],
     });
-    assert_eq!(
-        submit(&d, &second.run_id, second.token.expose(), &agree)
-            .await
-            .0,
-        200
-    );
-    let f = findings(&d, &prefix).await;
+    let (status, v) = submit(d, &second.run_id, second.token.expose(), &agree).await;
+    assert_eq!(status, 200, "{v}");
+    let f = findings(d, prefix).await;
     assert_eq!(f[0]["status"], "open");
-    let id = f[0]["findingId"].as_str().unwrap().to_string();
+    f[0]["findingId"].as_str().unwrap().to_string()
+}
+
+/// Commit a fix to `src.rs`, complete the track again and review the new
+/// head: the first run dispositions finding `id` clean. Returns the head.
+async fn fix_and_rereview(
+    d: &Daemon,
+    r: &crate::services::review_test_repo::TestRepo,
+    prefix: &str,
+    id: &str,
+) -> String {
+    use crate::services::review_test_repo::TRACK;
+    let fixed = r.commit_on_feat("src.rs", "fn main() {\n    run();\n}\n");
+    let (status, v) = complete(d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
+    assert_eq!((status, v["appended"].as_bool()), (200, Some(true)), "{v}");
+    assert_eq!(
+        v["job"]["headSha"],
+        fixed.as_str(),
+        "a new job at the new head"
+    );
+    assert_eq!(report_checks(d, TRACK, green_checks()).await.0, 200);
+    let rerun = lease(d, prefix);
+    let (status, claimed) = claim(d, Some(rerun.token.expose()), "first").await;
+    assert_eq!(status, 200, "{claimed}");
+    assert_eq!(claimed["priorFindings"][0]["findingId"], id);
+    let mut body = clean_matrix();
+    body["priorFindings"] = serde_json::json!([
+        {"findingId": id, "outcome": "clean", "span": {"startLine": 1, "endLine": 3}}
+    ]);
+    let (status, v) = submit(d, &rerun.run_id, rerun.token.expose(), &body).await;
+    assert_eq!(status, 200, "{v}");
+    fixed
+}
+
+#[tokio::test]
+async fn ts73_a_fix_commit_resolves_the_finding_and_sign_off_succeeds() {
+    let d = Daemon::start("ok").await;
+    let (r, prefix) = review_project(&d).await;
+    let id = agreed_open_finding(&d, &prefix).await;
     let operator = operator_token(&d);
     let (status, v) = signoff(&d, &operator).await;
     assert_eq!(
@@ -1799,35 +1832,15 @@ async fn ts73_a_fix_commit_resolves_the_finding_and_sign_off_succeeds() {
     );
     assert_eq!(v["reasons"], serde_json::json!(["open-findings"]));
 
-    let fixed = r.commit_on_feat("src.rs", "fn main() {\n    run();\n}\n");
-    let (status, v) = complete(&d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
-    assert_eq!((status, v["appended"].as_bool()), (200, Some(true)), "{v}");
-    assert_eq!(
-        v["job"]["headSha"],
-        fixed.as_str(),
-        "a new job at the new head"
-    );
-    assert_eq!(report_checks(&d, TRACK, green_checks()).await.0, 200);
-    let rerun = lease(&d, &prefix);
-    let (status, claimed) = claim(&d, Some(rerun.token.expose()), "first").await;
-    assert_eq!(status, 200, "{claimed}");
-    assert_eq!(claimed["priorFindings"][0]["findingId"], id.as_str());
-    let mut body = clean_matrix();
-    body["priorFindings"] = serde_json::json!([
-        {"findingId": id, "outcome": "clean", "span": {"startLine": 1, "endLine": 3}}
-    ]);
-    let (status, v) = submit(&d, &rerun.run_id, rerun.token.expose(), &body).await;
-    assert_eq!(status, 200, "{v}");
+    let fixed = fix_and_rereview(&d, &r, &prefix, &id).await;
     assert_eq!(findings(&d, &prefix).await[0]["status"], "resolved");
-    if review_status(&d, &prefix).await["job"]["secondRunPending"] == true {
-        clean_second_run(&d, &prefix).await;
-    }
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["secondRunPending"], true, "{s}");
+    clean_second_run(&d, &prefix).await;
     let s = review_status(&d, &prefix).await;
     assert_eq!(s["job"]["verdict"]["passing"], true, "{s}");
     let (status, v) = signoff(&d, &operator).await;
     assert_eq!(status, 200, "{v}");
     assert_eq!(v["headSha"], fixed.as_str());
-    let records = signoff_records(&d, &prefix);
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].finding_ids, vec![id]);
+    assert_eq!(signoff_records(&d, &prefix)[0].finding_ids, vec![id]);
 }

@@ -228,6 +228,9 @@ pub struct ApiError {
     /// A stable machine-readable code (`operator_required`,
     /// `not_independent`, ...), sent as `code` beside `error`.
     pub code: Option<&'static str>,
+    /// Machine-readable reasons beside the code, such as a refused
+    /// verdict's (`verdict_not_passing`); sent as `reasons` when present.
+    pub reasons: Vec<String>,
 }
 
 impl ApiError {
@@ -236,7 +239,14 @@ impl ApiError {
             status: StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
             message,
             code: None,
+            reasons: Vec::new(),
         }
+    }
+
+    /// This error with `reasons` attached.
+    pub fn with_reasons(mut self, reasons: Vec<String>) -> Self {
+        self.reasons = reasons;
+        self
     }
 
     pub fn coded(status: u16, code: &'static str, message: String) -> Self {
@@ -253,16 +263,20 @@ impl From<LifecycleError> for ApiError {
     }
 }
 
+fn error_body(e: &ApiError) -> serde_json::Value {
+    let mut body = serde_json::json!({ "error": e.message });
+    if let Some(code) = e.code {
+        body["code"] = code.into();
+    }
+    if !e.reasons.is_empty() {
+        body["reasons"] = serde_json::json!(e.reasons);
+    }
+    body
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(match self.code {
-                Some(code) => serde_json::json!({ "error": self.message, "code": code }),
-                None => serde_json::json!({ "error": self.message }),
-            }),
-        )
-            .into_response()
+        (self.status, Json(error_body(&self))).into_response()
     }
 }
 

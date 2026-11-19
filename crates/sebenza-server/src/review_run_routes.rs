@@ -120,7 +120,11 @@ pub async fn decide_finding(
     headers: HeaderMap,
     body: String,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    refuse_run_token(&headers)?;
+    refuse_run_token(
+        &headers,
+        "review.finding.refused",
+        "Deciding a finding needs the operator: run `sebenza-cli review decide` after `sebenza-cli login`.",
+    )?;
     let class = crate::operator_routes::require_operator(
         &state,
         &headers,
@@ -154,8 +158,13 @@ fn decision_json(d: &FindingDecided) -> serde_json::Value {
     })
 }
 
-/// A run token never decides: 403 `operator_required`, audited.
-fn refuse_run_token(headers: &HeaderMap) -> Result<(), ApiError> {
+/// A run token never takes an operator action: 403 `operator_required`,
+/// audited as `audit`, with `hint` naming the operator's command.
+pub(crate) fn refuse_run_token(
+    headers: &HeaderMap,
+    audit: &'static str,
+    hint: &str,
+) -> Result<(), ApiError> {
     let bearer = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -165,17 +174,12 @@ fn refuse_run_token(headers: &HeaderMap) -> Result<(), ApiError> {
         return Ok(());
     }
     tracing::info!(
-        audit = "review.finding.refused",
+        audit,
         credential = "run",
         code = "operator_required",
-        "review finding audit"
+        "operator gate audit"
     );
-    Err(ApiError::coded(
-        403,
-        "operator_required",
-        "Deciding a finding needs the operator: run `sebenza-cli review decide` after `sebenza-cli login`."
-            .into(),
-    ))
+    Err(ApiError::coded(403, "operator_required", hint.to_string()))
 }
 
 /// The decision `body` asks for, once the finding id is well formed.

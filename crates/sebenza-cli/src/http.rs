@@ -638,6 +638,23 @@ impl Http {
         self.read_json(resp).await
     }
 
+    /// `POST /api/tracks/{id}/signoff` — sign off a track through the
+    /// daemon's compare-and-swap gate (operator token).
+    pub async fn sign_off_track(&self, track_id: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/tracks/{}/signoff",
+                self.hub,
+                urlencode(track_id)
+            ))
+            .bearer_auth(crate::login::operator_token()?)
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
     /// `POST /api/findings/{id}/decision` — confirm or reject a finding
     /// the two review runs disagree on (operator token).
     pub async fn decide_finding(&self, finding_id: &str, decision: &str) -> Result<Value> {

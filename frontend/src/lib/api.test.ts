@@ -853,6 +853,7 @@ describe("inbox priority, comments and requests", () => {
       verdict: { passing: false, reasons: ["open-findings"] },
       existingChecksRecorded: false,
       secondRunPending: false,
+      signedOff: false,
       notes: [],
     };
     let seen = recordFetch({ trackId: "t_1", job });

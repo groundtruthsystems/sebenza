@@ -1,7 +1,8 @@
 //! `POST /api/tracks/{id}/complete` (FR-01): `sebenza-agentctl complete`,
 //! `POST /api/review/tracks/{id}/existing-checks` (FR-18): `sebenza-agentctl
-//! review-checks`, and `POST /api/tracks/{id}/plan/approve` (FR-20):
-//! `sebenza-cli track approve-plan`.
+//! review-checks`, `POST /api/tracks/{id}/plan/approve` (FR-20):
+//! `sebenza-cli track approve-plan`, and `POST /api/tracks/{id}/signoff`
+//! (FR-22): `sebenza-cli track signoff`.
 //!
 //! The control token completes a track and reports the results of its
 //! existing sebenza-review checks; it grants nothing else. The caller
@@ -11,8 +12,11 @@
 //! registered in that worktree can be completed. Every completion and refusal
 //! is audited with the credential class, ids and SHAs only.
 //!
-//! Plan approval needs the operator token; the control token gets 403
-//! `operator_required`. The daemon finds the one managed worktree that
+//! Plan approval and sign-off need the operator token; the control token
+//! (and, for sign-off, a run token) gets 403 `operator_required`. Sign-off
+//! is the gate in [`signoff`](crate::services::standards_review::signoff);
+//! it compares the refs the daemon records for the worktree, never refs
+//! from the request. For plan approval the daemon finds the one managed worktree that
 //! registers the track, reads its plan.json at the branch head from git
 //! objects, and records the per-task boundary snapshot in the review log.
 
@@ -21,6 +25,7 @@ use crate::services::completion_reconciler::project_worktrees;
 use crate::services::standards_review::existing_checks::{ExistingChecksBody, failed_checks};
 use crate::services::standards_review::git_pinned::Git;
 use crate::services::standards_review::plan_approval::{ApprovalError, approve_plan};
+use crate::services::standards_review::signoff::{Signoff, SignoffError, SignoffRefs, sign_off};
 use crate::services::track_completion::check_own_track;
 use crate::services::track_completion::{Completion, CompletionError, CompletionTarget};
 use crate::services::tracks_projection::Projected;
@@ -345,17 +350,120 @@ fn audit_approval(target: &CompletionTarget, a: &PlanApproved, class: Credential
     );
 }
 
+/// What a run token is told when it asks to sign off.
+const SIGNOFF_HINT: &str =
+    "Signing off needs the operator: run `sebenza-cli track signoff` after `sebenza-cli login`.";
+
 /// `POST /api/tracks/{id}/signoff` — operator token only.
 pub async fn sign_off_track(
-    State(_state): State<AppState>,
-    Path(_track_id): Path<String>,
-    _headers: HeaderMap,
+    State(state): State<AppState>,
+    Path(track_id): Path<String>,
+    headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    Err(ApiError::new(501, "not implemented".to_string()))
+    crate::review_run_routes::refuse_run_token(&headers, "track.signoff.refused", SIGNOFF_HINT)?;
+    let class = crate::operator_routes::require_operator(
+        &state,
+        &headers,
+        "track.signoff",
+        Some(&track_id),
+    )?;
+    tokio::task::spawn_blocking(move || signoff_blocking(&state, &track_id, class))
+        .await
+        .map_err(|_| ApiError::new(500, "task panicked".to_string()))?
+        .map(Json)
 }
 
-/// The audit line of a sign-off.
-pub(crate) fn audit_signoff(_project: &str, _s: &SignedOff) {}
+/// Sign off the track in the one worktree that registers it, comparing the
+/// refs the daemon records for that worktree.
+fn signoff_blocking(
+    state: &AppState,
+    track_id: &str,
+    class: CredentialClass,
+) -> Result<serde_json::Value, ApiError> {
+    let target = track_worktree(state, track_id)?;
+    let git = Git::open(&target.worktree_path)
+        .map_err(|e| ApiError::coded(500, "signoff_failed", e.to_string()))?;
+    let log = state.completion.log(&target.project_key);
+    match sign_off(&log, &git, &signoff_refs(&target), track_id, class.as_str()) {
+        Ok(done) => {
+            if done.appended {
+                audit_signoff(&target.project_key, &done.record);
+            }
+            Ok(signoff_json(&done))
+        }
+        Err(e) => {
+            let err = signoff_error(e);
+            audit_signoff_refusal(&target, track_id, class, err.code.unwrap_or("error"));
+            Err(err)
+        }
+    }
+}
+
+fn signoff_refs(target: &CompletionTarget) -> SignoffRefs {
+    SignoffRefs {
+        branch: target.branch.clone(),
+        target_branch: target.target_branch.clone(),
+    }
+}
+
+fn signoff_error(e: SignoffError) -> ApiError {
+    let msg = e.to_string();
+    match e {
+        SignoffError::NoVerdict => ApiError::coded(409, "no_verdict", msg),
+        SignoffError::NotPassing(reasons) => {
+            ApiError::coded(409, "verdict_not_passing", msg).with_reasons(reasons)
+        }
+        SignoffError::Stale { .. } => ApiError::coded(409, "stale_verdict", msg),
+        SignoffError::Git(_) => ApiError::coded(503, "refs_unavailable", msg),
+        SignoffError::Log(_) => ApiError::coded(500, "review_log", msg),
+    }
+}
+
+fn signoff_json(done: &Signoff) -> serde_json::Value {
+    let r = &done.record;
+    serde_json::json!({
+        "ok": true,
+        "appended": done.appended,
+        "trackId": r.track_id,
+        "jobId": r.job_id,
+        "headSha": r.head_sha,
+        "baseSha": r.base_sha,
+        "findingIds": r.finding_ids,
+    })
+}
+
+/// The audit line of a sign-off: the same fields as a finding decision's,
+/// with the track's finding ids; never free text.
+pub(crate) fn audit_signoff(project: &str, s: &SignedOff) {
+    tracing::info!(
+        audit = "track.signed_off",
+        credential = %s.credential,
+        project,
+        track = %s.track_id,
+        job = %s.job_id,
+        head = %s.head_sha,
+        base = %s.base_sha,
+        findings = %s.finding_ids.join(","),
+        "track audit"
+    );
+}
+
+fn audit_signoff_refusal(
+    target: &CompletionTarget,
+    track_id: &str,
+    class: CredentialClass,
+    refusal: &str,
+) {
+    tracing::info!(
+        audit = "track.signoff.refused",
+        credential = class.as_str(),
+        project = %target.project_key,
+        branch = %target.branch,
+        track = %track_id,
+        refusal,
+        "track audit"
+    );
+}
 
 #[cfg(test)]
 mod tests {

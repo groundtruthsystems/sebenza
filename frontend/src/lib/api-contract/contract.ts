@@ -89,6 +89,7 @@ import {
   CompleteTrackRequestSchema,
   CompleteTrackResponseSchema,
   ApproveTrackPlanResponseSchema,
+  SignOffTrackResponseSchema,
   DecideFindingRequestSchema,
   DecideFindingResponseSchema,
   RecordExistingChecksRequestSchema,
@@ -192,6 +193,7 @@ export const apiPaths = {
   fetchRegistryFile: "/api/registry/file",
   completeTrack: "/api/tracks/:id/complete",
   approveTrackPlan: "/api/tracks/:id/plan/approve",
+  signOffTrack: "/api/tracks/:id/signoff",
   claimReviewRun: "/api/review-runs/claim",
   submitReviewRun: "/api/review-runs/:id/submit",
   decideFinding: "/api/findings/:id/decision",
@@ -969,6 +971,23 @@ export const apiContract = c.router(
         409: ErrorResponseSchema,
         422: ErrorResponseSchema,
         500: ErrorResponseSchema,
+      },
+    },
+    /** Operator token only; control and run tokens get 403
+     *  operator_required. 409 is no_verdict, verdict_not_passing (with
+     *  `reasons`) or stale_verdict. */
+    signOffTrack: {
+      method: "POST",
+      path: apiPaths.signOffTrack,
+      body: z.object({}).optional(),
+      responses: {
+        200: SignOffTrackResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+        503: ErrorResponseSchema,
       },
     },
     /** Hub-level, run token only: the token's run names the project. */

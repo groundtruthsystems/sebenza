@@ -6,6 +6,8 @@ import ConfirmDialog from "./ConfirmDialog";
 import MarkdownEditor from "./MarkdownEditor";
 import TrackMarkdown from "./TrackMarkdown";
 import { saveDraftBody, type DraftLike } from "./inbox-editor";
+import type { SignOffTrackResponse } from "./api-contract/schemas";
+import { errorMessage } from "./utils";
 
 /** The split architecture docs, in the order their tabs appear. */
 const ARCHITECTURE_TABS = [
@@ -53,6 +55,32 @@ function TabBtn({
   );
 }
 
+/** The operator's sign-off of a completed track, through the daemon's gate.
+ *  A refusal (no verdict, not passing, stale) is shown as the daemon words it. */
+function SignOffControl({ signOff }: { signOff: () => Promise<SignOffTrackResponse> }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState("");
+  const run = async () => {
+    setBusy(true);
+    try {
+      const done = await signOff();
+      setResult(`Signed off at ${done.headSha.slice(0, 7)}`);
+    } catch (err) {
+      setResult(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="ml-auto flex items-center gap-2">
+      {result && <span className="text-[11px] text-muted">{result}</span>}
+      <Btn small variant="cta" onClick={() => void run()} disabled={busy}>
+        Sign off
+      </Btn>
+    </div>
+  );
+}
+
 /** Track "docs" modal — the group's `spec.md`, `design.md`, the split
  *  `<domain>-architecture.md` docs it has, and `test-plan.md` (markdown +
  *  mermaid). An architecture tab appears only when its file exists. The plan is visualized by the board itself + the
@@ -60,15 +88,19 @@ function TabBtn({
  *
  *  With `saveFile`, each doc can be edited in the inbox's markdown editor and
  *  saved explicitly. The save is gated on the hash the doc was loaded at, so an
- *  agent writing the same file is reported as a conflict, never overwritten. */
+ *  agent writing the same file is reported as a conflict, never overwritten.
+ *
+ *  With `signOff`, a completed (`done`) track offers the operator's sign-off. */
 export default function TrackDetail({
   fetchFile,
   saveFile,
+  signOff,
   track,
   onclose,
 }: {
   fetchFile: TrackFileFetcher;
   saveFile?: TrackFileSaver;
+  signOff?: (trackId: string) => Promise<SignOffTrackResponse>;
   track: Track;
   onclose: () => void;
 }) {
@@ -208,6 +240,9 @@ export default function TrackDetail({
               <span className="text-[10px] uppercase px-1.5 py-0.5 rounded border border-edge text-muted">
                 {track.type}
               </span>
+            )}
+            {signOff && track.status === "done" && (
+              <SignOffControl signOff={() => signOff(track.track_id)} />
             )}
           </div>
           <h2 className="text-base mt-1">{track.description}</h2>

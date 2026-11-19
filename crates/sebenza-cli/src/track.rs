@@ -5,6 +5,10 @@
 //! `sebenza-cli track approve-plan <track-id>`: the operator approves the
 //! track's committed plan, and the daemon snapshots each task's edit
 //! boundary. It needs the operator token from `sebenza-cli login`.
+//!
+//! `sebenza-cli track signoff <track-id>`: the operator's final gate. The
+//! daemon signs the track off only while its review verdict passes and the
+//! track ref and merge-base are still the ones reviewed. Operator token too.
 
 use anyhow::{Result, anyhow};
 
@@ -30,6 +34,7 @@ fn usage() -> String {
         "Usage:",
         "  sebenza-cli track complete <track-id> [--worktree-id <id>]",
         "  sebenza-cli track approve-plan <track-id>",
+        "  sebenza-cli track signoff <track-id>",
         "",
         "Completes a track of the current worktree through the daemon: it records the",
         "completion, enqueues the track's standards review and marks it done in",
@@ -39,6 +44,10 @@ fn usage() -> String {
         "approve-plan (operator): approves the track's plan.json as committed at its",
         "branch head and snapshots each task's `files` edit boundary. Run it after",
         "approving the plan's [approval] request. Needs `sebenza-cli login`.",
+        "",
+        "signoff (operator): signs the track off. The daemon refuses with no_verdict,",
+        "verdict_not_passing (and its reasons) or stale_verdict when the track ref or",
+        "its merge-base moved since the review. Needs `sebenza-cli login`.",
     ]
     .join("\n")
 }
@@ -50,8 +59,10 @@ fn parse(args: &[String]) -> Result<Option<TrackCommand>> {
     match sub {
         "--help" | "-h" => Ok(None),
         "complete" => parse_complete(&args[1..]).map(Some),
-        "approve-plan" => parse_approve_plan(&args[1..]).map(Some),
-        "signoff" => Err(anyhow!("todo: phase-6-task-2")),
+        "approve-plan" => one_track("approve-plan", &args[1..])
+            .map(|track_id| Some(TrackCommand::ApprovePlan { track_id })),
+        "signoff" => one_track("signoff", &args[1..])
+            .map(|track_id| Some(TrackCommand::Signoff { track_id })),
         other => Err(anyhow!("Unknown track subcommand: {other}")),
     }
 }
@@ -80,13 +91,12 @@ fn parse_complete(args: &[String]) -> Result<TrackCommand> {
     })
 }
 
-fn parse_approve_plan(args: &[String]) -> Result<TrackCommand> {
+/// The one `<track-id>` subcommand `sub` takes.
+fn one_track(sub: &str, args: &[String]) -> Result<String> {
     match args {
-        [id] if !id.starts_with('-') => Ok(TrackCommand::ApprovePlan {
-            track_id: id.clone(),
-        }),
-        [] => Err(anyhow!("track approve-plan requires a <track-id>")),
-        _ => Err(anyhow!("track approve-plan takes exactly one <track-id>")),
+        [id] if !id.starts_with('-') => Ok(id.clone()),
+        [] => Err(anyhow!("track {sub} requires a <track-id>")),
+        _ => Err(anyhow!("track {sub} takes exactly one <track-id>")),
     }
 }
 
@@ -136,7 +146,7 @@ async fn run_inner(cmd: TrackCommand, port: u16, cwd: &str) -> Result<()> {
             worktree_id,
         } => complete(&track_id, worktree_id, port, cwd).await,
         TrackCommand::ApprovePlan { track_id } => approve_plan(&track_id, port).await,
-        TrackCommand::Signoff { .. } => Err(anyhow!("todo: phase-6-task-2")),
+        TrackCommand::Signoff { track_id } => signoff(&track_id, port).await,
     }
 }
 
@@ -146,8 +156,24 @@ async fn approve_plan(track_id: &str, port: u16) -> Result<()> {
     Ok(())
 }
 
-fn signoff_summary(_track_id: &str, _v: &serde_json::Value) -> String {
-    String::new()
+async fn signoff(track_id: &str, port: u16) -> Result<()> {
+    let signed = Http::new(port).sign_off_track(track_id).await?;
+    println!("{}", signoff_summary(track_id, &signed));
+    Ok(())
+}
+
+fn signoff_summary(track_id: &str, signed: &serde_json::Value) -> String {
+    let verb = if signed["appended"] == true {
+        "signed off"
+    } else {
+        "was already signed off"
+    };
+    let findings = signed["findingIds"].as_array().map_or(0, Vec::len);
+    format!(
+        "Track {track_id} {verb} at {} (base {}); {findings} finding(s) resolved.",
+        signed["headSha"].as_str().unwrap_or("?"),
+        signed["baseSha"].as_str().unwrap_or("?"),
+    )
 }
 
 fn approval_summary(track_id: &str, approved: &serde_json::Value) -> String {

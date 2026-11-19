@@ -131,6 +131,8 @@ pub struct JobStatusView {
     pub verdict: Option<VerdictRecord>,
     pub existing_checks_recorded: bool,
     pub second_run_pending: bool,
+    /// The operator signed this job off through the gate (FR-22).
+    pub signed_off: bool,
     pub notes: Vec<NoteView>,
     /// Why a queued job is not being dispatched, such as
     /// `cli-not-conformant`; the route fills it.
@@ -234,6 +236,7 @@ pub fn job_status(view: &ReviewView, track_id: &str) -> Option<JobStatusView> {
         verdict: job.verdict().cloned(),
         existing_checks_recorded: job.existing_checks.is_some(),
         second_run_pending: job.second_run_pending(),
+        signed_off: view.signoff(&job.id).is_some(),
         notes: job
             .first_submission()
             .map(|s| s.notes.iter().map(note_view).collect())

@@ -53,10 +53,11 @@ flowchart LR
 | `sebenza-agentctl complete` / `POST /tracks/{id}/complete` | control | Log event then projection; idempotent on job key |
 | `POST /tracks/{id}/plan/approve` | operator | Called by the UI or `sebenza-cli` when the operator approves sebenza-plan's `[approval]` request; hashes plan.json at the committed SHA, snapshots per-task boundary; later plan.json edit makes it stale until re-approved |
 | `POST /review-runs/claim` (`kind=first\|second`) | run token (daemon-minted, single-use, in the agent's env; control token refused) | First: manifest, hunks, open prior findings. Second: manifest subset and hunks only, no first-run output |
-| `POST /review-runs/{id}/submit` | run token | Matrix with `clean` span citation per pair; no code excerpts; free text redacted, PHI hit or scanner error rejects; 422 on missing pair or prior finding; daemon-measured breach overrides agent `clean` |
+| `POST /review-runs/{id}/submit` | run token | Matrix with `clean` span citation per pair; no code excerpts; free text redacted, PHI hit or scanner error rejects; 422 on missing pair or prior finding; daemon-measured breach overrides agent `clean`; carries no existing checks |
+| `sebenza-agentctl review-checks` / `POST /api/review/tracks/{id}/existing-checks` | control | The four existing sebenza-review checks, reported from the track's worktree; the latest report re-derives the verdict; none reported is non-passing |
 | (internal) second-run reconcile | n/a | Agree decides; disagree gives `needs-operator-decision`; unfinished second run keeps verdict non-passing |
 | `POST /findings/{id}/decision` | operator | Resolves `needs-operator-decision` |
-| `POST /tracks/{id}/signoff` | operator | CAS on head and merge-base; 409 if moved |
+| `POST /tracks/{id}/signoff` | operator (control, run token: 403 `operator_required`) | Passing verdict, then CAS on head and merge-base in one log transaction; 409 `no_verdict`, `verdict_not_passing` (with reasons) or `stale_verdict` |
 
 ## Decisions
 - Completion is daemon-only: log event first, tracks.json projection second (completed <-> done), reconciler repairs legacy `done` with a `source=reconciled` event under the same job key, so a repeat is a no-op.
