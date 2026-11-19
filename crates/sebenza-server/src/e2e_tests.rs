@@ -921,10 +921,154 @@ async fn review_project(d: &Daemon) -> (crate::services::review_test_repo::TestR
     let r = completion_project(d);
     r.commit_on_main(STYLE, RULES);
     r.merge_main_into_feat();
+    let (status, v) = approve_plan(d, &operator_token(d)).await;
+    assert_eq!(status, 200, "{v}");
     let (status, v) = complete(d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
     assert_eq!(status, 200, "{v}");
     let prefix = d.state.manager.list()[0].prefix.clone();
     (r, prefix)
+}
+
+fn operator_token(d: &Daemon) -> String {
+    d.state
+        .operator
+        .issue_session_at(std::time::SystemTime::now())
+        .0
+}
+
+/// `POST /api/tracks/{TRACK}/plan/approve` with `bearer`.
+async fn approve_plan(d: &Daemon, bearer: &str) -> (u16, serde_json::Value) {
+    use crate::services::review_test_repo::TRACK;
+    let path = format!("/api/tracks/{TRACK}/plan/approve");
+    d.call_as("POST", &path, Some(bearer), None, "").await
+}
+
+fn plan_approvals(d: &Daemon, prefix: &str) -> Vec<common::domain::review_records::PlanApproved> {
+    use common::adapters::review_log::ReviewEventKind;
+    let events = d.state.completion.log(prefix).events().expect("log");
+    events
+        .into_iter()
+        .filter_map(|e| match e.kind {
+            ReviewEventKind::PlanApproved(a) => Some(a),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn ts45_ts64_only_the_operator_token_approves_a_plan() {
+    use crate::services::review_test_repo::{PLAN, TASK, plan_json};
+    let d = Daemon::start("ok").await;
+    let r = completion_project(&d);
+    let committed = plan_json(&[(TASK, Some(&["src.rs"]))]);
+    r.commit_on_feat(PLAN, &committed);
+    let prefix = d.state.manager.list()[0].prefix.clone();
+    let (status, v) = approve_plan(&d, TOKEN).await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (403, Some("operator_required")),
+        "{v}"
+    );
+    assert!(
+        plan_approvals(&d, &prefix).is_empty(),
+        "a refusal records nothing"
+    );
+
+    let (status, v) = approve_plan(&d, &operator_token(&d)).await;
+    assert_eq!(status, 200, "{v}");
+    let want = common::domain::solution::sha256_hex(&committed);
+    assert_eq!(v["planSha256"], want.as_str());
+    assert_eq!(v["headSha"], r.head().as_str());
+    assert_eq!(
+        v["tasks"],
+        serde_json::json!([{"taskId": TASK, "files": ["src.rs"]}])
+    );
+    let approvals = plan_approvals(&d, &prefix);
+    assert_eq!(approvals.len(), 1);
+    assert_eq!(
+        approvals[0].plan_sha256, want,
+        "the boundary hash is the approved plan's"
+    );
+    assert_eq!(approvals[0].credential, "operator_session");
+}
+
+#[tokio::test]
+async fn ts08_a_one_file_track_is_reviewed_on_that_file_only() {
+    use crate::services::review_test_repo::{PLAN, TASK, TRACK, plan_json};
+    use crate::services::standards_review::run_store::tests::{RULES, STYLE, clean};
+    let d = Daemon::start("ok").await;
+    let r = completion_project(&d);
+    r.commit_on_main(STYLE, RULES);
+    r.commit_on_main("lib.rs", "// untouched\nfn lib() {}\n");
+    r.merge_main_into_feat();
+    r.commit_on_feat(PLAN, &plan_json(&[(TASK, Some(&["src.rs"]))]));
+    r.commit_on_feat("src.rs", "fn main() {\n    run();\n}\n");
+    assert_eq!(approve_plan(&d, &operator_token(&d)).await.0, 200);
+    let (status, v) = complete(&d, TRACK, serde_json::json!({"worktreeId": "id-feat"})).await;
+    assert_eq!(status, 200, "{v}");
+    let prefix = d.state.manager.list()[0].prefix.clone();
+
+    let run = lease(&d, &prefix);
+    let (status, v) = claim(&d, Some(run.token.expose()), "first").await;
+    assert_eq!(status, 200, "{v}");
+    let files = v["files"].as_array().expect("files");
+    assert_eq!(files.len(), 1, "{v}");
+    assert_eq!(files[0]["path"], "src.rs");
+    for hunk in files[0]["hunks"].as_array().expect("hunks") {
+        assert_eq!(hunk["anchor"]["path"], "src.rs");
+    }
+    let stub = serde_json::json!({
+        "dispositions": [clean("plain", "src.rs"), {"ruleId": "short", "path": "src.rs", "outcome": "finding"}],
+        "findings": [{"ruleId": "short", "path": "src.rs", "line": 2, "description": "main does too much."}]
+    });
+    let (status, v) = submit(&d, &run.run_id, run.token.expose(), &stub).await;
+    assert_eq!(status, 200, "{v}");
+    let f = d
+        .ok(
+            "GET",
+            &format!("/{prefix}/api/review/tracks/{TRACK}/findings"),
+            None,
+        )
+        .await;
+    let findings = f["findings"].as_array().expect("findings");
+    assert_eq!(
+        findings.len(),
+        1,
+        "no finding or edit outside the file: {f}"
+    );
+    assert_eq!(findings[0]["ruleId"], "short");
+    assert_eq!(findings[0]["anchor"]["path"], "src.rs");
+    assert_eq!(findings[0]["anchor"]["line"], 2);
+    let lib = crate::services::review_test_repo::git(&r.worktree, &["show", "HEAD:lib.rs"]);
+    assert_eq!(
+        lib, "// untouched\nfn lib() {}",
+        "the comment in the untouched file stays"
+    );
+}
+
+#[tokio::test]
+async fn ts12_an_untrailered_commit_makes_the_job_scope_unproven() {
+    let d = Daemon::start("ok").await;
+    let (r, prefix) = review_project(&d).await;
+    let bare = r.commit_on_feat_with("notes.txt", "x\n", "hand-made");
+    let body = serde_json::json!({"worktreeId": "id-feat"});
+    assert_eq!(
+        complete(&d, crate::services::review_test_repo::TRACK, body)
+            .await
+            .0,
+        200
+    );
+    let run = lease(&d, &prefix);
+    let (status, v) = claim(&d, Some(run.token.expose()), "first").await;
+    assert_eq!(
+        (status, v["code"].as_str()),
+        (409, Some("scope_unproven")),
+        "{v}"
+    );
+    let s = review_status(&d, &prefix).await;
+    assert_eq!(s["job"]["state"], "scope-unproven", "{s}");
+    assert_eq!(s["job"]["blockers"][0]["reason"], "missing-trailer");
+    assert_eq!(s["job"]["blockers"][0]["commit"], bare.as_str());
 }
 
 fn lease(d: &Daemon, prefix: &str) -> crate::services::standards_review::run_store::LeasedRun {

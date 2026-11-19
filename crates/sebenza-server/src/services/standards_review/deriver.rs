@@ -8,11 +8,13 @@
 //!    withdraws a rule and the finding stays open.
 //! 2. `resolved-out-of-scope` when its path, carried through the rename
 //!    map, has no hunk in this job's scope diff.
-//! 3. `resolved` when the run dispositioned it `clean` and no reported
+//! 3. `resolved` when it is a daemon `out-of-scope-edit` finding that no
+//!    boundary finding of this job continues: its edit is now in bounds.
+//! 4. `resolved` when the run dispositioned it `clean` and no reported
 //!    finding continues it.
 //!
-//! Reported and measured findings that continue no open prior finding are
-//! opened; the [`matcher`](super::matcher) never offers a terminal one, so a
+//! Reported, measured and boundary findings that continue no open prior
+//! finding are opened; the [`matcher`](super::matcher) never offers a terminal one, so a
 //! regression is a new finding. A `standards_change` marker raises one
 //! `standards-change` finding unless one is still open.
 //!
@@ -33,6 +35,8 @@ use std::collections::BTreeSet;
 
 /// The reserved rule id of the daemon's standards-change finding.
 pub const STANDARDS_CHANGE_RULE: &str = "standards-change";
+/// The reserved rule id of a change outside its task's edit boundary.
+pub const OUT_OF_SCOPE_EDIT_RULE: &str = "out-of-scope-edit";
 
 /// Verdict reason: a finding is open.
 pub const OPEN_FINDINGS: &str = "open-findings";
@@ -65,6 +69,17 @@ pub struct MeasuredFinding {
     pub description: String,
 }
 
+/// An in-scope file changed outside its commit's task boundary, as the
+/// scope proof found it. Its anchor follows the anchor rules of its first
+/// hunk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundaryFinding {
+    pub path: String,
+    pub anchor: AnchorRecord,
+    /// Daemon-written, never agent text.
+    pub description: String,
+}
+
 /// Everything one derivation reads.
 #[derive(Debug, Clone)]
 pub struct DeriveInputs<'a> {
@@ -79,6 +94,7 @@ pub struct DeriveInputs<'a> {
     pub priors: &'a [PriorFinding],
     pub submission: &'a ValidSubmission,
     pub measured_findings: &'a [MeasuredFinding],
+    pub boundary_findings: &'a [BoundaryFinding],
     pub second_run_pending: bool,
     /// Failed existing-check ids; `None` when none were recorded.
     pub existing_checks: Option<&'a [String]>,
@@ -121,14 +137,20 @@ pub fn derive(inputs: &DeriveInputs, mut new_id: impl FnMut() -> String) -> Deri
     }
 }
 
-/// Reported then measured findings, without repeats.
+/// Reported, measured, then boundary findings, without repeats.
 fn claims_of(inputs: &DeriveInputs) -> Vec<(Claim, FindingOrigin)> {
-    let measured = inputs.measured_findings.iter().map(|m| Claim {
-        rule_id: m.rule_id.clone(),
-        path: m.path.clone(),
-        line: m.line,
-        text_hash: text_hash(&m.description),
-        description: m.description.clone(),
+    let measured = inputs
+        .measured_findings
+        .iter()
+        .map(|m| daemon_claim(&m.rule_id, &m.path, m.line, &m.description));
+    let boundary = inputs.boundary_findings.iter().map(|b| {
+        let claim = daemon_claim(
+            OUT_OF_SCOPE_EDIT_RULE,
+            &b.path,
+            b.anchor.line,
+            &b.description,
+        );
+        (claim, FindingOrigin::Boundary)
     });
     let all = inputs
         .submission
@@ -136,10 +158,21 @@ fn claims_of(inputs: &DeriveInputs) -> Vec<(Claim, FindingOrigin)> {
         .iter()
         .cloned()
         .map(|c| (c, FindingOrigin::Agent))
-        .chain(measured.map(|c| (c, FindingOrigin::Measured)));
+        .chain(measured.map(|c| (c, FindingOrigin::Measured)))
+        .chain(boundary);
     let mut seen = BTreeSet::new();
     all.filter(|(c, _)| seen.insert((c.rule_id.clone(), c.path.clone(), c.text_hash.clone())))
         .collect()
+}
+
+fn daemon_claim(rule_id: &str, path: &str, line: u32, description: &str) -> Claim {
+    Claim {
+        rule_id: rule_id.to_string(),
+        path: path.to_string(),
+        line,
+        text_hash: text_hash(description),
+        description: description.to_string(),
+    }
 }
 
 /// For each claim, the index of the prior finding it continues.
@@ -175,6 +208,8 @@ fn prior_transition(inputs: &DeriveInputs, p: &PriorFinding) -> Option<Transitio
         (FindingStatus::RuleWithdrawn, "rule-withdrawn")
     } else if !inputs.scope_paths.contains(&p.path_at_head) {
         (FindingStatus::ResolvedOutOfScope, "out-of-scope")
+    } else if r.rule_id == OUT_OF_SCOPE_EDIT_RULE {
+        (FindingStatus::Resolved, "inside-boundary")
     } else if prior_outcome(inputs, &r.finding_id) == Some(Outcome::Clean) {
         (FindingStatus::Resolved, "verified-clean")
     } else {
@@ -209,15 +244,29 @@ fn finding_record(
         track_id: inputs.track_id.to_string(),
         job_id: inputs.job_id.to_string(),
         rule_id: claim.rule_id.clone(),
-        anchor: AnchorRecord {
+        anchor: anchor_of(inputs, claim, origin),
+        text_hash: claim.text_hash.clone(),
+        description: claim.description.clone(),
+        origin,
+    }
+}
+
+/// A boundary finding keeps its hunk's anchor; anything else anchors on
+/// the head side at the job's head.
+fn anchor_of(inputs: &DeriveInputs, claim: &Claim, origin: FindingOrigin) -> AnchorRecord {
+    let boundary = inputs
+        .boundary_findings
+        .iter()
+        .filter(|_| origin == FindingOrigin::Boundary)
+        .find(|b| b.path == claim.path && b.description == claim.description);
+    match boundary {
+        Some(b) => b.anchor.clone(),
+        None => AnchorRecord {
             path: claim.path.clone(),
             line: claim.line,
             side: AnchorSide::Head,
             sha: inputs.head_sha.to_string(),
         },
-        text_hash: claim.text_hash.clone(),
-        description: claim.description.clone(),
-        origin,
     }
 }
 
@@ -307,6 +356,7 @@ mod tests {
         priors: Vec<PriorFinding>,
         submission: ValidSubmission,
         measured: Vec<MeasuredFinding>,
+        boundary: Vec<BoundaryFinding>,
         standards_change: Option<Vec<String>>,
         second_run_pending: bool,
         existing_checks: Option<Vec<String>>,
@@ -334,6 +384,7 @@ mod tests {
             priors: vec![],
             submission: ValidSubmission::default(),
             measured: vec![],
+            boundary: vec![],
             standards_change: None,
             second_run_pending: false,
             existing_checks: Some(vec![]),
@@ -353,6 +404,7 @@ mod tests {
                 priors: &f.priors,
                 submission: &f.submission,
                 measured_findings: &f.measured,
+                boundary_findings: &f.boundary,
                 second_run_pending: f.second_run_pending,
                 existing_checks: f.existing_checks.as_deref(),
             },
@@ -578,5 +630,55 @@ mod tests {
         let mut f = fixture();
         f.existing_checks = Some(vec!["coverage".into()]);
         assert_eq!(run(&f).verdict.reasons, vec![EXISTING_CHECKS_FAILED]);
+    }
+
+    fn out_of_bounds(path: &str) -> BoundaryFinding {
+        BoundaryFinding {
+            path: path.into(),
+            anchor: AnchorRecord {
+                path: path.into(),
+                line: 7,
+                side: AnchorSide::Base,
+                sha: "base".into(),
+            },
+            description: format!("{path} was changed outside its task's boundary."),
+        }
+    }
+
+    #[test]
+    fn ts44_a_boundary_finding_opens_with_its_hunk_anchor() {
+        let mut f = fixture();
+        f.boundary = vec![out_of_bounds("src/a.rs")];
+        let d = run(&f);
+        assert_eq!(d.opened.len(), 1);
+        let opened = &d.opened[0];
+        assert_eq!(opened.rule_id, OUT_OF_SCOPE_EDIT_RULE);
+        assert_eq!(opened.origin, FindingOrigin::Boundary);
+        assert_eq!(
+            opened.anchor, f.boundary[0].anchor,
+            "a deletion keeps its base anchor"
+        );
+        assert_eq!(d.verdict.reasons, vec![OPEN_FINDINGS]);
+    }
+
+    #[test]
+    fn ts59_a_boundary_finding_continues_until_its_edit_is_in_bounds() {
+        let mut f = fixture();
+        let b = out_of_bounds("src/a.rs");
+        let mut prior = open_prior("f1", OUT_OF_SCOPE_EDIT_RULE, "src/a.rs");
+        prior.finding.record.text_hash = text_hash(&b.description);
+        prior.finding.record.origin = FindingOrigin::Boundary;
+        prior.rule_in_prior_manifest = false;
+        f.priors = vec![prior];
+        f.boundary = vec![b];
+        let d = run(&f);
+        assert!(d.opened.is_empty() && d.transitions.is_empty(), "{d:?}");
+        assert!(!d.verdict.passing);
+        f.boundary.clear();
+        let d = run(&f);
+        assert_eq!(d.transitions.len(), 1);
+        assert_eq!(d.transitions[0].to, FindingStatus::Resolved);
+        assert_eq!(d.transitions[0].cause, "inside-boundary");
+        assert!(d.verdict.passing, "{:?}", d.verdict);
     }
 }

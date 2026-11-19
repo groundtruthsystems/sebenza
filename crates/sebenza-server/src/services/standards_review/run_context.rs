@@ -1,18 +1,21 @@
 //! What a run reads, resolved from pinned git objects before any lock: the
-//! job's inputs, the rename maps that carry prior findings to its head, the
-//! prior findings themselves and the matrix a submission must cover.
+//! job's inputs, its scope proof, the rename maps that carry prior findings
+//! to its head, the prior findings themselves and the matrix a submission
+//! must cover.
 //!
 //! The in-scope files of the matrix are the scope diff's files with hunks,
 //! except binary and deleted files and anything under `.ai/sebenza/`, whose
 //! edits are the daemon's `standards-change` finding rather than a rule
 //! review.
 
-use super::deriver::{PriorFinding, STANDARDS_CHANGE_RULE};
+use super::deriver::{OUT_OF_SCOPE_EDIT_RULE, PriorFinding, STANDARDS_CHANGE_RULE};
 use super::git_pinned::Git;
 use super::jobs::{Finding, Job, ReviewView};
 use super::matcher::{RenameMap, rename_map};
+use super::reasons::Blocker;
 use super::resolver::{ResolveError, ReviewInputs, resolve};
 use super::scope::{DiffFile, FileStatus, ReviewLimits, SnapshotPins};
+use super::scope_proof::{ScopeProof, prove_scope};
 use super::standards_docs::WORKSPACE;
 use super::submission::Matrix;
 use common::domain::review_records::{FindingOrigin, FindingStatus, RunKind};
@@ -23,6 +26,8 @@ use std::path::Path;
 #[derive(Debug, Clone)]
 pub struct RunContext {
     pub inputs: ReviewInputs,
+    /// Whether the commits are the track's own, and what left the boundary.
+    pub scope: ScopeProof,
     /// Every non-terminal finding of the track, carried to this head.
     pub priors: Vec<PriorFinding>,
 }
@@ -36,6 +41,8 @@ pub fn resolve_context(
 ) -> Result<RunContext, ResolveError> {
     let git = job_git(job)?;
     let inputs = resolve(&git, &job_pins(job), limits)?;
+    let track_id = &job.completion.track_id;
+    let scope = prove_scope(&git, track_id, &inputs, view.plan_approval(track_id))?;
     let open: Vec<&Finding> = view
         .track_findings(&job.completion.track_id)
         .into_iter()
@@ -47,7 +54,11 @@ pub fn resolve_context(
         .into_iter()
         .map(|f| prior_finding(view, f, &renames))
         .collect();
-    Ok(RunContext { inputs, priors })
+    Ok(RunContext {
+        inputs,
+        scope,
+        priors,
+    })
 }
 
 fn prior_finding(
@@ -89,6 +100,19 @@ pub fn job_git(job: &Job) -> Result<Git, ResolveError> {
 }
 
 impl RunContext {
+    /// Every reason the job cannot pass whatever a run finds, sorted.
+    pub fn blockers(&self) -> Vec<Blocker> {
+        let mut all: Vec<Blocker> = self
+            .inputs
+            .blockers
+            .iter()
+            .chain(&self.scope.blockers)
+            .cloned()
+            .collect();
+        all.sort();
+        all
+    }
+
     /// The manifest's rule ids.
     pub fn rule_ids(&self) -> BTreeSet<String> {
         self.inputs
@@ -165,7 +189,7 @@ impl RunContext {
 }
 
 fn is_reserved(rule_id: &str) -> bool {
-    rule_id == STANDARDS_CHANGE_RULE
+    rule_id == STANDARDS_CHANGE_RULE || rule_id == OUT_OF_SCOPE_EDIT_RULE
 }
 
 /// Rename maps from each anchor SHA to `head`, keyed by anchor SHA.
@@ -231,6 +255,7 @@ mod tests {
                 standards_change: None,
                 blockers: vec![],
             },
+            scope: ScopeProof::default(),
             priors: vec![],
         }
     }

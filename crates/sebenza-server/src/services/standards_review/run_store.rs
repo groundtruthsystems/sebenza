@@ -14,9 +14,10 @@ use super::free_text::TextScanner;
 use super::jobs::{Job, JobState, ReviewView, Run};
 use super::reasons::Blocker;
 use super::resolver::ResolveError;
-use super::run_context::{RunContext, resolve_context};
+use super::run_context::{RunContext, job_git, job_pins, resolve_context};
 use super::run_token::{RunToken, hash_token};
 use super::scope::ReviewLimits;
+use super::scope_proof::prove_pins;
 use super::submission::{Rejection, ValidSubmission, validate};
 use common::adapters::review_log::{ReviewEventKind, ReviewLog};
 use common::domain::review_records::{
@@ -180,8 +181,8 @@ impl ReviewRuns {
     }
 
     /// Check `token` for a claim of `kind` and resolve the run's inputs. A
-    /// blocked input ends the run without an attempt and makes the job
-    /// `standards-unavailable`.
+    /// blocked input or unproven scope ends the run without an attempt and
+    /// makes the job `standards-unavailable` or `scope-unproven`.
     pub fn claim(
         &self,
         project_key: &str,
@@ -192,8 +193,7 @@ impl ReviewRuns {
         let expect = Expect::Kind(kind);
         let view = self.view(project_key)?;
         let (run, job) = authenticate(&view, token, &expect, now)?;
-        let context = resolve_context(&view, job, &self.settings.limits)?;
-        self.refuse_blocked(project_key, token, &expect, now, &context)?;
+        let context = self.context(project_key, token, &expect, now, (&view, job))?;
         Ok(Claimed {
             run: run.clone(),
             job: job.clone(),
@@ -214,8 +214,7 @@ impl ReviewRuns {
         let expect = Expect::RunId(run_id);
         let view = self.view(project_key)?;
         let (run, job) = authenticate(&view, token, &expect, now)?;
-        let context = resolve_context(&view, job, &self.settings.limits)?;
-        self.refuse_blocked(project_key, token, &expect, now, &context)?;
+        let context = self.context(project_key, token, &expect, now, (&view, job))?;
         let matrix = context.matrix(run.leased.kind);
         match validate(body, &matrix, self.scanner.as_ref()) {
             Ok(valid) => {
@@ -254,19 +253,38 @@ impl ReviewRuns {
         })
     }
 
-    /// End the run as blocked when its inputs are.
+    /// Prove the job's pins, then resolve its context and prove its scope,
+    /// ending the run as blocked at the first step that finds a blocker.
+    fn context(
+        &self,
+        project_key: &str,
+        token: &str,
+        expect: &Expect,
+        now: u64,
+        (view, job): (&ReviewView, &Job),
+    ) -> Result<RunContext, RunError> {
+        let git = job_git(job)?;
+        let pins =
+            prove_pins(&git, &job_pins(job), &job.completion.branch).map_err(ResolveError::from)?;
+        self.refuse_blocked(project_key, token, expect, now, &pins)?;
+        let context = resolve_context(view, job, &self.settings.limits)?;
+        self.refuse_blocked(project_key, token, expect, now, &context.blockers())?;
+        Ok(context)
+    }
+
+    /// End the run as blocked when there are `blockers`.
     fn refuse_blocked(
         &self,
         project_key: &str,
         token: &str,
         expect: &Expect,
         now: u64,
-        context: &RunContext,
+        blockers: &[Blocker],
     ) -> Result<(), RunError> {
-        if !context.inputs.is_blocked() {
+        if blockers.is_empty() {
             return Ok(());
         }
-        let blockers = blocker_records(&context.inputs.blockers);
+        let blockers = blocker_records(blockers);
         let event = |r: &Run| {
             ReviewEventKind::JobBlocked(JobBlocked {
                 job_id: r.leased.job_id.clone(),
@@ -341,7 +359,7 @@ fn leasable(view: &ReviewView, job: &Job) -> bool {
     view.open_run(&job.id).is_none()
         && !matches!(
             view.state(job),
-            JobState::ReviewFailed | JobState::StandardsUnavailable
+            JobState::ReviewFailed | JobState::StandardsUnavailable | JobState::ScopeUnproven
         )
 }
 
@@ -405,6 +423,7 @@ fn blocker_records(blockers: &[Blocker]) -> Vec<BlockerRecord> {
             reason: kebab(serde_json::to_value(b.reason).unwrap_or_default()),
             path: b.path.clone(),
             line: b.line,
+            commit: b.commit.clone(),
         })
         .collect()
 }
@@ -426,6 +445,7 @@ fn derive_for(job: &Job, context: &RunContext, valid: &ValidSubmission) -> Deriv
             priors: &context.priors,
             submission: valid,
             measured_findings: &measured,
+            boundary_findings: &context.scope.out_of_scope,
             second_run_pending,
             existing_checks: job.existing_checks.as_deref(),
         },
@@ -493,8 +513,12 @@ pub fn now_secs() -> u64 {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::services::review_test_repo::{TRACK, TestRepo, git};
+    use crate::services::review_test_repo::{
+        PLAN, TASK, TRACK, TestRepo, git, plan_json, trailers,
+    };
     use crate::services::standards_review::free_text::ContentScanner;
+    use crate::services::standards_review::git_pinned::Git;
+    use crate::services::standards_review::plan_approval::approve_plan;
     use crate::services::track_completion::{CompletionTarget, TrackCompletionService};
     use common::domain::review_records::FindingStatus;
     use common::domain::solution::CredentialClass;
@@ -542,10 +566,21 @@ pub(crate) mod tests {
             }
         }
 
+        /// Approve the plan as committed now, then complete the track.
         pub(crate) fn complete(&self) {
+            self.approve();
+            self.complete_unapproved();
+        }
+
+        pub(crate) fn complete_unapproved(&self) {
             self.completion
                 .complete(&target(&self.r), TRACK, CredentialClass::Control)
                 .unwrap();
+        }
+
+        pub(crate) fn approve(&self) {
+            let git = Git::open(&self.r.worktree).unwrap();
+            approve_plan(&self.runs.log("proj"), &git, TRACK, "feat", "operator").unwrap();
         }
 
         pub(crate) fn lease(&self) -> LeasedRun {
@@ -891,7 +926,8 @@ pub(crate) mod tests {
     fn ts32_a_renamed_file_keeps_its_finding_id() {
         let (e, id) = with_open_finding("store-ts32");
         git(&e.r.worktree, &["mv", "src/a.rs", "src/b.rs"]);
-        git(&e.r.worktree, &["commit", "-q", "-m", "rename"]);
+        let t = trailers(TRACK, TASK);
+        git(&e.r.worktree, &["commit", "-q", "-m", "rename", "-m", &t]);
         let run = next_job(&e);
         let c = e
             .runs
@@ -1024,6 +1060,145 @@ pub(crate) mod tests {
     }
 
     /// Run `f` with a capturing subscriber; returns everything it logged.
+    /// Claim the latest lease and expect it blocked; the blocker records.
+    fn claim_blocked(e: &Env, run: &LeasedRun) -> Vec<BlockerRecord> {
+        match e
+            .runs
+            .claim("proj", run.token.expose(), RunKind::First, NOW + 1)
+        {
+            Err(RunError::Blocked(b)) => b,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unapproved_plan_makes_the_job_scope_unproven_without_an_attempt() {
+        let e = Env::new("store-unapproved");
+        e.complete_unapproved();
+        let run = e.lease();
+        let b = claim_blocked(&e, &run);
+        assert_eq!(
+            (b[0].code.as_str(), b[0].reason.as_str()),
+            ("scope-unproven", "plan-not-approved")
+        );
+        assert_eq!(e.job_state(), JobState::ScopeUnproven);
+        assert_eq!(
+            e.view()
+                .latest_job(TRACK)
+                .unwrap()
+                .failures_of(RunKind::First),
+            0
+        );
+        assert!(e.runs.lease_next("proj", NOW + 2).unwrap().is_none());
+    }
+
+    #[test]
+    fn ts12_an_untrailered_commit_blocks_the_claim_naming_the_commit() {
+        let e = Env::new("store-ts12");
+        let bare =
+            e.r.commit_on_feat_with("notes.txt", "x\n", "hand-made commit");
+        e.complete();
+        let run = e.lease();
+        let b = claim_blocked(&e, &run);
+        assert_eq!(b.len(), 1, "{b:?}");
+        assert_eq!(b[0].reason, "missing-trailer");
+        assert_eq!(b[0].commit.as_deref(), Some(bare.as_str()));
+        assert_eq!(e.job_state(), JobState::ScopeUnproven);
+    }
+
+    #[test]
+    fn ts15_a_head_moved_off_the_branch_blocks_the_claim() {
+        let e = Env::new("store-ts15");
+        e.complete();
+        let head = e.r.head();
+        git(&e.r.worktree, &["reset", "-q", "--hard", "HEAD~1"]);
+        let run = e.lease();
+        let b = claim_blocked(&e, &run);
+        assert_eq!(b[0].reason, "head-off-branch");
+        assert_eq!(b[0].commit.as_deref(), Some(head.as_str()));
+    }
+
+    #[test]
+    fn ts16_a_rebase_keeping_trailers_holds_scope_and_carries_findings() {
+        let (e, id) = with_open_finding("store-ts16");
+        e.r.commit_on_main("main.rs", "fn m() {}\n");
+        git(&e.r.worktree, &["checkout", "-q", "--", "."]);
+        git(&e.r.worktree, &["rebase", "-q", "main"]);
+        let run = next_job(&e);
+        let c = e
+            .runs
+            .claim("proj", run.token.expose(), RunKind::First, NOW + 1)
+            .expect("scope holds after the rebase");
+        assert!(c.context.blockers().is_empty());
+        let mut body = with_finding(
+            &["src.rs", "src/a.rs"],
+            "src/a.rs",
+            "Function a is too long.",
+        );
+        body["priorFindings"] = json!([{"findingId": id, "outcome": "finding"}]);
+        let ok = e.submit(&run, &body).unwrap();
+        assert_eq!(ok.findings_opened, 0, "the same finding id is carried");
+        assert_eq!(
+            ok.verdict.reasons,
+            vec!["open-findings", "existing-checks-missing"]
+        );
+        assert_eq!(status_of(&e, &id), FindingStatus::Open);
+    }
+
+    #[test]
+    fn ts44_ts59_out_of_bounds_and_stale_edits_become_daemon_findings() {
+        let e = Env::new("store-ts44");
+        e.r.commit_on_feat(PLAN, &plan_json(&[(TASK, Some(&["src.rs"]))]));
+        e.complete();
+        let run = e.lease();
+        let c = e
+            .runs
+            .claim("proj", run.token.expose(), RunKind::First, NOW + 1)
+            .unwrap();
+        assert!(
+            c.context.matrix(RunKind::First).priors.is_empty(),
+            "boundary findings are the daemon's, not the run's"
+        );
+        let ok = e.submit(&run, &all_clean(&["src.rs", "src/a.rs"])).unwrap();
+        assert_eq!(ok.findings_opened, 1);
+        let v = e.view();
+        let f = v.track_findings(TRACK);
+        assert_eq!(f[0].record.rule_id, "out-of-scope-edit");
+        assert_eq!(f[0].record.anchor.path, "src/a.rs");
+        let first = f[0].record.finding_id.clone();
+
+        e.r.commit_on_feat(PLAN, &plan_json(&[(TASK, Some(&["src.rs", "src/"]))]));
+        e.complete_unapproved();
+        let run = e.lease();
+        e.submit(&run, &all_clean(&["src.rs", "src/a.rs"])).unwrap();
+        let v = e.view();
+        let stale: Vec<_> = v
+            .track_findings(TRACK)
+            .into_iter()
+            .filter(|f| f.status == FindingStatus::Open)
+            .collect();
+        assert_eq!(
+            stale.len(),
+            2,
+            "every in-scope file is out of bounds: {stale:?}"
+        );
+        assert!(stale.iter().all(|f| f.record.description.contains("stale")));
+
+        e.approve();
+        e.r.commit_on_feat("src/a.rs", "fn a() { more(); }\n");
+        let run = next_job(&e);
+        let ok = e.submit(&run, &all_clean(&["src.rs", "src/a.rs"])).unwrap();
+        assert_eq!(ok.findings_opened, 0);
+        let v = e.view();
+        assert!(
+            v.track_findings(TRACK)
+                .iter()
+                .all(|f| f.status == FindingStatus::Resolved),
+            "re-approval clears them"
+        );
+        assert_eq!(v.finding(&first).unwrap().status, FindingStatus::Resolved);
+    }
+
     pub(crate) fn capture_logs<T>(f: impl FnOnce() -> T) -> String {
         use std::sync::Mutex;
         #[derive(Clone, Default)]

@@ -1,11 +1,42 @@
 //! Test fixture: a real git repository with a `main` branch holding a Sebenza
-//! workspace, and a linked worktree on `feat` carrying one track.
+//! workspace, and a linked worktree on `feat` carrying one track. Track
+//! commits carry the `Sebenza-Track` and `Sebenza-Task` trailers, and the
+//! track's committed plan gives its one task a boundary covering everything.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub const TRACK: &str = "t_20261118";
 pub const OTHER_TRACK: &str = "o_20261101";
+pub const TASK: &str = "task-1";
+/// Where the track's plan.json is committed.
+pub const PLAN: &str = ".ai/sebenza/tracks/t_20261118/plan.json";
+
+/// The trailers of a commit on `track` for `task`.
+pub fn trailers(track: &str, task: &str) -> String {
+    format!("Sebenza-Track: {track}\nSebenza-Task: {task}")
+}
+
+/// A plan.json for `TRACK` with one phase of `tasks`, each given as
+/// (task id, `files` globs or `None` for no `files` key).
+pub fn plan_json(tasks: &[(&str, Option<&[&str]>)]) -> String {
+    let tasks: Vec<serde_json::Value> = tasks
+        .iter()
+        .map(|(id, files)| {
+            let mut t = serde_json::json!({"id": id, "name": id, "status": "backlog"});
+            if let Some(files) = files {
+                t["files"] = serde_json::json!(files);
+            }
+            t
+        })
+        .collect();
+    let plan = serde_json::json!({
+        "$schema": "sebenza-plan-v1",
+        "track_id": TRACK,
+        "phases": [{"id": "phase-1", "name": "P1", "status": "doing", "tasks": tasks}],
+    });
+    format!("{}\n", serde_json::to_string_pretty(&plan).unwrap())
+}
 
 pub struct TestRepo {
     pub base: PathBuf,
@@ -106,8 +137,8 @@ impl TestRepo {
             &tracks_json("doing", "feat"),
         );
         write(&worktree, "src.rs", "fn main() {}\n");
-        git(&worktree, &["add", "-A"]);
-        git(&worktree, &["commit", "-q", "-m", "feat work"]);
+        write(&worktree, PLAN, &plan_json(&[(TASK, Some(&["**"]))]));
+        commit_all(&worktree, "feat work");
         TestRepo {
             base,
             repo: repo.canonicalize().unwrap(),
@@ -138,6 +169,15 @@ impl TestRepo {
     /// Commit `content` at `rel` on the track branch.
     pub fn commit_on_feat(&self, rel: &str, content: &str) -> String {
         self.commit_bytes_on(&self.worktree, rel, content.as_bytes())
+    }
+
+    /// Commit `content` at `rel` on the track branch with `message` as the
+    /// whole commit message, trailers included or not.
+    pub fn commit_on_feat_with(&self, rel: &str, content: &str, message: &str) -> String {
+        write(&self.worktree, rel, content);
+        git(&self.worktree, &["add", "-A"]);
+        git(&self.worktree, &["commit", "-q", "-m", message]);
+        self.head()
     }
 
     /// Commit raw `bytes` at `rel` on `main`.
@@ -200,7 +240,8 @@ impl TestRepo {
 
 fn commit_all(dir: &Path, msg: &str) -> String {
     git(dir, &["add", "-A"]);
-    git(dir, &["commit", "-q", "-m", msg]);
+    let trailers = trailers(TRACK, TASK);
+    git(dir, &["commit", "-q", "-m", msg, "-m", &trailers]);
     git(dir, &["rev-parse", "HEAD"])
 }
 

@@ -1,6 +1,6 @@
 //! Why a review job's inputs cannot yield a passing verdict. Every blocker
-//! carries a top-level code (`standards-unavailable` or `cap-exceeded`) and
-//! a specific reason, both stable kebab-case strings.
+//! carries a top-level code (`standards-unavailable`, `cap-exceeded` or
+//! `scope-unproven`) and a specific reason, both stable kebab-case strings.
 
 use serde::Serialize;
 
@@ -12,6 +12,8 @@ pub enum BlockCode {
     StandardsUnavailable,
     /// The review inputs exceed a configured size cap.
     CapExceeded,
+    /// The track's commits cannot be proven to be its own (FR-09).
+    ScopeUnproven,
 }
 
 /// The specific cause of a blocker.
@@ -35,6 +37,20 @@ pub enum Reason {
     BlobTooLarge,
     DiffTooLarge,
     TooManyHunks,
+    /// A change commit lacks a `Sebenza-Track` or `Sebenza-Task` trailer.
+    MissingTrailer,
+    /// A change commit names another track.
+    ForeignTrailer,
+    /// A change commit names a task the approved plan does not have.
+    UnknownTask,
+    /// A merge whose second parent is not reachable from the target.
+    ForeignMerge,
+    /// The base commit is missing or not an ancestor of the head.
+    MissingBase,
+    /// The head is not reachable from the track's branch.
+    HeadOffBranch,
+    /// The operator has not approved the track's plan.
+    PlanNotApproved,
 }
 
 impl Reason {
@@ -44,6 +60,13 @@ impl Reason {
             Reason::BlobTooLarge | Reason::DiffTooLarge | Reason::TooManyHunks => {
                 BlockCode::CapExceeded
             }
+            Reason::MissingTrailer
+            | Reason::ForeignTrailer
+            | Reason::UnknownTask
+            | Reason::ForeignMerge
+            | Reason::MissingBase
+            | Reason::HeadOffBranch
+            | Reason::PlanNotApproved => BlockCode::ScopeUnproven,
             _ => BlockCode::StandardsUnavailable,
         }
     }
@@ -58,6 +81,9 @@ pub struct Blocker {
     pub path: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
+    /// The commit a scope blocker is about.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
 }
 
 impl Blocker {
@@ -68,6 +94,7 @@ impl Blocker {
             reason,
             path: Some(path.to_string()),
             line: None,
+            commit: None,
         }
     }
 
@@ -86,6 +113,15 @@ impl Blocker {
             reason,
             path: None,
             line: None,
+            commit: None,
+        }
+    }
+
+    /// A blocker about one commit.
+    pub fn at_commit(reason: Reason, commit: &str) -> Blocker {
+        Blocker {
+            commit: Some(commit.to_string()),
+            ..Blocker::whole(reason)
         }
     }
 }

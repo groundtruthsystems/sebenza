@@ -4,15 +4,16 @@
 //! against a job, one kind at a time; an attempt is a run that ends without
 //! an accepted submission. The fold is idempotent: a lease is applied once
 //! per (job, kind, attempt), and an attempt failure, a block or a
-//! submission only ends the run whose lease id it names, once.
+//! submission only ends the run whose lease id it names, once. Plan
+//! approvals are kept per track; the latest one is the boundary in force.
 //!
 //! [`JobKey`]: common::adapters::review_log::JobKey
 
 use super::findings::{Actor, check_transition};
 use common::adapters::review_log::{ReviewEvent, ReviewEventKind, TrackCompleted};
 use common::domain::review_records::{
-    AttemptCause, AttemptFailed, BlockerRecord, FindingRecord, FindingStatus, JobBlocked, RunKind,
-    RunLeased, RunSubmitted, TransitionRecord, VerdictRecord,
+    AttemptCause, AttemptFailed, BlockerRecord, FindingRecord, FindingStatus, JobBlocked,
+    PlanApproved, RunKind, RunLeased, RunSubmitted, TransitionRecord, VerdictRecord,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -30,6 +31,8 @@ pub enum JobState {
     Verdict,
     /// The inputs are blocked; the verdict is non-passing (AC-08).
     StandardsUnavailable,
+    /// The track's commits are not provably its own; non-passing (FR-09).
+    ScopeUnproven,
     /// Three failed attempts of one run kind.
     ReviewFailed,
 }
@@ -106,6 +109,7 @@ pub struct ReviewView {
     jobs: Vec<Job>,
     runs: Vec<Run>,
     findings: Vec<Finding>,
+    approvals: Vec<PlanApproved>,
 }
 
 impl ReviewView {
@@ -130,6 +134,7 @@ impl ReviewView {
                     job.existing_checks = Some(c.failed.clone());
                 }
             }
+            ReviewEventKind::PlanApproved(a) => self.approvals.push(a.clone()),
         }
     }
 
@@ -289,6 +294,8 @@ impl ReviewView {
     pub fn state(&self, job: &Job) -> JobState {
         if job.failures.values().any(|n| *n >= MAX_ATTEMPTS) {
             JobState::ReviewFailed
+        } else if job.blocked.as_ref().is_some_and(|b| is_scope_block(b)) {
+            JobState::ScopeUnproven
         } else if job.blocked.is_some() {
             JobState::StandardsUnavailable
         } else if !job.submissions.is_empty() {
@@ -314,6 +321,18 @@ impl ReviewView {
             .iter()
             .find(|f| f.record.finding_id == finding_id)
     }
+
+    /// The latest plan approval of `track_id`: the boundary in force.
+    pub fn plan_approval(&self, track_id: &str) -> Option<&PlanApproved> {
+        self.approvals.iter().rev().find(|a| a.track_id == track_id)
+    }
+}
+
+/// The blocker code of a job whose scope is unproven.
+pub const SCOPE_UNPROVEN: &str = "scope-unproven";
+
+fn is_scope_block(blockers: &[BlockerRecord]) -> bool {
+    blockers.iter().any(|b| b.code == SCOPE_UNPROVEN)
 }
 
 #[cfg(test)]
@@ -520,6 +539,7 @@ pub(crate) mod tests {
             reason: "symlink".into(),
             path: Some(".ai/sebenza/x.md".into()),
             line: None,
+            commit: None,
         };
         let events = vec![
             ev(ReviewEventKind::TrackCompleted(c)),

@@ -12,6 +12,7 @@
 //! token, a description or submitted text.
 
 use crate::server::{ApiError, AppState};
+use crate::services::standards_review::jobs::SCOPE_UNPROVEN;
 use crate::services::standards_review::run_store::{Accepted, Claimed, RunError, now_secs};
 use crate::services::standards_review::views::{claim_view, job_status, track_findings};
 use crate::services::track_completion::valid_track_id;
@@ -160,6 +161,9 @@ fn refused(action: &str, e: RunError) -> ApiError {
         RunError::Used => ApiError::coded(401, "run_token_used", msg),
         RunError::WrongRun => ApiError::coded(403, "token_wrong_run", msg),
         RunError::WrongKind => ApiError::coded(403, "token_wrong_kind", msg),
+        RunError::Blocked(b) if b.iter().any(|b| b.code == SCOPE_UNPROVEN) => {
+            ApiError::coded(409, "scope_unproven", msg)
+        }
         RunError::Blocked(_) => ApiError::coded(409, "standards_unavailable", msg),
         RunError::Rejected(_) => ApiError::coded(422, "submission_rejected", msg),
         RunError::Inputs(_) => ApiError::coded(503, "inputs_unavailable", msg),

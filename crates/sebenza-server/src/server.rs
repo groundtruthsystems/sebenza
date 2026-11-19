@@ -360,6 +360,10 @@ pub fn build_router(state: AppState) -> Router {
             post(crate::track_routes::complete_track),
         )
         .route(
+            "/api/tracks/{id}/plan/approve",
+            post(crate::track_routes::approve_track_plan),
+        )
+        .route(
             "/api/review-runs/claim",
             post(crate::review_run_routes::claim_run),
         )

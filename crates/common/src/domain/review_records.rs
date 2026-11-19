@@ -106,6 +106,8 @@ pub enum FindingOrigin {
     StandardsChange,
     /// A daemon measurer (phase 5).
     Measured,
+    /// The daemon: a change outside its task's approved edit boundary (FR-21).
+    Boundary,
 }
 
 /// A finding as first raised. Its status lives in the fold.
@@ -222,10 +224,13 @@ pub struct BlockerRecord {
     pub reason: String,
     pub path: Option<String>,
     pub line: Option<usize>,
+    /// The commit a `scope-unproven` blocker is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
 }
 
 /// A claim found the job's inputs blocked: the run ends without an attempt
-/// and the job is `standards-unavailable`.
+/// and the job is `standards-unavailable` or `scope-unproven`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobBlocked {
     pub job_id: String,
@@ -261,6 +266,30 @@ pub struct ExistingChecksRecorded {
     pub job_id: String,
     /// The ids of failed checks; empty when all passed.
     pub failed: Vec<String>,
+}
+
+/// One task's edit boundary: the path globs its commits may change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskBoundary {
+    pub task_id: String,
+    /// Empty when the task declares no `files`: nothing is in bounds.
+    pub files: Vec<String>,
+}
+
+/// The operator approved a track's plan (FR-20): the plan as committed at
+/// `head_sha` and the per-task boundary snapshot taken from it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanApproved {
+    pub track_id: String,
+    pub head_sha: String,
+    /// SHA-256 of the plan.json blob at `head_sha`.
+    pub plan_sha256: String,
+    /// SHA-256 of the plan without its progress fields; a later plan whose
+    /// content hash differs makes this boundary stale.
+    pub plan_content_sha256: String,
+    pub boundaries: Vec<TaskBoundary>,
+    /// The credential class that approved (`operator`).
+    pub credential: String,
 }
 
 #[cfg(test)]
