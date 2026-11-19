@@ -390,13 +390,14 @@
           "id": "phase-8-task-6",
           "name": "Refresh the latest job on re-completion",
           "description": "Regression test: completing at A, B, then A again makes the A job latest. Decide the latest job by the most recent completion event while keeping job-key dedup.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "41b0075"
         },
         {
           "id": "phase-8-task-7",
           "name": "Roll back a review-log line when fsync fails",
           "description": "Regression test: an injected sync failure after write_all truncates the file to its pre-write length before returning the error.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-8-task-8",
