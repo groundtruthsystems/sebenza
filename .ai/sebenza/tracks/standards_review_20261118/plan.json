@@ -172,7 +172,7 @@
     {
       "id": "phase-4",
       "name": "Trailers, edit boundary and writing guidance",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -222,9 +222,11 @@
           "id": "phase-4-task-5",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "1c68af3"
         }
-      ]
+      ],
+      "checkpoint_sha": "1c68af3"
     },
     {
       "id": "phase-5",
