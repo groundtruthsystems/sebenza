@@ -131,17 +131,210 @@ pub fn validate(
     matrix: &Matrix,
     scanner: &dyn TextScanner,
 ) -> Result<ValidSubmission, Rejection> {
-    todo!()
+    let mut sub = parse(body)?;
+    check_matrix(&sub, matrix)?;
+    check_descriptions(&sub)?;
+    let redactions = scan_descriptions(&mut sub, scanner)?;
+    Ok(into_valid(sub, redactions))
 }
 
 /// Parse `body` against the closed schema.
 pub fn parse(body: &str) -> Result<Submission, Rejection> {
-    todo!()
+    serde_json::from_str(body).map_err(|e| Rejection::new("schema", vec![e.to_string()]))
 }
 
 /// Check that `sub` dispositions exactly `matrix`, with spans on `clean`.
 pub fn check_matrix(sub: &Submission, matrix: &Matrix) -> Result<(), Rejection> {
-    todo!()
+    if sub.dispositions.is_empty() && sub.prior_findings.is_empty() && !matrix.is_empty() {
+        let pairs = matrix.rule_ids.len() * matrix.files.len();
+        let need = format!(
+            "{pairs} (rule, file) pairs and {} prior findings need a disposition",
+            matrix.priors.len()
+        );
+        return Err(Rejection::new("empty-matrix", vec![need]));
+    }
+    let mut problems = pair_problems(sub, matrix);
+    problems.extend(prior_problems(sub, matrix));
+    problems.extend(finding_problems(sub));
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(Rejection::new("incomplete-matrix", problems))
+    }
+}
+
+fn pair_name(rule_id: &str, path: &str) -> String {
+    format!("rule `{rule_id}` x file `{path}`")
+}
+
+fn span_problem(outcome: Outcome, span: Option<Span>, what: &str) -> Option<String> {
+    match (outcome, span) {
+        (Outcome::Clean, None) => Some(format!("clean disposition for {what} cites no span")),
+        (_, Some(s)) if s.start_line == 0 || s.start_line > s.end_line => {
+            Some(format!("invalid span for {what}"))
+        }
+        _ => None,
+    }
+}
+
+fn pair_problems(sub: &Submission, matrix: &Matrix) -> Vec<String> {
+    let rules: BTreeSet<&str> = matrix.rule_ids.iter().map(String::as_str).collect();
+    let files: BTreeSet<&str> = matrix.files.iter().map(String::as_str).collect();
+    let mut seen = BTreeSet::new();
+    let mut problems = Vec::new();
+    for d in &sub.dispositions {
+        let name = pair_name(&d.rule_id, &d.path);
+        if !rules.contains(d.rule_id.as_str()) {
+            problems.push(format!("unknown rule `{}`", d.rule_id));
+        } else if !files.contains(d.path.as_str()) {
+            problems.push(format!("`{}` is not an in-scope file", d.path));
+        } else if !seen.insert((d.rule_id.as_str(), d.path.as_str())) {
+            problems.push(format!("repeated disposition for {name}"));
+        }
+        problems.extend(span_problem(d.outcome, d.span, &name));
+    }
+    for rule in &rules {
+        for file in files.iter().filter(|f| !seen.contains(&(*rule, **f))) {
+            problems.push(format!("missing disposition for {}", pair_name(rule, file)));
+        }
+    }
+    problems
+}
+
+fn prior_problems(sub: &Submission, matrix: &Matrix) -> Vec<String> {
+    let wanted: BTreeSet<&str> = matrix.priors.iter().map(String::as_str).collect();
+    let mut seen = BTreeSet::new();
+    let mut problems = Vec::new();
+    for p in &sub.prior_findings {
+        let name = format!("prior finding `{}`", p.finding_id);
+        if !wanted.contains(p.finding_id.as_str()) {
+            problems.push(format!("{name} is not open for this run"));
+        } else if !seen.insert(p.finding_id.as_str()) {
+            problems.push(format!("repeated disposition for {name}"));
+        }
+        problems.extend(span_problem(p.outcome, p.span, &name));
+    }
+    for id in wanted.iter().filter(|id| !seen.contains(*id)) {
+        problems.push(format!("missing disposition for prior finding `{id}`"));
+    }
+    problems
+}
+
+fn finding_problems(sub: &Submission) -> Vec<String> {
+    let flagged: BTreeSet<(&str, &str)> = sub
+        .dispositions
+        .iter()
+        .filter(|d| d.outcome == Outcome::Finding)
+        .map(|d| (d.rule_id.as_str(), d.path.as_str()))
+        .collect();
+    let reported: BTreeSet<(&str, &str)> = sub
+        .findings
+        .iter()
+        .map(|f| (f.rule_id.as_str(), f.path.as_str()))
+        .collect();
+    let mut problems = Vec::new();
+    for f in &sub.findings {
+        let name = pair_name(&f.rule_id, &f.path);
+        if !flagged.contains(&(f.rule_id.as_str(), f.path.as_str())) {
+            problems.push(format!("a finding on {name} has no `finding` disposition"));
+        }
+        if f.line == 0 {
+            problems.push(format!("a finding on {name} has line 0"));
+        }
+    }
+    for (rule, path) in flagged.difference(&reported) {
+        let name = pair_name(rule, path);
+        problems.push(format!(
+            "{name} is dispositioned `finding` but reports none"
+        ));
+    }
+    problems
+}
+
+fn finding_name(index: usize, f: &FindingClaim) -> String {
+    format!(
+        "finding {} on {}",
+        index + 1,
+        pair_name(&f.rule_id, &f.path)
+    )
+}
+
+fn check_descriptions(sub: &Submission) -> Result<(), Rejection> {
+    for (i, f) in sub.findings.iter().enumerate() {
+        check_description(&f.description)
+            .map_err(|p| Rejection::new(p.code(), vec![finding_name(i, f)]))?;
+    }
+    Ok(())
+}
+
+/// Redact each description in place; a PHI hit or a scanner error rejects.
+fn scan_descriptions(
+    sub: &mut Submission,
+    scanner: &dyn TextScanner,
+) -> Result<Vec<&'static str>, Rejection> {
+    let mut redactions: Vec<&'static str> = Vec::new();
+    for (i, f) in sub.findings.iter_mut().enumerate() {
+        let scanned = scanner
+            .scan(&f.description)
+            .map_err(|_| Rejection::new("scanner-error", vec![finding_name(i, f)]))?;
+        if !scanned.phi.is_empty() {
+            let hit = format!("{}: {}", finding_name(i, f), scanned.phi.join(", "));
+            return Err(Rejection::new("likely-phi", vec![hit]));
+        }
+        f.description = scanned.text;
+        for r in scanned.redactions {
+            if !redactions.contains(&r) {
+                redactions.push(r);
+            }
+        }
+    }
+    Ok(redactions)
+}
+
+fn span_record(s: Option<Span>) -> Option<SpanRecord> {
+    s.map(|s| SpanRecord {
+        start_line: s.start_line,
+        end_line: s.end_line,
+    })
+}
+
+fn into_valid(sub: Submission, redactions: Vec<&'static str>) -> ValidSubmission {
+    let pairs = sub
+        .dispositions
+        .into_iter()
+        .map(|d| PairRecord {
+            rule_id: d.rule_id,
+            path: d.path,
+            outcome: d.outcome,
+            span: span_record(d.span),
+        })
+        .collect();
+    let priors = sub
+        .prior_findings
+        .into_iter()
+        .map(|p| PriorRecord {
+            finding_id: p.finding_id,
+            outcome: p.outcome,
+            span: span_record(p.span),
+        })
+        .collect();
+    let claims = sub
+        .findings
+        .into_iter()
+        .map(|f| Claim {
+            text_hash: text_hash(&f.description),
+            rule_id: f.rule_id,
+            path: f.path,
+            line: f.line,
+            description: f.description,
+        })
+        .collect();
+    ValidSubmission {
+        pairs,
+        priors,
+        claims,
+        redactions,
+    }
 }
 
 #[cfg(test)]

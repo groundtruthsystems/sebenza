@@ -59,12 +59,36 @@ impl TextProblem {
 
 /// Check `text`'s bounds and refuse code excerpts.
 pub fn check_description(text: &str) -> Result<(), TextProblem> {
-    todo!()
+    if text.trim().is_empty() {
+        Err(TextProblem::Empty)
+    } else if text.chars().count() > MAX_DESCRIPTION_CHARS {
+        Err(TextProblem::TooLong)
+    } else if has_code_excerpt(text) {
+        Err(TextProblem::CodeExcerpt)
+    } else {
+        Ok(())
+    }
 }
 
 /// Whether `text` holds a fence or a run of code-like lines.
 pub fn has_code_excerpt(text: &str) -> bool {
-    todo!()
+    if text.contains("```") || text.contains("~~~") {
+        return true;
+    }
+    let mut run = 0;
+    for line in text.lines() {
+        run = if is_code_like(line) { run + 1 } else { 0 };
+        if run > MAX_CODE_LIKE_RUN {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_code_like(line: &str) -> bool {
+    let t = line.trim();
+    !t.is_empty()
+        && (t.ends_with([';', '{', '}']) || CODE_LINE_STARTS.iter().any(|k| t.starts_with(k)))
 }
 
 /// What a scan made of one text.
@@ -99,7 +123,13 @@ pub struct ContentScanner {
 
 impl TextScanner for ContentScanner {
     fn scan(&self, text: &str) -> Result<Scanned, ScanError> {
-        todo!()
+        let phi = likely_phi(text);
+        let (text, redactions) = redact_secrets(text, &self.known);
+        Ok(Scanned {
+            text,
+            redactions,
+            phi,
+        })
     }
 }
 

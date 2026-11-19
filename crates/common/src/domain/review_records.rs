@@ -180,6 +180,8 @@ pub struct RunLeased {
     pub job_id: String,
     pub track_id: String,
     pub run_id: String,
+    /// Serialised as `run_kind`: `kind` is the event tag.
+    #[serde(rename = "run_kind")]
     pub kind: RunKind,
     /// 1-based, per (job, kind).
     pub attempt: u32,
@@ -203,6 +205,8 @@ pub enum AttemptCause {
 pub struct AttemptFailed {
     pub job_id: String,
     pub run_id: String,
+    /// Serialised as `run_kind`: `kind` is the event tag.
+    #[serde(rename = "run_kind")]
     pub kind: RunKind,
     pub attempt: u32,
     pub lease_id: String,
@@ -236,6 +240,8 @@ pub struct JobBlocked {
 pub struct RunSubmitted {
     pub job_id: String,
     pub run_id: String,
+    /// Serialised as `run_kind`: `kind` is the event tag.
+    #[serde(rename = "run_kind")]
     pub kind: RunKind,
     pub lease_id: String,
     /// The rule ids of the job's manifest, so a later job can tell a

@@ -69,7 +69,10 @@ pub fn reap_expired_leases_at(
     project: &ProjectWorktrees,
     now: u64,
 ) -> usize {
-    todo!()
+    reap_expired(&svc.log(&project.project_key), now).unwrap_or_else(|e| {
+        tracing::warn!(project = %project.project_key, "reap: review log unreadable: {e}");
+        0
+    })
 }
 
 fn append_missing(

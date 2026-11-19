@@ -12,7 +12,7 @@ use super::findings::{Actor, check_transition};
 use common::adapters::review_log::{ReviewEvent, ReviewEventKind, TrackCompleted};
 use common::domain::review_records::{
     AttemptCause, AttemptFailed, BlockerRecord, FindingRecord, FindingStatus, JobBlocked, RunKind,
-    RunLeased, RunSubmitted, VerdictRecord,
+    RunLeased, RunSubmitted, TransitionRecord, VerdictRecord,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -111,7 +111,130 @@ pub struct ReviewView {
 impl ReviewView {
     /// Fold `events` in log order.
     pub fn fold(events: &[ReviewEvent]) -> ReviewView {
-        todo!()
+        let mut view = ReviewView::default();
+        for event in events {
+            view.apply(&event.kind);
+        }
+        view
+    }
+
+    fn apply(&mut self, kind: &ReviewEventKind) {
+        match kind {
+            ReviewEventKind::TrackCompleted(c) => self.add_job(c),
+            ReviewEventKind::RunLeased(l) => self.add_run(l),
+            ReviewEventKind::AttemptFailed(f) => self.fail_attempt(f),
+            ReviewEventKind::JobBlocked(b) => self.block(b),
+            ReviewEventKind::RunSubmitted(s) => self.accept(s),
+            ReviewEventKind::ExistingChecksRecorded(c) => {
+                if let Some(job) = self.job_mut(&c.job_id) {
+                    job.existing_checks = Some(c.failed.clone());
+                }
+            }
+        }
+    }
+
+    fn add_job(&mut self, c: &TrackCompleted) {
+        let id = c.job_key().job_id();
+        if self.job(&id).is_none() {
+            self.jobs.push(Job {
+                id,
+                completion: c.clone(),
+                failures: BTreeMap::new(),
+                blocked: None,
+                submissions: Vec::new(),
+                existing_checks: None,
+            });
+        }
+    }
+
+    /// Applied once per (job, kind, attempt) and run id, for a known job.
+    fn add_run(&mut self, l: &RunLeased) {
+        let taken = self.runs.iter().any(|r| {
+            r.leased.run_id == l.run_id
+                || (r.leased.job_id == l.job_id
+                    && r.leased.kind == l.kind
+                    && r.leased.attempt == l.attempt)
+        });
+        if !taken && self.job(&l.job_id).is_some() {
+            self.runs.push(Run {
+                leased: l.clone(),
+                end: None,
+            });
+        }
+    }
+
+    /// End the open run that `run_id` and `lease_id` name; false when no
+    /// such run is open, so a repeated event changes nothing.
+    fn end_run(&mut self, run_id: &str, lease_id: &str, end: RunEnd) -> bool {
+        let run = self
+            .runs
+            .iter_mut()
+            .find(|r| r.leased.run_id == run_id && r.leased.lease_id == lease_id && r.is_open());
+        match run {
+            Some(r) => {
+                r.end = Some(end);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn fail_attempt(&mut self, f: &AttemptFailed) {
+        if self.end_run(&f.run_id, &f.lease_id, RunEnd::Failed(f.cause))
+            && let Some(job) = self.job_mut(&f.job_id)
+        {
+            *job.failures.entry(f.kind).or_insert(0) += 1;
+        }
+    }
+
+    fn block(&mut self, b: &JobBlocked) {
+        if self.end_run(&b.run_id, &b.lease_id, RunEnd::Blocked)
+            && let Some(job) = self.job_mut(&b.job_id)
+        {
+            job.blocked = Some(b.blockers.clone());
+        }
+    }
+
+    fn accept(&mut self, s: &RunSubmitted) {
+        if !self.end_run(&s.run_id, &s.lease_id, RunEnd::Submitted) {
+            return;
+        }
+        if let Some(job) = self.job_mut(&s.job_id) {
+            job.submissions.push(s.clone());
+        }
+        for record in &s.opened {
+            self.open_finding(record);
+        }
+        for t in &s.transitions {
+            self.move_finding(t);
+        }
+    }
+
+    fn open_finding(&mut self, record: &FindingRecord) {
+        if self.finding(&record.finding_id).is_none() {
+            self.findings.push(Finding {
+                record: record.clone(),
+                status: FindingStatus::Open,
+            });
+        }
+    }
+
+    /// Applied only from the status it names and only when the table
+    /// allows the daemon that move.
+    fn move_finding(&mut self, t: &TransitionRecord) {
+        let found = self
+            .findings
+            .iter_mut()
+            .find(|f| f.record.finding_id == t.finding_id && f.status == t.from);
+        if let Some(f) = found
+            && check_transition(t.from, t.to, Actor::Daemon).is_ok()
+        {
+            f.status = t.to;
+        }
+    }
+
+    fn job_mut(&mut self, job_id: &str) -> Option<&mut Job> {
+        self.jobs.iter_mut().find(|j| j.id == job_id)
     }
 
     /// Every job, in completion order.
@@ -164,7 +287,17 @@ impl ReviewView {
 
     /// The state of `job`.
     pub fn state(&self, job: &Job) -> JobState {
-        todo!()
+        if job.failures.values().any(|n| *n >= MAX_ATTEMPTS) {
+            JobState::ReviewFailed
+        } else if job.blocked.is_some() {
+            JobState::StandardsUnavailable
+        } else if !job.submissions.is_empty() {
+            JobState::Verdict
+        } else if self.open_run(&job.id).is_some() {
+            JobState::Running
+        } else {
+            JobState::Queued
+        }
     }
 
     /// Every finding of `track_id`, in the order they were raised.
@@ -188,7 +321,7 @@ pub(crate) mod tests {
     use super::*;
     use common::adapters::review_log::CompletionSource;
     use common::domain::review_records::{
-        AnchorRecord, AnchorSide, ExistingChecksRecorded, FindingOrigin, TransitionRecord,
+        AnchorRecord, AnchorSide, ExistingChecksRecorded, FindingOrigin,
     };
 
     pub(crate) fn completion(track: &str, head: &str) -> TrackCompleted {

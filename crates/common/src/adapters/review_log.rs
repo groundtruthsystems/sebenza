@@ -227,11 +227,10 @@ impl ReviewLog {
         if let Some(found) = existing(&ReviewState::fold(&events)) {
             return Ok((found, false));
         }
-        let event = ReviewEvent::new(ReviewEventKind::TrackCompleted(completion.clone()));
-        let mut line = serde_json::to_string(&event)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        line.push('\n');
-        write_durably(&mut file, line.as_bytes())?;
+        append_event(
+            &mut file,
+            ReviewEventKind::TrackCompleted(completion.clone()),
+        )?;
         Ok((completion, true))
     }
 
@@ -251,7 +250,15 @@ impl ReviewLog {
         &self,
         decide: impl FnOnce(&[ReviewEvent]) -> Result<(Option<ReviewEventKind>, T), E>,
     ) -> Result<T, E> {
-        todo!()
+        let mut file = self
+            .locked_file(true)?
+            .ok_or_else(|| std::io::Error::other("review log missing after create"))?;
+        let events = read_repaired(&mut file)?;
+        let (event, out) = decide(&events)?;
+        if let Some(kind) = event {
+            append_event(&mut file, kind)?;
+        }
+        Ok(out)
     }
 
     /// The log file opened for read and append under an exclusive lock that
@@ -287,6 +294,14 @@ impl ReviewLog {
         fs::create_dir_all(dir)?;
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
     }
+}
+
+/// Append `kind` as one stamped line: one write, then a data sync.
+fn append_event(file: &mut fs::File, kind: ReviewEventKind) -> std::io::Result<()> {
+    let mut line = serde_json::to_string(&ReviewEvent::new(kind))
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    line.push('\n');
+    write_durably(file, line.as_bytes())
 }
 
 /// A new log's directory entry must survive a crash too.

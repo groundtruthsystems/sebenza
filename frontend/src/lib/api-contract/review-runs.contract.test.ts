@@ -22,7 +22,12 @@ describe("review runs contract", () => {
   it("refuses verdict, scope and status fields in a submission", () => {
     const base = {
       dispositions: [
-        { ruleId: "r", path: "a.rs", outcome: "clean", span: { startLine: 1, endLine: 2 } },
+        {
+          ruleId: "r",
+          path: "a.rs",
+          outcome: "clean",
+          span: { startLine: 1, endLine: 2 },
+        },
       ],
     };
     expect(SubmitReviewRunRequestSchema.safeParse(base).success).toBe(true);
@@ -31,7 +36,9 @@ describe("review runs contract", () => {
       { ...base, scope: [] },
       { dispositions: [{ ...base.dispositions[0], status: "resolved" }] },
     ]) {
-      expect(SubmitReviewRunRequestSchema.safeParse(forged).success).toBe(false);
+      expect(SubmitReviewRunRequestSchema.safeParse(forged).success).toBe(
+        false,
+      );
     }
   });
 

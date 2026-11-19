@@ -51,13 +51,21 @@ pub fn check_transition(
     to: FindingStatus,
     actor: Actor,
 ) -> Result<(), TransitionRefused> {
-    todo!()
+    if TRANSITIONS.contains(&(from, to, actor)) {
+        Ok(())
+    } else {
+        Err(TransitionRefused { from, to, actor })
+    }
 }
 
 /// Lowercase alphanumeric words separated by single spaces: punctuation,
 /// case and spacing differences do not change a finding's identity.
 pub fn normalise(text: &str) -> String {
-    todo!()
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The SHA-256 of [`normalise`]d `text`.

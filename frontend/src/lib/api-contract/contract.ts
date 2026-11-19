@@ -88,6 +88,12 @@ import {
   RedactInboxCommentResponseSchema,
   CompleteTrackRequestSchema,
   CompleteTrackResponseSchema,
+  ClaimReviewRunRequestSchema,
+  ReviewRunClaimSchema,
+  SubmitReviewRunRequestSchema,
+  SubmitReviewRunResponseSchema,
+  TrackReviewStatusSchema,
+  TrackReviewFindingsSchema,
   InboxDraftHelpRequestSchema,
   InboxDraftHelpResponseSchema,
   ConvertInstructionsRequestSchema,
@@ -180,6 +186,10 @@ export const apiPaths = {
   fetchRegistry: "/api/registry",
   fetchRegistryFile: "/api/registry/file",
   completeTrack: "/api/tracks/:id/complete",
+  claimReviewRun: "/api/review-runs/claim",
+  submitReviewRun: "/api/review-runs/:id/submit",
+  fetchTrackReviewStatus: "/api/review/tracks/:id",
+  fetchTrackReviewFindings: "/api/review/tracks/:id/findings",
 } as const;
 
 /** Errors every guarded inbox decision route can return: 401/403 from the
@@ -809,7 +819,9 @@ export const apiContract = c.router(
     fetchInboxRequests: {
       method: "GET",
       path: apiPaths.fetchInboxRequests,
-      query: z.object({ filter: InboxRequestFilterSchema.optional() }).optional(),
+      query: z
+        .object({ filter: InboxRequestFilterSchema.optional() })
+        .optional(),
       responses: {
         200: InboxRequestListSchema,
         400: ErrorResponseSchema,
@@ -934,6 +946,52 @@ export const apiContract = c.router(
         404: ErrorResponseSchema,
         422: ErrorResponseSchema,
         500: ErrorResponseSchema,
+      },
+    },
+    /** Hub-level, run token only: the token's run names the project. */
+    claimReviewRun: {
+      method: "POST",
+      path: apiPaths.claimReviewRun,
+      body: ClaimReviewRunRequestSchema,
+      responses: {
+        200: ReviewRunClaimSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+        503: ErrorResponseSchema,
+      },
+    },
+    /** Run token only; a 422 names what is missing and fails the attempt. */
+    submitReviewRun: {
+      method: "POST",
+      path: apiPaths.submitReviewRun,
+      body: SubmitReviewRunRequestSchema,
+      responses: {
+        200: SubmitReviewRunResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        422: ErrorResponseSchema,
+        500: ErrorResponseSchema,
+        503: ErrorResponseSchema,
+      },
+    },
+    fetchTrackReviewStatus: {
+      method: "GET",
+      path: apiPaths.fetchTrackReviewStatus,
+      responses: {
+        200: TrackReviewStatusSchema,
+        ...commonErrorResponses,
+      },
+    },
+    fetchTrackReviewFindings: {
+      method: "GET",
+      path: apiPaths.fetchTrackReviewFindings,
+      responses: {
+        200: TrackReviewFindingsSchema,
+        ...commonErrorResponses,
       },
     },
     fetchRegistry: {

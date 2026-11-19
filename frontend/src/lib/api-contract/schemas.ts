@@ -1219,11 +1219,15 @@ export const InboxRequestHistoryEntrySchema = z.object({
 export const InboxRequestHistorySchema = z.object({
   history: z.object({
     request: z.lazy(() => InboxRequestSchema),
-    answers: z.array(z.object({ kind: z.string(), text: z.string(), at: z.string() })),
+    answers: z.array(
+      z.object({ kind: z.string(), text: z.string(), at: z.string() }),
+    ),
     events: z.array(InboxRequestHistoryEntrySchema),
   }),
 });
-export type InboxRequestHistory = z.infer<typeof InboxRequestHistorySchema>["history"];
+export type InboxRequestHistory = z.infer<
+  typeof InboxRequestHistorySchema
+>["history"];
 
 export type InboxComment = z.infer<typeof InboxCommentSchema>;
 export type InboxCommentGroups = z.infer<typeof InboxCommentGroupsSchema>;
@@ -1328,6 +1332,194 @@ export const CompleteTrackResponseSchema = z.object({
   appended: z.boolean(),
   projected: z.enum(["applied", "already_done"]),
   job: ReviewJobKeySchema,
+});
+
+/** The kind of a standards-review run; attempts are counted per kind. */
+export const ReviewRunKindSchema = z.enum(["first", "second"]);
+
+/** `POST /api/review-runs/claim` — the bearer is the run's single-use token. */
+export const ClaimReviewRunRequestSchema = z.object({
+  kind: ReviewRunKindSchema,
+});
+
+export const ReviewAnchorSchema = z.object({
+  path: z.string(),
+  line: z.number(),
+  side: z.enum(["base", "head"]),
+  sha: z.string(),
+});
+
+export const ReviewRuleSchema = z.object({
+  ruleId: z.string(),
+  category: z.string(),
+  sourceDoc: z.string(),
+  line: z.number(),
+  maxLines: z.number().optional(),
+});
+
+export const ReviewHunkSchema = z.object({
+  oldStart: z.number(),
+  oldLines: z.number(),
+  newStart: z.number(),
+  newLines: z.number(),
+  anchor: ReviewAnchorSchema,
+});
+
+export const ReviewFileSchema = z.object({
+  path: z.string(),
+  oldPath: z.string().optional(),
+  status: z.string(),
+  hunks: z.array(ReviewHunkSchema),
+});
+
+/** What a run reads: the merge-base manifest, the in-scope hunks and the
+ *  open prior findings it must disposition (none for a second run). */
+export const ReviewRunClaimSchema = z.object({
+  runId: z.string(),
+  jobId: z.string(),
+  trackId: z.string(),
+  kind: ReviewRunKindSchema,
+  attempt: z.number(),
+  leaseUntil: z.number(),
+  headSha: z.string(),
+  baseSha: z.string(),
+  standardsRev: z.string(),
+  manifest: z.array(ReviewRuleSchema),
+  files: z.array(ReviewFileSchema),
+  priorFindings: z.array(
+    z.object({
+      findingId: z.string(),
+      ruleId: z.string(),
+      path: z.string(),
+      line: z.number(),
+      description: z.string(),
+    }),
+  ),
+});
+
+const ReviewSpanSchema = z
+  .object({ startLine: z.number(), endLine: z.number() })
+  .strict();
+const ReviewOutcomeSchema = z.enum(["finding", "clean"]);
+
+/** `POST /api/review-runs/:id/submit` — closed like the daemon's schema: no
+ *  verdict, scope or status field is accepted anywhere. */
+export const SubmitReviewRunRequestSchema = z
+  .object({
+    dispositions: z.array(
+      z
+        .object({
+          ruleId: z.string(),
+          path: z.string(),
+          outcome: ReviewOutcomeSchema,
+          span: ReviewSpanSchema.optional(),
+        })
+        .strict(),
+    ),
+    priorFindings: z
+      .array(
+        z
+          .object({
+            findingId: z.string(),
+            outcome: ReviewOutcomeSchema,
+            span: ReviewSpanSchema.optional(),
+          })
+          .strict(),
+      )
+      .optional(),
+    findings: z
+      .array(
+        z
+          .object({
+            ruleId: z.string(),
+            path: z.string(),
+            line: z.number(),
+            description: z.string().max(500),
+          })
+          .strict(),
+      )
+      .optional(),
+  })
+  .strict();
+
+export type SubmitReviewRunRequest = z.infer<
+  typeof SubmitReviewRunRequestSchema
+>;
+
+/** The daemon-derived verdict: `reasons` is empty when it passes. */
+export const ReviewVerdictSchema = z.object({
+  passing: z.boolean(),
+  reasons: z.array(z.string()),
+});
+
+export const SubmitReviewRunResponseSchema = z.object({
+  ok: z.literal(true),
+  runId: z.string(),
+  jobId: z.string(),
+  findingsOpened: z.number(),
+  verdict: ReviewVerdictSchema,
+});
+
+export const ReviewJobStatusSchema = z.object({
+  trackId: z.string(),
+  jobId: z.string(),
+  headSha: z.string(),
+  baseSha: z.string(),
+  standardsRev: z.string(),
+  state: z.enum([
+    "queued",
+    "running",
+    "verdict",
+    "standards-unavailable",
+    "review-failed",
+  ]),
+  attempts: z.object({ first: z.number(), second: z.number() }),
+  blockers: z.array(
+    z.object({
+      code: z.string(),
+      reason: z.string(),
+      path: z.string().nullish(),
+      line: z.number().nullish(),
+    }),
+  ),
+  openRun: z
+    .object({
+      runId: z.string(),
+      kind: ReviewRunKindSchema,
+      attempt: z.number(),
+      leaseUntil: z.number(),
+    })
+    .nullable(),
+  verdict: ReviewVerdictSchema.nullable(),
+  existingChecksRecorded: z.boolean(),
+});
+
+/** `GET /api/review/tracks/:id` — the track's latest review job, if any. */
+export const TrackReviewStatusSchema = z.object({
+  trackId: z.string(),
+  job: ReviewJobStatusSchema.nullable(),
+});
+
+export const ReviewFindingSchema = z.object({
+  findingId: z.string(),
+  jobId: z.string(),
+  ruleId: z.string(),
+  status: z.enum([
+    "open",
+    "needs-operator-decision",
+    "resolved",
+    "resolved-out-of-scope",
+    "rule-withdrawn",
+  ]),
+  origin: z.enum(["agent", "standards-change", "measured"]),
+  anchor: ReviewAnchorSchema,
+  description: z.string(),
+});
+
+/** `GET /api/review/tracks/:id/findings` — every finding with its status. */
+export const TrackReviewFindingsSchema = z.object({
+  trackId: z.string(),
+  findings: z.array(ReviewFindingSchema),
 });
 
 export const AdvisorySchema = z.object({
@@ -1465,14 +1657,24 @@ export const InboxNotesManifestSchema = z.object({
   draft_id: z.string(),
   title: z.string(),
   notes: z.array(
-    z.object({ id: z.string(), type: z.string(), title: z.string(), body: z.string() }),
+    z.object({
+      id: z.string(),
+      type: z.string(),
+      title: z.string(),
+      body: z.string(),
+    }),
   ),
-  siblings: z.array(z.object({ branch: z.string(), project_path: z.string() })).default([]),
+  siblings: z
+    .array(z.object({ branch: z.string(), project_path: z.string() }))
+    .default([]),
 });
 
 // --- Inbox item graph (GET /api/inbox/:id/graph) ---------------------------
 
-export const GraphProgressSchema = z.object({ done: z.number(), total: z.number() });
+export const GraphProgressSchema = z.object({
+  done: z.number(),
+  total: z.number(),
+});
 
 export const GraphTaskSchema = z.object({
   id: z.string(),
@@ -1519,7 +1721,11 @@ export const GraphWorktreeSchema = z.object({
   errorCode: z.string().nullable(),
   progress: GraphProgressSchema,
   agent: z
-    .object({ status: z.string(), feedbackState: z.string(), agent: z.string().nullable() })
+    .object({
+      status: z.string(),
+      feedbackState: z.string(),
+      agent: z.string().nullable(),
+    })
     .nullable(),
   tracks: z.array(GraphTrackSchema),
 });

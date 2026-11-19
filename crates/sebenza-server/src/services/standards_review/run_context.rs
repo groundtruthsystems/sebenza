@@ -9,7 +9,7 @@
 
 use super::deriver::{PriorFinding, STANDARDS_CHANGE_RULE};
 use super::git_pinned::Git;
-use super::jobs::{Job, ReviewView};
+use super::jobs::{Finding, Job, ReviewView};
 use super::matcher::{RenameMap, rename_map};
 use super::resolver::{ResolveError, ReviewInputs, resolve};
 use super::scope::{DiffFile, FileStatus, ReviewLimits, SnapshotPins};
@@ -34,7 +34,42 @@ pub fn resolve_context(
     job: &Job,
     limits: &ReviewLimits,
 ) -> Result<RunContext, ResolveError> {
-    todo!()
+    let git = job_git(job)?;
+    let inputs = resolve(&git, &job_pins(job), limits)?;
+    let open: Vec<&Finding> = view
+        .track_findings(&job.completion.track_id)
+        .into_iter()
+        .filter(|f| !f.status.is_terminal())
+        .collect();
+    let shas = open.iter().map(|f| f.record.anchor.sha.as_str()).collect();
+    let renames = rename_maps(&git, shas, &job.completion.head_sha);
+    let priors = open
+        .into_iter()
+        .map(|f| prior_finding(view, f, &renames))
+        .collect();
+    Ok(RunContext { inputs, priors })
+}
+
+fn prior_finding(
+    view: &ReviewView,
+    f: &Finding,
+    renames: &BTreeMap<String, RenameMap>,
+) -> PriorFinding {
+    let anchor = &f.record.anchor;
+    let path_at_head = renames
+        .get(&anchor.sha)
+        .and_then(|m| m.get(&anchor.path))
+        .unwrap_or(&anchor.path)
+        .clone();
+    let rule_in_prior_manifest = view
+        .job(&f.record.job_id)
+        .and_then(Job::manifest_rule_ids)
+        .is_some_and(|ids| ids.contains(&f.record.rule_id));
+    PriorFinding {
+        finding: f.clone(),
+        path_at_head,
+        rule_in_prior_manifest,
+    }
 }
 
 /// The pins of `job`. Its target is pinned as the merge-base: every target
@@ -66,19 +101,49 @@ impl RunContext {
 
     /// The files whose every rule a run dispositions.
     pub fn in_scope_files(&self) -> Vec<&DiffFile> {
-        todo!()
+        let workspace = format!("{WORKSPACE}/");
+        self.inputs
+            .files
+            .iter()
+            .filter(|f| {
+                !f.hunks.is_empty()
+                    && !f.binary
+                    && f.status != FileStatus::Deleted
+                    && !f.path().starts_with(&workspace)
+            })
+            .collect()
     }
 
     /// Every path, old and new, with a hunk in the scope diff.
     pub fn scope_paths(&self) -> BTreeSet<String> {
-        todo!()
+        self.inputs
+            .files
+            .iter()
+            .filter(|f| !f.hunks.is_empty())
+            .flat_map(|f| [f.old_path.clone(), f.new_path.clone()])
+            .flatten()
+            .collect()
     }
 
     /// The open prior findings a run of `kind` must disposition: agent or
     /// measured findings whose rule is still in the manifest and whose path
     /// is still in scope. A second run never sees prior output.
     pub fn required_priors(&self, kind: RunKind) -> Vec<&PriorFinding> {
-        todo!()
+        if kind == RunKind::Second {
+            return Vec::new();
+        }
+        let (rules, scope) = (self.rule_ids(), self.scope_paths());
+        self.priors
+            .iter()
+            .filter(|p| {
+                let r = &p.finding.record;
+                p.finding.status == FindingStatus::Open
+                    && r.origin != FindingOrigin::StandardsChange
+                    && !is_reserved(&r.rule_id)
+                    && rules.contains(&r.rule_id)
+                    && scope.contains(&p.path_at_head)
+            })
+            .collect()
     }
 
     /// What a run of `kind` must disposition.
@@ -104,8 +169,18 @@ fn is_reserved(rule_id: &str) -> bool {
 }
 
 /// Rename maps from each anchor SHA to `head`, keyed by anchor SHA.
+/// A failed diff, such as an anchor SHA rebased away, gives no renames and
+/// the matcher falls back to the text hash.
 fn rename_maps(git: &Git, shas: BTreeSet<&str>, head: &str) -> BTreeMap<String, RenameMap> {
-    todo!()
+    shas.into_iter()
+        .map(|sha| {
+            let map = rename_map(git, sha, head).unwrap_or_else(|e| {
+                tracing::warn!(anchor = sha, head, "rename map unavailable: {e}");
+                RenameMap::new()
+            });
+            (sha.to_string(), map)
+        })
+        .collect()
 }
 
 #[cfg(test)]

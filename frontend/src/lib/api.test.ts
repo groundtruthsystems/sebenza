@@ -641,7 +641,12 @@ describe("inbox priority, comments and requests", () => {
       baseSha: "b".repeat(40),
       standardsRev: "c".repeat(64),
     };
-    const seen = recordFetch({ ok: true, appended: true, projected: "applied", job });
+    const seen = recordFetch({
+      ok: true,
+      appended: true,
+      projected: "applied",
+      job,
+    });
     window.__SEBENZA_CONTROL_TOKEN__ = "tok";
     const api = await loadApiAt("/inbox");
     const got = await api.completeTrack("t_20261118", "wt-id-1");
@@ -665,7 +670,13 @@ describe("inbox priority, comments and requests", () => {
       baseSha: "b".repeat(40),
       standardsRev: "c".repeat(64),
       manifest: [
-        { ruleId: "short", category: "long-methods", sourceDoc: "g.md", line: 2, maxLines: 20 },
+        {
+          ruleId: "short",
+          category: "long-methods",
+          sourceDoc: "g.md",
+          line: 2,
+          maxLines: 20,
+        },
       ],
       files: [
         {
@@ -677,7 +688,12 @@ describe("inbox priority, comments and requests", () => {
               oldLines: 0,
               newStart: 1,
               newLines: 1,
-              anchor: { path: "src/a.rs", line: 1, side: "head", sha: "a".repeat(40) },
+              anchor: {
+                path: "src/a.rs",
+                line: 1,
+                side: "head",
+                sha: "a".repeat(40),
+              },
             },
           ],
         },
@@ -706,7 +722,12 @@ describe("inbox priority, comments and requests", () => {
     const api = await loadApiAt("/myproject/");
     const submission = {
       dispositions: [
-        { ruleId: "short", path: "src/a.rs", outcome: "clean" as const, span: { startLine: 1, endLine: 1 } },
+        {
+          ruleId: "short",
+          path: "src/a.rs",
+          outcome: "clean" as const,
+          span: { startLine: 1, endLine: 1 },
+        },
       ],
     };
     const got = await api.submitReviewRun("run_1", "rt_token", submission);

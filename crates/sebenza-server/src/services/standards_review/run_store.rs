@@ -23,6 +23,7 @@ use common::domain::review_records::{
     AttemptCause, AttemptFailed, BlockerRecord, ExistingChecksRecorded, JobBlocked, RunKind,
     RunLeased, RunSubmitted, VerdictRecord,
 };
+use common::util::id::random_ulid;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -137,7 +138,9 @@ impl ReviewRuns {
     /// Lease a first run of the next queued job, if any: the latest job of a
     /// track, with no open run and no outcome yet.
     pub fn lease_next(&self, project_key: &str, now: u64) -> std::io::Result<Option<LeasedRun>> {
-        todo!()
+        self.lease_where(project_key, RunKind::First, now, |view| {
+            next_queued(view).map(|j| j.id.clone())
+        })
     }
 
     /// Lease a run of `kind` for `job_id` when the job has no open run and
@@ -149,7 +152,31 @@ impl ReviewRuns {
         kind: RunKind,
         now: u64,
     ) -> std::io::Result<Option<LeasedRun>> {
-        todo!()
+        self.lease_where(project_key, kind, now, |view| {
+            view.job(job_id)
+                .filter(|j| leasable(view, j))
+                .map(|j| j.id.clone())
+        })
+    }
+
+    /// Lease a run of `kind` for the job `pick` chooses under the log lock.
+    fn lease_where(
+        &self,
+        project_key: &str,
+        kind: RunKind,
+        now: u64,
+        pick: impl FnOnce(&ReviewView) -> Option<String>,
+    ) -> std::io::Result<Option<LeasedRun>> {
+        let token = RunToken::mint();
+        self.log(project_key).transact(|events| {
+            let view = ReviewView::fold(events);
+            let Some(job) = pick(&view).and_then(|id| view.job(&id)) else {
+                return Ok((None, None));
+            };
+            let leased = new_lease(&view, job, kind, &token, now + self.settings.lease_secs);
+            let run = leased_run(project_key, job, &leased, token.clone());
+            Ok::<_, std::io::Error>((Some(ReviewEventKind::RunLeased(leased)), Some(run)))
+        })
     }
 
     /// Check `token` for a claim of `kind` and resolve the run's inputs. A
@@ -162,7 +189,16 @@ impl ReviewRuns {
         kind: RunKind,
         now: u64,
     ) -> Result<Claimed, RunError> {
-        todo!()
+        let expect = Expect::Kind(kind);
+        let view = self.view(project_key)?;
+        let (run, job) = authenticate(&view, token, &expect, now)?;
+        let context = resolve_context(&view, job, &self.settings.limits)?;
+        self.refuse_blocked(project_key, token, &expect, now, &context)?;
+        Ok(Claimed {
+            run: run.clone(),
+            job: job.clone(),
+            context,
+        })
     }
 
     /// Check `token` for `run_id`, validate `body` and derive. An accepted
@@ -175,7 +211,27 @@ impl ReviewRuns {
         body: &str,
         now: u64,
     ) -> Result<Accepted, RunError> {
-        todo!()
+        let expect = Expect::RunId(run_id);
+        let view = self.view(project_key)?;
+        let (run, job) = authenticate(&view, token, &expect, now)?;
+        let context = resolve_context(&view, job, &self.settings.limits)?;
+        self.refuse_blocked(project_key, token, &expect, now, &context)?;
+        let matrix = context.matrix(run.leased.kind);
+        match validate(body, &matrix, self.scanner.as_ref()) {
+            Ok(valid) => {
+                let derived = derive_for(job, &context, &valid);
+                let accepted = accepted(job, run, &derived);
+                let event = |r: &Run| submitted(r, &context, valid, derived);
+                self.commit(project_key, token, &expect, now, event)?;
+                Ok(accepted)
+            }
+            Err(rejection) => {
+                let reason = Some(rejection.code);
+                let event = |r: &Run| failure(r, AttemptCause::Rejected, reason);
+                self.commit(project_key, token, &expect, now, event)?;
+                Err(RunError::Rejected(rejection))
+            }
+        }
     }
 
     /// Record the existing sebenza-review check results of `job_id`.
@@ -186,14 +242,244 @@ impl ReviewRuns {
         job_id: &str,
         failed: Vec<String>,
     ) -> std::io::Result<bool> {
-        todo!()
+        self.log(project_key).transact(|events| {
+            if ReviewView::fold(events).job(job_id).is_none() {
+                return Ok((None, false));
+            }
+            let event = ExistingChecksRecorded {
+                job_id: job_id.to_string(),
+                failed,
+            };
+            Ok((Some(ReviewEventKind::ExistingChecksRecorded(event)), true))
+        })
     }
+
+    /// End the run as blocked when its inputs are.
+    fn refuse_blocked(
+        &self,
+        project_key: &str,
+        token: &str,
+        expect: &Expect,
+        now: u64,
+        context: &RunContext,
+    ) -> Result<(), RunError> {
+        if !context.inputs.is_blocked() {
+            return Ok(());
+        }
+        let blockers = blocker_records(&context.inputs.blockers);
+        let event = |r: &Run| {
+            ReviewEventKind::JobBlocked(JobBlocked {
+                job_id: r.leased.job_id.clone(),
+                run_id: r.leased.run_id.clone(),
+                lease_id: r.leased.lease_id.clone(),
+                blockers: blockers.clone(),
+            })
+        };
+        self.commit(project_key, token, expect, now, event)?;
+        Err(RunError::Blocked(blockers))
+    }
+
+    /// Append `event` for the token's run once it re-authenticates under
+    /// the log lock, so a token is used at most once.
+    fn commit(
+        &self,
+        project_key: &str,
+        token: &str,
+        expect: &Expect,
+        now: u64,
+        event: impl FnOnce(&Run) -> ReviewEventKind,
+    ) -> Result<(), RunError> {
+        self.log(project_key).transact(|events| {
+            let view = ReviewView::fold(events);
+            let (run, _) = authenticate(&view, token, expect, now)?;
+            Ok((Some(event(run)), ()))
+        })
+    }
+}
+
+/// Which run a presented token must name.
+enum Expect<'a> {
+    Kind(RunKind),
+    RunId(&'a str),
+}
+
+/// The open, live run the token names, as `expect` requires, and its job.
+fn authenticate<'v>(
+    view: &'v ReviewView,
+    token: &str,
+    expect: &Expect,
+    now: u64,
+) -> Result<(&'v Run, &'v Job), RunError> {
+    let run = view
+        .run_by_token_hash(&hash_token(token))
+        .ok_or(RunError::UnknownToken)?;
+    match expect {
+        Expect::Kind(kind) if run.leased.kind != *kind => return Err(RunError::WrongKind),
+        Expect::RunId(id) if run.leased.run_id != *id => return Err(RunError::WrongRun),
+        _ => {}
+    }
+    if !run.is_open() {
+        return Err(RunError::Used);
+    }
+    if !run.is_live(now) {
+        return Err(RunError::Expired);
+    }
+    let job = view.job(&run.leased.job_id).ok_or(RunError::UnknownToken)?;
+    Ok((run, job))
+}
+
+/// The first queued job that is its track's latest.
+fn next_queued(view: &ReviewView) -> Option<&Job> {
+    view.jobs().iter().find(|j| {
+        view.latest_job(&j.completion.track_id)
+            .is_some_and(|latest| latest.id == j.id)
+            && view.state(j) == JobState::Queued
+    })
+}
+
+fn leasable(view: &ReviewView, job: &Job) -> bool {
+    view.open_run(&job.id).is_none()
+        && !matches!(
+            view.state(job),
+            JobState::ReviewFailed | JobState::StandardsUnavailable
+        )
+}
+
+/// A lease numbered after every earlier run of the same job and kind.
+fn new_lease(
+    view: &ReviewView,
+    job: &Job,
+    kind: RunKind,
+    token: &RunToken,
+    lease_until: u64,
+) -> RunLeased {
+    let earlier = view
+        .runs()
+        .iter()
+        .filter(|r| r.leased.job_id == job.id && r.leased.kind == kind)
+        .count();
+    RunLeased {
+        job_id: job.id.clone(),
+        track_id: job.completion.track_id.clone(),
+        run_id: format!("run_{}", random_ulid()),
+        kind,
+        attempt: earlier as u32 + 1,
+        lease_id: random_ulid(),
+        token_hash: token.hash(),
+        lease_until,
+    }
+}
+
+fn leased_run(project_key: &str, job: &Job, l: &RunLeased, token: RunToken) -> LeasedRun {
+    LeasedRun {
+        project_key: project_key.to_string(),
+        run_id: l.run_id.clone(),
+        job_id: l.job_id.clone(),
+        track_id: l.track_id.clone(),
+        kind: l.kind,
+        attempt: l.attempt,
+        lease_until: l.lease_until,
+        token,
+        worktree_path: job.completion.worktree_path.clone(),
+    }
+}
+
+fn failure(run: &Run, cause: AttemptCause, reason: Option<&str>) -> ReviewEventKind {
+    ReviewEventKind::AttemptFailed(AttemptFailed {
+        job_id: run.leased.job_id.clone(),
+        run_id: run.leased.run_id.clone(),
+        kind: run.leased.kind,
+        attempt: run.leased.attempt,
+        lease_id: run.leased.lease_id.clone(),
+        cause,
+        reason: reason.map(String::from),
+    })
+}
+
+fn blocker_records(blockers: &[Blocker]) -> Vec<BlockerRecord> {
+    let kebab = |v: serde_json::Value| v.as_str().unwrap_or_default().to_string();
+    blockers
+        .iter()
+        .map(|b| BlockerRecord {
+            code: kebab(serde_json::to_value(b.code).unwrap_or_default()),
+            reason: kebab(serde_json::to_value(b.reason).unwrap_or_default()),
+            path: b.path.clone(),
+            line: b.line,
+        })
+        .collect()
+}
+
+fn derive_for(job: &Job, context: &RunContext, valid: &ValidSubmission) -> Derivation {
+    let (rules, scope) = (context.rule_ids(), context.scope_paths());
+    let change = context.inputs.standards_change.as_ref();
+    // Phase 5's measurers and second-run scheduling fill these two.
+    let measured: Vec<MeasuredFinding> = Vec::new();
+    let second_run_pending = false;
+    derive(
+        &DeriveInputs {
+            job_id: &job.id,
+            track_id: &job.completion.track_id,
+            head_sha: &job.completion.head_sha,
+            manifest_rule_ids: &rules,
+            scope_paths: &scope,
+            standards_change: change.map(|c| c.paths.as_slice()),
+            priors: &context.priors,
+            submission: valid,
+            measured_findings: &measured,
+            second_run_pending,
+            existing_checks: job.existing_checks.as_deref(),
+        },
+        || format!("f_{}", random_ulid()),
+    )
+}
+
+fn accepted(job: &Job, run: &Run, derived: &Derivation) -> Accepted {
+    Accepted {
+        run_id: run.leased.run_id.clone(),
+        job_id: job.id.clone(),
+        findings_opened: derived.opened.len(),
+        verdict: derived.verdict.clone(),
+    }
+}
+
+fn submitted(
+    run: &Run,
+    context: &RunContext,
+    valid: ValidSubmission,
+    derived: Derivation,
+) -> ReviewEventKind {
+    ReviewEventKind::RunSubmitted(RunSubmitted {
+        job_id: run.leased.job_id.clone(),
+        run_id: run.leased.run_id.clone(),
+        kind: run.leased.kind,
+        lease_id: run.leased.lease_id.clone(),
+        manifest_rule_ids: context.rule_ids().into_iter().collect(),
+        pairs: valid.pairs,
+        priors: valid.priors,
+        opened: derived.opened,
+        transitions: derived.transitions,
+        verdict: derived.verdict,
+    })
 }
 
 /// Fail every open run of `log` whose lease ended by `now`. Returns how many
 /// attempts were recorded; a run already failed is never failed twice.
 pub fn reap_expired(log: &ReviewLog, now: u64) -> std::io::Result<usize> {
-    todo!()
+    let view = ReviewView::fold(&log.events()?);
+    let mut reaped = 0;
+    for run in view.expired_runs(now) {
+        let appended = log.transact(|events| {
+            let current = ReviewView::fold(events);
+            let still = current
+                .run(&run.leased.run_id)
+                .filter(|r| r.is_open() && !r.is_live(now));
+            let event = still.map(|r| failure(r, AttemptCause::LeaseExpired, None));
+            let appended = event.is_some();
+            Ok::<_, std::io::Error>((event, appended))
+        })?;
+        reaped += usize::from(appended);
+    }
+    Ok(reaped)
 }
 
 /// Seconds since the epoch.
@@ -372,12 +658,8 @@ pub(crate) mod tests {
             Err(RunError::WrongKind)
         ));
         assert!(matches!(
-            e.runs.claim(
-                "proj",
-                &RunToken::mint().expose().to_string(),
-                RunKind::First,
-                NOW
-            ),
+            e.runs
+                .claim("proj", RunToken::mint().expose(), RunKind::First, NOW),
             Err(RunError::UnknownToken)
         ));
         assert!(matches!(

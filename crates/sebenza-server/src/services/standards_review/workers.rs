@@ -31,7 +31,23 @@ pub fn work_once(
     launcher: &dyn RunLauncher,
     now: u64,
 ) -> usize {
-    todo!()
+    let mut launched = 0;
+    for project in projects {
+        match runs.lease_next(project, now) {
+            Ok(Some(run)) => {
+                let (run_id, job_id) = (run.run_id.clone(), run.job_id.clone());
+                match launcher.launch(run) {
+                    Ok(()) => launched += 1,
+                    Err(e) => {
+                        tracing::warn!(run = %run_id, job = %job_id, "review run launch failed: {e}")
+                    }
+                }
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!(project = %project, "review log unreadable: {e}"),
+        }
+    }
+    launched
 }
 
 /// Spawn `workers` tasks that call [`work_once`] every [`POLL_INTERVAL`].

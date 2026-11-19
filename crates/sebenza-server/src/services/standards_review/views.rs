@@ -3,6 +3,7 @@
 //! a token or token hash.
 
 use super::jobs::{Finding, JobState, ReviewView};
+use super::manifest::Rule;
 use super::run_store::Claimed;
 use super::scope::{DiffFile, FileStatus, Hunk, Side};
 use common::domain::review_records::{
@@ -133,12 +134,69 @@ pub struct FindingView {
 
 /// The claim response for `claimed`.
 pub fn claim_view(claimed: &Claimed) -> ClaimView {
-    todo!()
+    let (l, c) = (&claimed.run.leased, &claimed.job.completion);
+    let ctx = &claimed.context;
+    ClaimView {
+        run_id: l.run_id.clone(),
+        job_id: l.job_id.clone(),
+        track_id: l.track_id.clone(),
+        kind: l.kind,
+        attempt: l.attempt,
+        lease_until: l.lease_until,
+        head_sha: c.head_sha.clone(),
+        base_sha: c.base_sha.clone(),
+        standards_rev: ctx.inputs.standards_rev.clone(),
+        manifest: ctx.inputs.manifest.rules.iter().map(rule_view).collect(),
+        files: ctx.in_scope_files().into_iter().map(file_view).collect(),
+        prior_findings: ctx
+            .required_priors(l.kind)
+            .into_iter()
+            .map(|p| PriorView {
+                finding_id: p.finding.record.finding_id.clone(),
+                rule_id: p.finding.record.rule_id.clone(),
+                path: p.path_at_head.clone(),
+                line: p.finding.record.anchor.line,
+                description: p.finding.record.description.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn rule_view(r: &Rule) -> RuleView {
+    RuleView {
+        rule_id: r.rule_id.clone(),
+        category: r.category.clone(),
+        source_doc: r.source_doc.clone(),
+        line: r.line,
+        max_lines: r.max_lines,
+    }
 }
 
 /// The status of `track_id`'s latest job, if it has one.
 pub fn job_status(view: &ReviewView, track_id: &str) -> Option<JobStatusView> {
-    todo!()
+    let job = view.latest_job(track_id)?;
+    let c = &job.completion;
+    Some(JobStatusView {
+        track_id: c.track_id.clone(),
+        job_id: job.id.clone(),
+        head_sha: c.head_sha.clone(),
+        base_sha: c.base_sha.clone(),
+        standards_rev: c.standards_rev.clone(),
+        state: view.state(job),
+        attempts: AttemptsView {
+            first: job.failures_of(RunKind::First),
+            second: job.failures_of(RunKind::Second),
+        },
+        blockers: job.blocked.clone().unwrap_or_default(),
+        open_run: view.open_run(&job.id).map(|r| RunView {
+            run_id: r.leased.run_id.clone(),
+            kind: r.leased.kind,
+            attempt: r.leased.attempt,
+            lease_until: r.leased.lease_until,
+        }),
+        verdict: job.verdict().cloned(),
+        existing_checks_recorded: job.existing_checks.is_some(),
+    })
 }
 
 /// Every finding of `track_id`, oldest first.
@@ -204,8 +262,9 @@ mod tests {
         let v = serde_json::to_value(claim_view(&c)).unwrap();
         assert_eq!(v["runId"], run.run_id.as_str());
         assert_eq!(v["kind"], "first");
-        assert_eq!(v["manifest"][0]["ruleId"], "plain");
-        assert_eq!(v["manifest"][1]["maxLines"], 20);
+        assert_eq!(v["manifest"][0]["ruleId"], "short");
+        assert_eq!(v["manifest"][0]["maxLines"], 20);
+        assert!(v["manifest"][1].get("maxLines").is_none());
         assert_eq!(v["files"][1]["path"], "src/a.rs");
         assert_eq!(v["files"][1]["hunks"][0]["anchor"]["side"], "head");
         assert_eq!(v["priorFindings"], serde_json::json!([]));
