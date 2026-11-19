@@ -186,13 +186,14 @@
           "id": "phase-4-task-2",
           "name": "Implement scope proof and plan approval",
           "description": "Verify trailers and first-parent scope on claim and add operator-token plan approval with a per-task boundary snapshot.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "01f665e"
         },
         {
           "id": "phase-4-task-3",
           "name": "Update sebenza-implement and sebenza-plan skills",
           "description": "Add the writing guidance, trailers, edit boundary and daemon completion to sebenza-implement, and plan approval to sebenza-plan.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-4-task-4",
