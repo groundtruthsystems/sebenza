@@ -433,14 +433,14 @@
     {
       "id": "phase-7",
       "name": "Final verification",
-      "status": "backlog",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-7-task-1",
           "name": "Re-run the whole test plan",
           "description": "Re-run all 74 scenarios against the finished feature and close any traceability gap.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-01",
             "TS-03",
@@ -516,13 +516,14 @@
             "TS-40",
             "TS-52",
             "TS-54"
-          ]
+          ],
+          "notes": "Full re-run 2026-11-19: cargo 542/78/505, skills 195, frontend 582, tsc clean. TS-71 manual egress gate checklist deferred to operator final verification."
         },
         {
           "id": "phase-7-task-2",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "done"
         }
       ]
     }
