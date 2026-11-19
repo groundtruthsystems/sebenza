@@ -369,13 +369,14 @@
           "id": "phase-8-task-3",
           "name": "Fail closed on binary in-scope files",
           "description": "Regression test: a NUL byte or a -diff attribute must not hide a reviewable file. Raise an unreviewable-binary blocker naming the path, and run the diff with --text and attributes neutralised.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "a3698c3"
         },
         {
           "id": "phase-8-task-4",
           "name": "Bind the control token to the caller's worktree",
           "description": "Regression test: record_existing_checks and complete must refuse (403 foreign_track) a track whose jobs were recorded by another worktree or branch, and an origin-less track recorded elsewhere; the first completion binds it.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-8-task-5",
