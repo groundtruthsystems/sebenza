@@ -7,10 +7,11 @@
 //!   edit), at most once per track;
 //! - re-projects `done` where a completion's worktree shows anything else
 //!   (a crash before projection, or a skill overwrote it);
-//! - reaps expired run leases (phase 3; there are none yet).
+//! - reaps expired run leases: each becomes one failed attempt.
 
 use crate::server::AppState;
 use crate::services::project_manager::ProjectApp;
+use crate::services::standards_review::run_store::{now_secs, reap_expired};
 use crate::services::track_completion::{CompletionTarget, TrackCompletionService};
 use crate::services::tracks_projection::{Projected, project_done, track_statuses};
 use common::adapters::review_log::ReviewState;
@@ -56,10 +57,19 @@ pub fn reconcile_project(
     report
 }
 
-/// Hook for phase 3: return expired run leases to the queue. No runs exist
-/// in phase 1, so there is nothing to reap.
-pub fn reap_expired_leases(_svc: &TrackCompletionService, _project: &ProjectWorktrees) -> usize {
-    0
+/// Fail every run whose lease has expired, freeing its job for the next
+/// attempt. Returns how many attempts were recorded.
+pub fn reap_expired_leases(svc: &TrackCompletionService, project: &ProjectWorktrees) -> usize {
+    reap_expired_leases_at(svc, project, now_secs())
+}
+
+/// [`reap_expired_leases`] as of `now` (unix seconds).
+pub fn reap_expired_leases_at(
+    svc: &TrackCompletionService,
+    project: &ProjectWorktrees,
+    now: u64,
+) -> usize {
+    todo!()
 }
 
 fn append_missing(
@@ -312,8 +322,23 @@ mod tests {
     }
 
     #[test]
-    fn no_leases_exist_to_reap_yet() {
+    fn expired_leases_are_reaped_once_as_failed_attempts() {
+        use crate::services::standards_review::free_text::ContentScanner;
+        use crate::services::standards_review::run_store::{ReviewRuns, RunSettings};
         let r = TestRepo::new("rec-reap");
-        assert_eq!(reap_expired_leases(&service(&r), &project(&r)), 0);
+        let svc = service(&r);
+        assert_eq!(reap_expired_leases(&svc, &project(&r)), 0);
+        svc.complete(&project(&r).worktrees[0], TRACK, CredentialClass::Control)
+            .unwrap();
+        let runs = ReviewRuns::new(
+            svc.root().to_path_buf(),
+            RunSettings::default(),
+            Arc::new(ContentScanner::default()),
+        );
+        let run = runs.lease_next("proj", 10).unwrap().expect("queued");
+        let p = project(&r);
+        assert_eq!(reap_expired_leases_at(&svc, &p, run.lease_until - 1), 0);
+        assert_eq!(reap_expired_leases_at(&svc, &p, run.lease_until), 1);
+        assert_eq!(reap_expired_leases_at(&svc, &p, run.lease_until), 0);
     }
 }

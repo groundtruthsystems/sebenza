@@ -110,14 +110,14 @@
     {
       "id": "phase-3",
       "name": "Review store, run API and verdict deriver",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Write tests for runs, submissions and finding lifecycle",
           "description": "Add failing tests for run tokens, leases, attempts, matrix validation, redaction, the transition table and the matcher.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-2",

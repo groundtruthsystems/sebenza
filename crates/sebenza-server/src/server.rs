@@ -82,6 +82,21 @@ impl AppState {
         app.touch();
         Ok(app)
     }
+
+    /// The standards-review run store over the completion review logs. Its
+    /// scanner also redacts the control token wherever it appears.
+    pub fn review_runs(&self) -> crate::services::standards_review::run_store::ReviewRuns {
+        use crate::services::standards_review::free_text::ContentScanner;
+        use crate::services::standards_review::run_store::{ReviewRuns, RunSettings};
+        let known = crate::adapters::control_token::load_control_token()
+            .map(|t| vec![t])
+            .unwrap_or_default();
+        ReviewRuns::new(
+            self.completion.root().to_path_buf(),
+            RunSettings::default(),
+            Arc::new(ContentScanner { known }),
+        )
+    }
 }
 
 /// Spawn the background loops: PR/CI sync for viewed projects (10s) and
@@ -344,6 +359,14 @@ pub fn build_router(state: AppState) -> Router {
             "/api/tracks/{id}/complete",
             post(crate::track_routes::complete_track),
         )
+        .route(
+            "/api/review-runs/claim",
+            post(crate::review_run_routes::claim_run),
+        )
+        .route(
+            "/api/review-runs/{id}/submit",
+            post(crate::review_run_routes::submit_run),
+        )
         // Inbox (global; drafts precede any project).
         .route(
             "/api/inbox/session",
@@ -570,6 +593,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/{prefix}/api/branches", get(get_branches))
         .route("/{prefix}/api/base-branches", get(get_base_branches))
         .route("/{prefix}/api/project", get(get_project))
+        .route(
+            "/{prefix}/api/review/tracks/{id}",
+            get(crate::review_run_routes::review_status),
+        )
+        .route(
+            "/{prefix}/api/review/tracks/{id}/findings",
+            get(crate::review_run_routes::review_findings),
+        )
         .route(
             "/{prefix}/api/project/auto-name",
             get(fetch_auto_name_config),

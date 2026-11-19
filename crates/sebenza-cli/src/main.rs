@@ -12,6 +12,7 @@ mod migrate;
 mod oneshot;
 mod port;
 mod project;
+mod review;
 mod serve;
 mod service;
 mod service_units;
@@ -53,6 +54,7 @@ Usage:
   sebenza-cli login        Sign in as the operator (confirm the code in the dashboard)
   sebenza-cli project      List, add, or remove projects served by the dashboard
   sebenza-cli track        Complete a track through the daemon (enqueues its review)
+  sebenza-cli review       Show a track's standards review status and findings (read-only)
   sebenza-cli completion   Generate shell completion script (bash, zsh)
 
 Options:
@@ -94,6 +96,7 @@ const ROOT_COMMANDS: &[&str] = &[
     "completion",
     "login",
     "track",
+    "review",
 ];
 
 const WORKTREE_COMMANDS: &[&str] = &[
@@ -281,6 +284,8 @@ async fn main() {
         project::run(&parsed.command_args, effective_port).await
     } else if command == "track" {
         track::run(&parsed.command_args, effective_port, &cwd).await
+    } else if command == "review" {
+        review::run(&parsed.command_args, effective_port, &cwd).await
     } else if WORKTREE_COMMANDS.contains(&command.as_str()) {
         worktree::run(worktree::WorktreeContext {
             command,
@@ -319,6 +324,7 @@ mod tests {
             "project",
             "login",
             "track",
+            "review",
         ];
         for cmd in dispatched {
             assert!(

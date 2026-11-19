@@ -7,6 +7,9 @@
 //! Events carry ids and hashes only, never code, tokens or free text.
 
 use crate::adapters::inbox_store::write_durably;
+use crate::domain::review_records::{
+    AttemptFailed, ExistingChecksRecorded, JobBlocked, RunLeased, RunSubmitted,
+};
 use crate::util::id::random_ulid;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -52,6 +55,23 @@ pub struct TrackCompleted {
     pub branch: String,
 }
 
+impl JobKey {
+    /// A stable id for the job: the first 24 hex digits of the SHA-256 of
+    /// its key fields.
+    pub fn job_id(&self) -> String {
+        let joined = [
+            self.track_id.as_str(),
+            &self.head_sha,
+            &self.base_sha,
+            &self.standards_rev,
+        ]
+        .join("\0");
+        let mut id = crate::domain::solution::sha256_hex(&joined);
+        id.truncate(24);
+        format!("job_{id}")
+    }
+}
+
 impl TrackCompleted {
     /// The job key this completion enqueues.
     pub fn job_key(&self) -> JobKey {
@@ -64,11 +84,16 @@ impl TrackCompleted {
     }
 }
 
-/// Every kind of review-log event. Later phases add runs and findings.
+/// Every kind of review-log event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ReviewEventKind {
     TrackCompleted(TrackCompleted),
+    RunLeased(RunLeased),
+    AttemptFailed(AttemptFailed),
+    JobBlocked(JobBlocked),
+    RunSubmitted(RunSubmitted),
+    ExistingChecksRecorded(ExistingChecksRecorded),
 }
 
 /// One line of the review log.
@@ -105,8 +130,8 @@ impl ReviewState {
     pub fn fold<'a>(events: impl IntoIterator<Item = &'a ReviewEvent>) -> Self {
         let mut state = Self::default();
         for event in events {
-            match &event.kind {
-                ReviewEventKind::TrackCompleted(c) => state.completions.push(c.clone()),
+            if let ReviewEventKind::TrackCompleted(c) = &event.kind {
+                state.completions.push(c.clone());
             }
         }
         state
@@ -208,6 +233,25 @@ impl ReviewLog {
         line.push('\n');
         write_durably(&mut file, line.as_bytes())?;
         Ok((completion, true))
+    }
+
+    /// Every event, in log order, after cutting a torn final line.
+    pub fn events(&self) -> std::io::Result<Vec<ReviewEvent>> {
+        match self.locked_file(false)? {
+            Some(mut file) => read_repaired(&mut file),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Run `decide` over the current events under the log's lock and
+    /// durably append the one event it returns, if any. The decision and the
+    /// append share the lock, so a check inside `decide` cannot race another
+    /// writer. One event per call keeps each commit point a single line.
+    pub fn transact<T, E: From<std::io::Error>>(
+        &self,
+        decide: impl FnOnce(&[ReviewEvent]) -> Result<(Option<ReviewEventKind>, T), E>,
+    ) -> Result<T, E> {
+        todo!()
     }
 
     /// The log file opened for read and append under an exclusive lock that
@@ -422,5 +466,67 @@ mod tests {
             latest,
             vec![("t2".into(), "h1".into()), ("t1".into(), "h2".into())]
         );
+    }
+    fn leased(run: &str) -> ReviewEventKind {
+        ReviewEventKind::RunLeased(RunLeased {
+            job_id: "job_1".into(),
+            track_id: "t1".into(),
+            run_id: run.into(),
+            kind: crate::domain::review_records::RunKind::First,
+            attempt: 1,
+            lease_id: "l1".into(),
+            token_hash: "h".repeat(64),
+            lease_until: 100,
+        })
+    }
+
+    #[test]
+    fn a_transaction_appends_the_one_event_it_decides_on() {
+        let log = temp_log("tx");
+        append_once(&log, completion("t1", "h1"));
+        let seen = log
+            .transact(|events| Ok::<_, std::io::Error>((Some(leased("run_1")), events.len())))
+            .unwrap();
+        assert_eq!(seen, 1);
+        let events = log.events().unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[1].kind, leased("run_1"));
+        assert!(
+            fs::read_to_string(log.path())
+                .unwrap()
+                .contains("\"kind\":\"run-leased\"")
+        );
+        assert_eq!(
+            log.open().unwrap().completions.len(),
+            1,
+            "runs leave completions alone"
+        );
+    }
+
+    #[test]
+    fn a_transaction_that_decides_nothing_or_fails_appends_nothing() {
+        let log = temp_log("tx-none");
+        append_once(&log, completion("t1", "h1"));
+        log.transact(|_| Ok::<_, std::io::Error>((None, ())))
+            .unwrap();
+        let failed: Result<(), std::io::Error> =
+            log.transact(|_| Err(std::io::Error::other("refused")));
+        assert!(failed.is_err());
+        assert_eq!(log.events().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn events_of_a_missing_log_are_empty() {
+        assert!(temp_log("ev-missing").events().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_job_id_is_stable_and_differs_per_key() {
+        let a = completion("t1", "h1").job_key();
+        let b = completion("t1", "h2").job_key();
+        assert_eq!(a.job_id(), a.clone().job_id());
+        assert_ne!(a.job_id(), b.job_id());
+        assert!(a.job_id().starts_with("job_"));
+        assert_eq!(a.job_id().len(), 28);
     }
 }

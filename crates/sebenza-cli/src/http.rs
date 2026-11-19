@@ -621,6 +621,23 @@ impl Http {
 }
 
 impl Http {
+    /// `GET <base>/api/review/tracks/{id}` — a track's latest review job.
+    pub async fn review_status(&self, base: &str, track_id: &str) -> Result<Value> {
+        self.get(&format!("{base}/api/review/tracks/{}", urlencode(track_id)))
+            .await
+    }
+
+    /// `GET <base>/api/review/tracks/{id}/findings` — a track's findings.
+    pub async fn review_findings(&self, base: &str, track_id: &str) -> Result<Value> {
+        self.get(&format!(
+            "{base}/api/review/tracks/{}/findings",
+            urlencode(track_id)
+        ))
+        .await
+    }
+}
+
+impl Http {
     /// `POST /api/operator/login` — start a CLI operator login.
     pub async fn operator_login_start(&self, verifier_hash: &str) -> Result<Value> {
         let resp = self

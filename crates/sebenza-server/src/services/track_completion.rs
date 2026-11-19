@@ -85,6 +85,11 @@ impl TrackCompletionService {
         Self { root }
     }
 
+    /// The directory holding every project's review log.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// The review log of `project_key`.
     pub fn log(&self, project_key: &str) -> ReviewLog {
         ReviewLog::for_project(&self.root, project_key)

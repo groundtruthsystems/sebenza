@@ -11,6 +11,7 @@ mod operator_e2e_tests;
 mod operator_routes;
 #[cfg(test)]
 mod project_review_e2e_tests;
+mod review_run_routes;
 mod server;
 mod services;
 #[cfg(test)]
