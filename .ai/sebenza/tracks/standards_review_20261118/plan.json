@@ -70,7 +70,8 @@
           "id": "phase-2-task-1",
           "name": "Write tests for the snapshot resolver",
           "description": "Add failing tests over temp git repos for pinned objects, path containment, symlinks, submodules, caps and standards_rev.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "f005fea"
         },
         {
           "id": "phase-2-task-2",
