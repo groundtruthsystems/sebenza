@@ -355,13 +355,14 @@
           "id": "phase-8-task-1",
           "name": "Resolve the target and head as branch refs",
           "description": "Regression test: a tag named like the target branch must not change the merge-base or the standards. Resolve refs/heads/<target> and refs/heads/<branch> at every rev_parse/commit_sha call site.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "30b11e5"
         },
         {
           "id": "phase-8-task-2",
           "name": "Check edits hidden in target merges",
           "description": "Regression test: a target merge with a manual edit and no trailers must be caught. Treat a merge that introduces changes beyond the automatic merge (git merge-tree --write-tree) as a Change commit for trailers and the edit boundary.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-8-task-3",
