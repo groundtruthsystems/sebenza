@@ -1,5 +1,9 @@
 ## Change Log
 
+### 2026-11-19 — Skills: design drafts land in the document, not the terminal
+
+The design and planning skills used to ask the user, one question at a time, to describe actors and use cases, and asked them to approve ASCII sketches of each diagram in the terminal. Now the agent writes the first version into the track document itself. `design.md` gets a numbered use-case table (actor, trigger, main flow, alternate flows, what each covers) and a Mermaid diagram, built from the request, the inbox notes and the code, with inferred items marked `_(assumption)_`. The user then reviews and edits the file in the worktree, where Mermaid renders. The chat shows only a short summary, the file path and the assumptions to check. Architecture documents, the test plan and `spec.md` follow the same rule, and no diagram is drawn in chat any more.
+
 ### 2026-11-12 — Software factory, project level: independent review in worktrees (factory_project_level_20261111)
 
 Inside a converted worktree the Sebenza skills now design in three ordered architect waves (business; then application and data; then technical, test and security), hold implementation behind an `[approval]` request, and run independent design and code review through `sebenza-agentctl review`, capped at three rounds per level. The configured project reviewer reads a daemon-built read-only snapshot that excludes `.git`, `.env*`, keys, agent settings, `CLAUDE.md` and `AGENTS.md` with hooks disabled, and any change to the snapshot or live tree voids the round and opens a request. Code-review findings send the tasks they name back to `doing`, and review ends by filing one `[<track>/verification]` request listing every open finding. TS-17 and TS-54 were shared with the solution-level track, so the two tracks together ran 63 scenarios.

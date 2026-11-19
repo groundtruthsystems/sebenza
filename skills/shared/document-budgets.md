@@ -12,6 +12,7 @@ below has a cap. The caps are deliberately tight enough to force a choice about 
 |---|---|
 | `design.md` **total** | ~600 words, excluding ` ```mermaid ` blocks |
 | `## Overview` | ≤ 100 words |
+| `## Use Cases` | a table, one row per `UC-nn` and per alternate flow; main flow ≤ 5 terse steps |
 | Each `<domain>-architecture.md` **total** | ~400 words, excluding ` ```mermaid ` blocks and tables |
 | Each architecture domain narrative | ≤ 200 words |
 | Each domain's **Decisions** | ≤ 5 bullets, one line each |
@@ -61,5 +62,6 @@ presenting it — not after the user complains about the length.
 
 These caps govern the **files**. What you print in the terminal is governed by
 [`conventions.md`](./conventions.md) (Terminal-readable output) and [`diagrams.md`](./diagrams.md):
-summarize a written section in a few lines and give its path — never reproduce it in chat. A section
-that is within its document budget is still too long to paste into a terminal.
+summarize a written section in a few lines and give its path — never reproduce it or its diagrams
+in chat; the user reviews it in the file. A section that is within its document budget is still too
+long to paste into a terminal.
