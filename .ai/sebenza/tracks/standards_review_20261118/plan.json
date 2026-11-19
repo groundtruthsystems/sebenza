@@ -266,7 +266,7 @@
           "id": "phase-5-task-5",
           "name": "Execute test scenarios TS-23..TS-71",
           "description": "Run and record evidence for every scenario this phase delivers.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-23",
             "TS-24",
