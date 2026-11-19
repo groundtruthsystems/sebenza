@@ -140,7 +140,8 @@ fn set_mode(p: &Path, mode: u32) {
     let _ = std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode));
 }
 
-fn make_read_only(dir: &Path) {
+/// Make `dir` and everything under it read-only: files 0444, dirs 0555.
+pub fn make_read_only(dir: &Path) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };

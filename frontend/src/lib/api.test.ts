@@ -737,6 +737,29 @@ describe("inbox priority, comments and requests", () => {
     expect(JSON.parse(seen[0].body)).toEqual(submission);
   });
 
+  it("decides a review finding at the hub with the operator token", async () => {
+    const { clearOperatorToken } = await import("./operator");
+    clearOperatorToken();
+    const seen = recordFetch({
+      token: "op_1",
+      expiresAt: 4_000_000_000,
+      ok: true,
+      findingId: "f_1",
+      from: "needs-operator-decision",
+      status: "resolved",
+      verdict: { passing: true, reasons: [] },
+    });
+    window.__SEBENZA_CONTROL_TOKEN__ = "control";
+    const api = await loadApiAt("/myproject/");
+    const got = await api.decideReviewFinding("f_1", "reject");
+    expect(got.status).toBe("resolved");
+    const call = seen[seen.length - 1];
+    expect(call.url).toMatch(/^[^?]*\/api\/findings\/f_1\/decision$/);
+    expect(call.url).not.toContain("/myproject/");
+    expect(call.auth).toBe("Bearer op_1");
+    expect(JSON.parse(call.body)).toEqual({ decision: "reject" });
+  });
+
   it("approves a track plan at the hub with the operator token", async () => {
     const { clearOperatorToken } = await import("./operator");
     clearOperatorToken();
@@ -773,6 +796,8 @@ describe("inbox priority, comments and requests", () => {
       openRun: null,
       verdict: { passing: false, reasons: ["open-findings"] },
       existingChecksRecorded: false,
+      secondRunPending: false,
+      notes: [],
     };
     let seen = recordFetch({ trackId: "t_1", job });
     let api = await loadApiAt("/myproject/");

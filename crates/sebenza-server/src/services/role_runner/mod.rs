@@ -172,6 +172,28 @@ pub mod conformance {
             .find(|(a, _, _)| *a == agent)
             .map(|(_, e, _)| *e)
     }
+
+    /// (agent, egress verified, evidence) for standards-review runs (D-04):
+    /// verified means the CLI runs with no network tools and its traffic
+    /// goes through the daemon's allowlisting proxy. Launch is `claude` only.
+    pub const REVIEW_EGRESS: [(&str, bool, &str); 3] = [
+        (
+            "claude",
+            true,
+            "WebFetch/WebSearch disallowed, strict MCP with no servers, HTTPS_PROXY to the egress proxy; TS-49",
+        ),
+        ("codex", false, "no egress probe yet"),
+        ("grok", false, "read-only enforcement unverified"),
+    ];
+
+    /// Whether `agent` is marked read-only-and-egress-verified, the only
+    /// CLIs a standards-review run is dispatched to.
+    pub fn review_dispatchable(agent: &str) -> bool {
+        enforcement(agent) == Some(Enforcement::Verified)
+            && REVIEW_EGRESS
+                .iter()
+                .any(|(a, verified, _)| *a == agent && *verified)
+    }
 }
 
 /// Why a role job will not start.

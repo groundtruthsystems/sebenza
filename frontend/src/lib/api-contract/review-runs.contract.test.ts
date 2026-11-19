@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { apiContract, apiPaths } from "./contract";
 import {
   ApproveTrackPlanResponseSchema,
+  DecideFindingRequestSchema,
   ReviewFindingSchema,
   ReviewJobStatusSchema,
   SubmitReviewRunRequestSchema,
@@ -72,5 +73,41 @@ describe("review runs contract", () => {
     expect(ReviewFindingSchema.shape.origin.safeParse("boundary").success).toBe(
       true,
     );
+  });
+
+  it("lists the operator decision route and closes its body", () => {
+    expect(apiPaths.decideFinding).toBe("/api/findings/:id/decision");
+    expect(apiContract.decideFinding.method).toBe("POST");
+    for (const decision of ["confirm", "reject"]) {
+      expect(DecideFindingRequestSchema.safeParse({ decision }).success).toBe(
+        true,
+      );
+    }
+    for (const bad of [
+      { decision: "maybe" },
+      { decision: "confirm", reason: "x" },
+    ]) {
+      expect(DecideFindingRequestSchema.safeParse(bad).success).toBe(false);
+    }
+  });
+
+  it("closes the existing checks a first run reports", () => {
+    const base = {
+      dispositions: [],
+      existingChecks: [{ check: "coverage", status: "not_applicable" }],
+    };
+    expect(SubmitReviewRunRequestSchema.safeParse(base).success).toBe(true);
+    for (const bad of [
+      { check: "lint", status: "pass" },
+      { check: "coverage", status: "skipped" },
+      { check: "coverage", status: "pass", note: "x" },
+    ]) {
+      expect(
+        SubmitReviewRunRequestSchema.safeParse({
+          ...base,
+          existingChecks: [bad],
+        }).success,
+      ).toBe(false);
+    }
   });
 });

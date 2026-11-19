@@ -54,7 +54,7 @@ Usage:
   sebenza-cli login        Sign in as the operator (confirm the code in the dashboard)
   sebenza-cli project      List, add, or remove projects served by the dashboard
   sebenza-cli track        Complete a track (enqueues its review); approve its plan (operator)
-  sebenza-cli review       Show a track's standards review status and findings (read-only)
+  sebenza-cli review       Show a track's standards review; decide a disputed finding (operator)
   sebenza-cli completion   Generate shell completion script (bash, zsh)
 
 Options:

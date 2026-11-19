@@ -371,6 +371,10 @@ pub fn build_router(state: AppState) -> Router {
             "/api/review-runs/{id}/submit",
             post(crate::review_run_routes::submit_run),
         )
+        .route(
+            "/api/findings/{id}/decision",
+            post(crate::review_run_routes::decide_finding),
+        )
         // Inbox (global; drafts precede any project).
         .route(
             "/api/inbox/session",

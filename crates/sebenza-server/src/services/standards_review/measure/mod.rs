@@ -136,9 +136,8 @@ pub fn measure(rules: &[Rule], files: &[SourceFile]) -> Measurement {
     for file in files {
         match functions_of(file) {
             Some(functions) => {
-                for rule in &long {
-                    out.findings.extend(breaches(rule, file, &functions));
-                }
+                let found = long.iter().flat_map(|r| breaches(r, file, &functions));
+                out.findings.extend(found);
             }
             None => {
                 let pairs = long.iter().map(|r| (r.rule_id.clone(), file.path.clone()));

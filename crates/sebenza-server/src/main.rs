@@ -259,6 +259,7 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
     server::spawn_background_loops(state.clone());
     // Completion repair: at startup, then every five minutes (FR-04).
     services::completion_reconciler::spawn(state.clone());
+    start_review_workers(&state, port);
     // Dismissal notices: rebuilt from the log now, then retried on a timer.
     services::notice_dispatcher::spawn(state.inbox.clone(), notify_config.poll_secs);
     // The capability probe runs in the background; chat answers 503 until it passes.
@@ -296,6 +297,21 @@ async fn serve(port_opt: Option<u16>, host_opt: Option<String>) -> anyhow::Resul
         .await?;
     adapters::instance_registry::deregister(port, Some(pid));
     Ok(())
+}
+
+/// Start the standards-review workers when a conformant launcher exists;
+/// otherwise say why once and leave jobs queued (D-04).
+fn start_review_workers(state: &AppState, port: u16) {
+    use services::standards_review::{launcher, workers};
+    match launcher::conformant_launcher(
+        state.review_runs(),
+        state.agent_stream.clone(),
+        port,
+        std::env::var_os("PATH"),
+    ) {
+        Ok(l) => workers::spawn_workers(state.clone(), Arc::new(l), workers::DEFAULT_WORKERS),
+        Err(reason) => workers::block_dispatch(reason),
+    }
 }
 
 /// Resolve when the process receives SIGINT or SIGTERM.

@@ -90,17 +90,20 @@ fn body_lines(toks: &[Tok], lines: &[Logical], li: usize) -> Result<Vec<(u32, u3
     Ok(body
         .iter()
         .enumerate()
-        .map(|(n, &k)| {
-            let toks = statement(k);
-            let docstring = n == 0 && toks.len() == 1 && toks[0].kind == Kind::Str;
-            let count = if docstring {
-                0
-            } else {
-                covered_lines(toks).len() as u32
-            };
-            (count, toks.last().map_or(0, |t| t.end_line))
-        })
+        .map(|(n, &k)| statement_lines(statement(k), n == 0))
         .collect())
+}
+
+/// One body statement's code lines and last line; a leading docstring
+/// (`first` and a lone string) has none.
+fn statement_lines(toks: &[Tok], first: bool) -> (u32, u32) {
+    let docstring = first && toks.len() == 1 && toks[0].kind == Kind::Str;
+    let count = if docstring {
+        0
+    } else {
+        covered_lines(toks).len() as u32
+    };
+    (count, toks.last().map_or(0, |t| t.end_line))
 }
 
 /// Tokens and logical-line starts of `text`.
@@ -153,32 +156,41 @@ impl Lexer {
     fn physical_line(&mut self) -> Result<(), Defer> {
         let indent = self.indent()?;
         let mut first = true;
-        loop {
-            match self.peek(0) {
-                None => return Ok(()),
-                Some('\n') => {
-                    self.bump();
-                    if self.depth == 0 {
-                        return Ok(());
-                    }
+        while let Some(c) = self.peek(0) {
+            if let Some(ends) = self.newline() {
+                if ends {
+                    return Ok(());
                 }
-                Some('\\') if self.peek(1) == Some('\n') => {
-                    self.i += 2;
-                    self.line += 1;
+            } else if c == '#' {
+                self.skip_comment();
+            } else if c.is_whitespace() {
+                self.bump();
+            } else {
+                if first && self.depth == 0 {
+                    let first_tok = self.toks.len();
+                    self.lines.push(Logical { first_tok, indent });
                 }
-                Some('#') => self.skip_comment(),
-                Some(c) if c.is_whitespace() => {
-                    self.bump();
-                }
-                Some(_) => {
-                    if first && self.depth == 0 {
-                        let first_tok = self.toks.len();
-                        self.lines.push(Logical { first_tok, indent });
-                    }
-                    first = false;
-                    self.token()?;
-                }
+                first = false;
+                self.token()?;
             }
+        }
+        Ok(())
+    }
+
+    /// Consume a newline or a backslash continuation, if one is next; true
+    /// when it ends the logical line.
+    fn newline(&mut self) -> Option<bool> {
+        match (self.peek(0), self.peek(1)) {
+            (Some('\n'), _) => {
+                self.bump();
+                Some(self.depth == 0)
+            }
+            (Some('\\'), Some('\n')) => {
+                self.i += 2;
+                self.line += 1;
+                Some(false)
+            }
+            _ => None,
         }
     }
 
@@ -209,21 +221,7 @@ impl Lexer {
 
     fn token(&mut self) -> Result<(), Defer> {
         let (start, line) = (self.i, self.line);
-        let c = self.peek(0).ok_or(Defer("eof"))?;
-        let kind = if let Some(prefix) = self.string_prefix() {
-            self.i += prefix;
-            self.string()?;
-            Kind::Str
-        } else if c.is_alphabetic() || c == '_' {
-            self.word();
-            Kind::Ident
-        } else if c.is_ascii_digit() {
-            self.word();
-            Kind::Number
-        } else {
-            self.punct();
-            Kind::Punct
-        };
+        let kind = self.token_kind()?;
         let text: String = self.chars[start..self.i].iter().collect();
         self.toks.push(Tok {
             kind,
@@ -232,6 +230,26 @@ impl Lexer {
             end_line: self.line,
         });
         Ok(())
+    }
+
+    /// Consume one token and say what it is.
+    fn token_kind(&mut self) -> Result<Kind, Defer> {
+        let c = self.peek(0).ok_or(Defer("eof"))?;
+        if let Some(prefix) = self.string_prefix() {
+            self.i += prefix;
+            self.string()?;
+            Ok(Kind::Str)
+        } else if c.is_alphanumeric() || c == '_' {
+            self.word();
+            Ok(if c.is_ascii_digit() {
+                Kind::Number
+            } else {
+                Kind::Ident
+            })
+        } else {
+            self.punct();
+            Ok(Kind::Punct)
+        }
     }
 
     /// The length of a string prefix (`r`, `b`, `f`, `rb`, ...) when a

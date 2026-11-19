@@ -8,7 +8,8 @@
 
 use crate::adapters::inbox_store::write_durably;
 use crate::domain::review_records::{
-    AttemptFailed, ExistingChecksRecorded, JobBlocked, PlanApproved, RunLeased, RunSubmitted,
+    AttemptFailed, ExistingChecksRecorded, FindingDecided, JobBlocked, PlanApproved, RunLeased,
+    RunSubmitted,
 };
 use crate::util::id::random_ulid;
 use serde::{Deserialize, Serialize};
@@ -95,6 +96,7 @@ pub enum ReviewEventKind {
     RunSubmitted(RunSubmitted),
     ExistingChecksRecorded(ExistingChecksRecorded),
     PlanApproved(PlanApproved),
+    FindingDecided(FindingDecided),
 }
 
 /// One line of the review log.

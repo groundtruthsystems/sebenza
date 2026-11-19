@@ -14,17 +14,8 @@ pub fn scan(text: &str) -> Result<Scanned, Defer> {
     let mut functions = Vec::new();
     for i in 0..toks.len().saturating_sub(1) {
         let named = toks[i].is_word("fn") && toks[i + 1].kind == Kind::Ident;
-        if !named || in_macro(i) {
-            continue;
-        }
-        if let Some(open) = body_open(&toks, &pairs, i + 2)? {
-            let close = pairs[open].ok_or(Defer("unpaired-body"))?;
-            functions.push(Function {
-                name: toks[i + 1].text.clone(),
-                start_line: toks[i].line,
-                end_line: toks[close].line,
-                logical_lines: brace_body_lines(&toks, open, close),
-            });
+        if named && !in_macro(i) {
+            functions.extend(function_at(&toks, &pairs, i)?);
         }
     }
     let opaque = macros
@@ -32,6 +23,20 @@ pub fn scan(text: &str) -> Result<Scanned, Defer> {
         .map(|(a, b)| (toks[*a].line, toks[*b].end_line))
         .collect();
     Ok(Scanned { functions, opaque })
+}
+
+/// The function whose `fn` keyword is token `i`, if it has a body.
+fn function_at(toks: &[Tok], pairs: &[Option<usize>], i: usize) -> Result<Option<Function>, Defer> {
+    let Some(open) = body_open(toks, pairs, i + 2)? else {
+        return Ok(None);
+    };
+    let close = pairs[open].ok_or(Defer("unpaired-body"))?;
+    Ok(Some(Function {
+        name: toks[i + 1].text.clone(),
+        start_line: toks[i].line,
+        end_line: toks[close].line,
+        logical_lines: brace_body_lines(toks, open, close),
+    }))
 }
 
 /// The `{` opening the body of the signature starting at `from`; `None`

@@ -36,24 +36,33 @@ pub fn scan(text: &str) -> Result<Scanned, Defer> {
     let pairs = pair_brackets(&toks)?;
     let mut functions = Vec::new();
     for open in (0..toks.len()).filter(|&i| toks[i].is("{")) {
-        let Some((name, start_line)) = head_of(&toks, &pairs, open) else {
-            continue;
-        };
-        let close = pairs[open].ok_or(Defer("unpaired-body"))?;
-        if toks.get(close + 1).is_some_and(|t| t.is("{")) {
-            return Err(Defer("ambiguous-type-literal"));
-        }
-        functions.push(Function {
-            name,
-            start_line,
-            end_line: toks[close].line,
-            logical_lines: brace_body_lines(&toks, open, close),
-        });
+        functions.extend(function_at(&toks, &pairs, open)?);
     }
     Ok(Scanned {
         functions,
         opaque: Vec::new(),
     })
+}
+
+/// The function whose body would open at `open`, if it is one.
+fn function_at(
+    toks: &[Tok],
+    pairs: &[Option<usize>],
+    open: usize,
+) -> Result<Option<Function>, Defer> {
+    let Some((name, start_line)) = head_of(toks, pairs, open) else {
+        return Ok(None);
+    };
+    let close = pairs[open].ok_or(Defer("unpaired-body"))?;
+    if toks.get(close + 1).is_some_and(|t| t.is("{")) {
+        return Err(Defer("ambiguous-type-literal"));
+    }
+    Ok(Some(Function {
+        name,
+        start_line,
+        end_line: toks[close].line,
+        logical_lines: brace_body_lines(toks, open, close),
+    }))
 }
 
 /// The name and first line of the function whose body opens at `open`.

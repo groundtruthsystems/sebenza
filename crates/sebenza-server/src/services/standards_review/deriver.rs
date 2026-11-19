@@ -46,7 +46,8 @@ pub const UNDECIDED_FINDINGS: &str = "undecided-findings";
 pub const SECOND_RUN_PENDING: &str = "second-run-pending";
 /// Verdict reason: no existing-check results were recorded for the job.
 pub const EXISTING_CHECKS_MISSING: &str = "existing-checks-missing";
-/// Verdict reason: an existing sebenza-review check failed.
+/// Verdict reason prefix: an existing sebenza-review check failed; the
+/// check id follows a colon.
 pub const EXISTING_CHECKS_FAILED: &str = "existing-checks-failed";
 
 /// A prior finding of the track that is not terminal.
@@ -59,7 +60,7 @@ pub struct PriorFinding {
     pub rule_in_prior_manifest: bool,
 }
 
-/// A numeric-rule breach a daemon measurer found (phase 5 fills these).
+/// A numeric-rule breach a daemon measurer ([`measure`](super::measure)) found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MeasuredFinding {
     pub rule_id: String,
@@ -323,24 +324,39 @@ fn verdict(
         .map(status_now)
         .chain(opened.iter().map(|_| FindingStatus::Open))
         .collect();
-    let mut reasons = Vec::new();
+    verdict_of(&statuses, inputs.second_run_pending, inputs.existing_checks)
+}
+
+/// The verdict over every non-terminal finding status of the track: passing
+/// only with none open or undecided, no pending second run, and existing
+/// checks recorded with none failed. Each failed check is its own reason,
+/// `existing-checks-failed:<check>`.
+pub fn verdict_of(
+    statuses: &[FindingStatus],
+    second_run_pending: bool,
+    existing_checks: Option<&[String]>,
+) -> VerdictRecord {
+    let mut reasons: Vec<String> = Vec::new();
     if statuses.contains(&FindingStatus::Open) {
-        reasons.push(OPEN_FINDINGS);
+        reasons.push(OPEN_FINDINGS.into());
     }
     if statuses.contains(&FindingStatus::NeedsOperatorDecision) {
-        reasons.push(UNDECIDED_FINDINGS);
+        reasons.push(UNDECIDED_FINDINGS.into());
     }
-    if inputs.second_run_pending {
-        reasons.push(SECOND_RUN_PENDING);
+    if second_run_pending {
+        reasons.push(SECOND_RUN_PENDING.into());
     }
-    match inputs.existing_checks {
-        None => reasons.push(EXISTING_CHECKS_MISSING),
-        Some(failed) if !failed.is_empty() => reasons.push(EXISTING_CHECKS_FAILED),
-        Some(_) => {}
+    match existing_checks {
+        None => reasons.push(EXISTING_CHECKS_MISSING.into()),
+        Some(failed) => reasons.extend(
+            failed
+                .iter()
+                .map(|check| format!("{EXISTING_CHECKS_FAILED}:{check}")),
+        ),
     }
     VerdictRecord {
         passing: reasons.is_empty(),
-        reasons: reasons.into_iter().map(String::from).collect(),
+        reasons,
     }
 }
 
@@ -629,7 +645,11 @@ mod tests {
         );
         let mut f = fixture();
         f.existing_checks = Some(vec!["coverage".into()]);
-        assert_eq!(run(&f).verdict.reasons, vec![EXISTING_CHECKS_FAILED]);
+        assert_eq!(
+            run(&f).verdict.reasons,
+            vec!["existing-checks-failed:coverage"],
+            "TS-62: the reason names the failed check"
+        );
     }
 
     fn out_of_bounds(path: &str) -> BoundaryFinding {

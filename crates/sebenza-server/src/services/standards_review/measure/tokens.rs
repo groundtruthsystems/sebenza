@@ -64,20 +64,15 @@ pub struct Scanned {
 pub fn pair_brackets(toks: &[Tok]) -> Result<Vec<Option<usize>>, Defer> {
     let mut pairs = vec![None; toks.len()];
     let mut open: Vec<usize> = Vec::new();
-    for (i, t) in toks
-        .iter()
-        .enumerate()
-        .filter(|(_, t)| t.kind == Kind::Punct)
-    {
+    for (i, t) in toks.iter().enumerate() {
         match t.text.as_str() {
-            "(" | "[" | "{" => open.push(i),
-            ")" | "]" | "}" => {
+            "(" | "[" | "{" if t.kind == Kind::Punct => open.push(i),
+            ")" | "]" | "}" if t.kind == Kind::Punct => {
                 let o = open.pop().ok_or(Defer("unbalanced-brackets"))?;
                 if closer_of(&toks[o].text) != t.text {
                     return Err(Defer("mismatched-brackets"));
                 }
-                pairs[o] = Some(i);
-                pairs[i] = Some(o);
+                (pairs[o], pairs[i]) = (Some(i), Some(o));
             }
             _ => {}
         }

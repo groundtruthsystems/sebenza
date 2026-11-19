@@ -1,6 +1,8 @@
 //! `sebenza-cli review status|findings <track-id>`: read a track's
-//! standards review from the daemon. Read-only: nothing here moves a job, a
-//! finding or a verdict.
+//! standards review from the daemon; nothing there moves a job, a finding
+//! or a verdict. `sebenza-cli review decide <finding-id> --confirm|--reject`
+//! is the operator's decision on a finding the two runs disagree on
+//! (FR-19); it needs the operator token from `sebenza-cli login`.
 
 use anyhow::{Result, anyhow};
 use serde_json::Value;
@@ -9,8 +11,16 @@ use crate::http::Http;
 
 #[derive(Debug, PartialEq, Eq)]
 enum ReviewCommand {
-    Status { track_id: String },
-    Findings { track_id: String },
+    Status {
+        track_id: String,
+    },
+    Findings {
+        track_id: String,
+    },
+    Decide {
+        finding_id: String,
+        decision: &'static str,
+    },
 }
 
 fn usage() -> String {
@@ -18,10 +28,14 @@ fn usage() -> String {
         "Usage:",
         "  sebenza-cli review status <track-id>",
         "  sebenza-cli review findings <track-id>",
+        "  sebenza-cli review decide <finding-id> --confirm|--reject",
         "",
         "Shows the standards review of a track in the current project: the latest",
         "job's state, attempts and daemon-derived verdict, or every finding with its",
         "status. Read-only.",
+        "",
+        "decide (operator): settles a needs-operator-decision finding. --confirm",
+        "keeps it open; --reject resolves it. Needs `sebenza-cli login`.",
     ]
     .join("\n")
 }
@@ -32,6 +46,9 @@ fn parse(args: &[String]) -> Result<Option<ReviewCommand>> {
     };
     if matches!(sub, "--help" | "-h") {
         return Ok(None);
+    }
+    if sub == "decide" {
+        return parse_decide(&args[1..]).map(Some);
     }
     let track_id = match &args[1..] {
         [] => return Err(anyhow!("review {sub} requires a <track-id>")),
@@ -44,6 +61,26 @@ fn parse(args: &[String]) -> Result<Option<ReviewCommand>> {
         "findings" => Ok(Some(ReviewCommand::Findings { track_id })),
         other => Err(anyhow!("Unknown review subcommand: {other}")),
     }
+}
+
+fn parse_decide(args: &[String]) -> Result<ReviewCommand> {
+    let (mut finding_id, mut decision) = (None, None);
+    for arg in args {
+        match arg.as_str() {
+            "--confirm" | "--reject" if decision.is_some() => {
+                return Err(anyhow!("give one of --confirm or --reject"));
+            }
+            "--confirm" => decision = Some("confirm"),
+            "--reject" => decision = Some("reject"),
+            flag if flag.starts_with('-') => return Err(anyhow!("Unknown option: {flag}")),
+            id if finding_id.is_none() => finding_id = Some(id.to_string()),
+            extra => return Err(anyhow!("Unexpected argument: {extra}")),
+        }
+    }
+    Ok(ReviewCommand::Decide {
+        finding_id: finding_id.ok_or_else(|| anyhow!("review decide requires a <finding-id>"))?,
+        decision: decision.ok_or_else(|| anyhow!("review decide needs --confirm or --reject"))?,
+    })
 }
 
 pub async fn run(args: &[String], port: u16, cwd: &str) -> i32 {
@@ -72,6 +109,15 @@ pub async fn run(args: &[String], port: u16, cwd: &str) -> i32 {
 
 async fn run_inner(cmd: ReviewCommand, port: u16, cwd: &str) -> Result<String> {
     let http = Http::new(port);
+    if let ReviewCommand::Decide {
+        finding_id,
+        decision,
+    } = &cmd
+    {
+        return Ok(render_decision(
+            &http.decide_finding(finding_id, decision).await?,
+        ));
+    }
     let base = http.resolve_project_base(cwd).await?;
     match cmd {
         ReviewCommand::Status { track_id } => {
@@ -80,7 +126,21 @@ async fn run_inner(cmd: ReviewCommand, port: u16, cwd: &str) -> Result<String> {
         ReviewCommand::Findings { track_id } => Ok(render_findings(
             &http.review_findings(&base, &track_id).await?,
         )),
+        ReviewCommand::Decide { .. } => Err(anyhow!("unreachable")),
     }
+}
+
+fn render_decision(v: &Value) -> String {
+    format!(
+        "Finding {}: {} -> {}; verdict {}",
+        s(&v["findingId"]),
+        s(&v["from"]),
+        s(&v["status"]),
+        match v["verdict"]["passing"].as_bool() {
+            Some(true) => "passing".to_string(),
+            _ => format!("not passing ({})", reasons(&v["verdict"]["reasons"])),
+        }
+    )
 }
 
 fn s(v: &Value) -> &str {
@@ -180,6 +240,39 @@ mod tests {
         assert!(
             parse(&a(&["approve", "t_1"])).is_err(),
             "read-only: no mutating subcommand"
+        );
+    }
+
+    #[test]
+    fn decide_takes_a_finding_and_exactly_one_decision() {
+        assert_eq!(
+            parse(&a(&["decide", "f_1", "--confirm"])).unwrap(),
+            Some(ReviewCommand::Decide {
+                finding_id: "f_1".into(),
+                decision: "confirm"
+            })
+        );
+        assert_eq!(
+            parse(&a(&["decide", "--reject", "f_1"])).unwrap(),
+            Some(ReviewCommand::Decide {
+                finding_id: "f_1".into(),
+                decision: "reject"
+            })
+        );
+        for bad in [
+            &["decide", "f_1"][..],
+            &["decide", "--confirm"],
+            &["decide", "f_1", "--confirm", "--reject"],
+            &["decide", "f_1", "f_2", "--confirm"],
+            &["decide", "f_1", "--force"],
+        ] {
+            assert!(parse(&a(bad)).is_err(), "{bad:?}");
+        }
+        let v = json!({"findingId": "f_1", "from": "needs-operator-decision", "status": "open",
+            "verdict": {"passing": false, "reasons": ["open-findings"]}});
+        assert_eq!(
+            render_decision(&v),
+            "Finding f_1: needs-operator-decision -> open; verdict not passing (open-findings)"
         );
     }
 

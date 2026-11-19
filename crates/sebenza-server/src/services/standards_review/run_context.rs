@@ -6,7 +6,8 @@
 //! The in-scope files of the matrix are the scope diff's files with hunks,
 //! except binary and deleted files and anything under `.ai/sebenza/`, whose
 //! edits are the daemon's `standards-change` finding rather than a rule
-//! review.
+//! review. A second run's matrix holds only the rules and files of its
+//! planned pairs, and it never sees prior findings.
 
 use super::deriver::{OUT_OF_SCOPE_EDIT_RULE, PriorFinding, STANDARDS_CHANGE_RULE};
 use super::git_pinned::Git;
@@ -16,9 +17,10 @@ use super::reasons::Blocker;
 use super::resolver::{ResolveError, ReviewInputs, resolve};
 use super::scope::{DiffFile, FileStatus, ReviewLimits, SnapshotPins};
 use super::scope_proof::{ScopeProof, prove_scope};
+use super::second_run::plan_pairs;
 use super::standards_docs::WORKSPACE;
 use super::submission::Matrix;
-use common::domain::review_records::{FindingOrigin, FindingStatus, RunKind};
+use common::domain::review_records::{FindingOrigin, FindingStatus, PairRef, RunKind};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -30,6 +32,9 @@ pub struct RunContext {
     pub scope: ScopeProof,
     /// Every non-terminal finding of the track, carried to this head.
     pub priors: Vec<PriorFinding>,
+    /// The pairs the first run scheduled for the second run; `None` until
+    /// a first run is accepted.
+    pub second_run: Option<Vec<PairRef>>,
 }
 
 /// Resolve `job` from its pinned SHAs and carry the track's open findings
@@ -58,6 +63,7 @@ pub fn resolve_context(
         inputs,
         scope,
         priors,
+        second_run: job.second_run_plan().map(<[PairRef]>::to_vec),
     })
 }
 
@@ -172,19 +178,54 @@ impl RunContext {
 
     /// What a run of `kind` must disposition.
     pub fn matrix(&self, kind: RunKind) -> Matrix {
+        let files: Vec<String> = self
+            .in_scope_files()
+            .iter()
+            .map(|f| f.path().to_string())
+            .collect();
+        let (rule_ids, files) = match kind {
+            RunKind::First => (self.rule_ids().into_iter().collect(), files),
+            RunKind::Second => self.second_run_axes(&files),
+        };
         Matrix {
-            rule_ids: self.rule_ids().into_iter().collect(),
-            files: self
-                .in_scope_files()
-                .iter()
-                .map(|f| f.path().to_string())
-                .collect(),
+            rule_ids,
+            files,
             priors: self
                 .required_priors(kind)
                 .iter()
                 .map(|p| p.finding.record.finding_id.clone())
                 .collect(),
+            existing_checks: kind == RunKind::First,
         }
+    }
+
+    /// The second run's pairs: as the first run scheduled them, or, before
+    /// any first run is accepted, the subjective rules on every file.
+    pub fn second_run_pairs(&self) -> Vec<PairRef> {
+        match &self.second_run {
+            Some(planned) => planned.clone(),
+            None => {
+                let files: Vec<String> = self
+                    .in_scope_files()
+                    .iter()
+                    .map(|f| f.path().to_string())
+                    .collect();
+                plan_pairs(&self.inputs.manifest.rules, &files, &[])
+            }
+        }
+    }
+
+    /// The rules and in-scope files the second run's pairs span.
+    fn second_run_axes(&self, files: &[String]) -> (Vec<String>, Vec<String>) {
+        let pairs = self.second_run_pairs();
+        let rules: BTreeSet<String> = pairs.iter().map(|p| p.rule_id.clone()).collect();
+        let paths: BTreeSet<&str> = pairs.iter().map(|p| p.path.as_str()).collect();
+        let files = files
+            .iter()
+            .filter(|f| paths.contains(f.as_str()))
+            .cloned()
+            .collect();
+        (rules.into_iter().collect(), files)
     }
 }
 
@@ -257,6 +298,7 @@ mod tests {
             },
             scope: ScopeProof::default(),
             priors: vec![],
+            second_run: None,
         }
     }
 

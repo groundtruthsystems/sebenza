@@ -638,6 +638,24 @@ impl Http {
         self.read_json(resp).await
     }
 
+    /// `POST /api/findings/{id}/decision` — confirm or reject a finding
+    /// the two review runs disagree on (operator token).
+    pub async fn decide_finding(&self, finding_id: &str, decision: &str) -> Result<Value> {
+        let resp = self
+            .http
+            .post(format!(
+                "{}/api/findings/{}/decision",
+                self.hub,
+                urlencode(finding_id)
+            ))
+            .bearer_auth(crate::login::operator_token()?)
+            .json(&json!({ "decision": decision }))
+            .send()
+            .await
+            .map_err(|e| friendly_connect_error(&e, self.port))?;
+        self.read_json(resp).await
+    }
+
     /// `GET <base>/api/review/tracks/{id}` — a track's latest review job.
     pub async fn review_status(&self, base: &str, track_id: &str) -> Result<Value> {
         self.get(&format!("{base}/api/review/tracks/{}", urlencode(track_id)))

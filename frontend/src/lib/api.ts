@@ -982,6 +982,19 @@ export async function approveTrackPlan(trackId: string) {
   });
 }
 
+/** Settle a finding the two review runs disagree on (operator only):
+ *  `confirm` keeps it open, `reject` resolves it. */
+export async function decideReviewFinding(
+  findingId: string,
+  decision: "confirm" | "reject",
+) {
+  return hubApi.decideFinding({
+    params: { id: findingId },
+    body: { decision },
+    extraHeaders: await operatorHeaders(),
+  });
+}
+
 /** Claim a standards-review run with its single-use run token. */
 export async function claimReviewRun(
   runToken: string,

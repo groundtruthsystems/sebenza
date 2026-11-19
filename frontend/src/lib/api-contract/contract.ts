@@ -89,6 +89,8 @@ import {
   CompleteTrackRequestSchema,
   CompleteTrackResponseSchema,
   ApproveTrackPlanResponseSchema,
+  DecideFindingRequestSchema,
+  DecideFindingResponseSchema,
   ClaimReviewRunRequestSchema,
   ReviewRunClaimSchema,
   SubmitReviewRunRequestSchema,
@@ -190,6 +192,7 @@ export const apiPaths = {
   approveTrackPlan: "/api/tracks/:id/plan/approve",
   claimReviewRun: "/api/review-runs/claim",
   submitReviewRun: "/api/review-runs/:id/submit",
+  decideFinding: "/api/findings/:id/decision",
   fetchTrackReviewStatus: "/api/review/tracks/:id",
   fetchTrackReviewFindings: "/api/review/tracks/:id/findings",
 } as const;
@@ -993,6 +996,22 @@ export const apiContract = c.router(
         422: ErrorResponseSchema,
         500: ErrorResponseSchema,
         503: ErrorResponseSchema,
+      },
+    },
+    /** Operator token only; control and run tokens get 403
+     *  operator_required. */
+    decideFinding: {
+      method: "POST",
+      path: apiPaths.decideFinding,
+      body: DecideFindingRequestSchema,
+      responses: {
+        200: DecideFindingResponseSchema,
+        400: ErrorResponseSchema,
+        401: ErrorResponseSchema,
+        403: ErrorResponseSchema,
+        404: ErrorResponseSchema,
+        409: ErrorResponseSchema,
+        500: ErrorResponseSchema,
       },
     },
     fetchTrackReviewStatus: {

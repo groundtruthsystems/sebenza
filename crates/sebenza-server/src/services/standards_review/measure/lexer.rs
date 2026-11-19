@@ -147,7 +147,6 @@ impl Lexer {
             c if c.is_alphabetic() || c == '_' || c == '$' => return self.word(),
             c if c.is_ascii_digit() => {
                 self.number();
-                self.push(Kind::Number, start, line);
                 return Ok(());
             }
             _ => return self.punct(),
@@ -261,6 +260,7 @@ impl Lexer {
     }
 
     fn number(&mut self) {
+        let (start, line) = (self.i, self.line);
         while let Some(c) = self.peek(0) {
             let fraction = c == '.' && self.peek(1).is_some_and(|d| d.is_ascii_digit());
             if !(is_word_char(c) || fraction) {
@@ -268,6 +268,7 @@ impl Lexer {
             }
             self.i += 1;
         }
+        self.push(Kind::Number, start, line);
     }
 
     /// One punctuation token; `->`, `=>` and `::` stay whole.

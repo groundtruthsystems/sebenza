@@ -10,7 +10,9 @@
 //! - at least one finding for every pair dispositioned `finding`, and every
 //!   finding on such a pair;
 //! - descriptions within [`free_text`](super::free_text)'s bounds, scanned:
-//!   secrets redacted, a PHI hit or a scanner error rejects.
+//!   secrets redacted, a PHI hit or a scanner error rejects;
+//! - on a first run, `existingChecks` with each of the four existing
+//!   sebenza-review checks exactly once (FR-18); a second run sends none.
 //!
 //! A rejection names what is missing or wrong by rule id, path and finding
 //! id, never by quoting submitted text.
@@ -63,6 +65,53 @@ pub struct FindingClaim {
     pub description: String,
 }
 
+/// An existing sebenza-review check the first run reports (FR-18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckId {
+    Requirements,
+    TestPlan,
+    Coverage,
+    Architecture,
+}
+
+impl CheckId {
+    /// Every check a first run must report.
+    pub const ALL: [CheckId; 4] = [
+        CheckId::Requirements,
+        CheckId::TestPlan,
+        CheckId::Coverage,
+        CheckId::Architecture,
+    ];
+
+    /// The snake_case id.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CheckId::Requirements => "requirements",
+            CheckId::TestPlan => "test_plan",
+            CheckId::Coverage => "coverage",
+            CheckId::Architecture => "architecture",
+        }
+    }
+}
+
+/// How an existing check came out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckStatus {
+    Pass,
+    Fail,
+    NotApplicable,
+}
+
+/// One existing check's result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExistingCheck {
+    pub check: CheckId,
+    pub status: CheckStatus,
+}
+
 /// The whole submission body.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -72,6 +121,9 @@ pub struct Submission {
     pub prior_findings: Vec<PriorDisposition>,
     #[serde(default)]
     pub findings: Vec<FindingClaim>,
+    /// Required on a first run, refused on a second.
+    #[serde(default)]
+    pub existing_checks: Option<Vec<ExistingCheck>>,
 }
 
 /// What a run must disposition.
@@ -82,6 +134,8 @@ pub struct Matrix {
     pub files: Vec<String>,
     /// Ids of the open prior findings the claim listed.
     pub priors: Vec<String>,
+    /// Whether the run must report the existing checks (first runs).
+    pub existing_checks: bool,
 }
 
 impl Matrix {
@@ -123,6 +177,8 @@ pub struct ValidSubmission {
     pub claims: Vec<Claim>,
     /// Secret labels redacted from descriptions.
     pub redactions: Vec<&'static str>,
+    /// Failed existing-check ids; `None` when the run reports none.
+    pub failed_checks: Option<Vec<String>>,
 }
 
 /// Parse, check and scan `body` against `matrix`.
@@ -133,6 +189,7 @@ pub fn validate(
 ) -> Result<ValidSubmission, Rejection> {
     let mut sub = parse(body)?;
     check_matrix(&sub, matrix)?;
+    check_existing(&sub, matrix.existing_checks)?;
     check_descriptions(&sub)?;
     let redactions = scan_descriptions(&mut sub, scanner)?;
     Ok(into_valid(sub, redactions))
@@ -251,6 +308,33 @@ fn finding_problems(sub: &Submission) -> Vec<String> {
     problems
 }
 
+/// Check the existing-check results: all four exactly once when
+/// `required`, none otherwise.
+pub fn check_existing(sub: &Submission, required: bool) -> Result<(), Rejection> {
+    let checks = match (&sub.existing_checks, required) {
+        (None, false) => return Ok(()),
+        (Some(_), false) => {
+            let why = "existingChecks belong to the first run only".to_string();
+            return Err(Rejection::new("unexpected-existing-checks", vec![why]));
+        }
+        (None, true) => &Vec::new(),
+        (Some(checks), true) => checks,
+    };
+    let mut problems = Vec::new();
+    for id in CheckId::ALL {
+        match checks.iter().filter(|c| c.check == id).count() {
+            0 => problems.push(format!("missing existing check `{}`", id.as_str())),
+            1 => {}
+            _ => problems.push(format!("repeated existing check `{}`", id.as_str())),
+        }
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(Rejection::new("incomplete-existing-checks", problems))
+    }
+}
+
 fn finding_name(index: usize, f: &FindingClaim) -> String {
     format!(
         "finding {} on {}",
@@ -298,7 +382,18 @@ fn span_record(s: Option<Span>) -> Option<SpanRecord> {
     })
 }
 
+fn failed_checks(checks: Option<Vec<ExistingCheck>>) -> Option<Vec<String>> {
+    checks.map(|checks| {
+        checks
+            .iter()
+            .filter(|c| c.status == CheckStatus::Fail)
+            .map(|c| c.check.as_str().to_string())
+            .collect()
+    })
+}
+
 fn into_valid(sub: Submission, redactions: Vec<&'static str>) -> ValidSubmission {
+    let failed_checks = failed_checks(sub.existing_checks);
     let pairs = sub
         .dispositions
         .into_iter()
@@ -334,11 +429,12 @@ fn into_valid(sub: Submission, redactions: Vec<&'static str>) -> ValidSubmission
         priors,
         claims,
         redactions,
+        failed_checks,
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::super::free_text::{ContentScanner, ScanError, Scanned};
     use super::*;
     use serde_json::{Value, json};
@@ -348,7 +444,17 @@ mod tests {
             rule_ids: vec!["long-methods".into(), "no-restating".into()],
             files: vec!["src/a.rs".into(), "src/b.rs".into()],
             priors: vec!["f_prior".into()],
+            existing_checks: true,
         }
+    }
+
+    pub(crate) fn green_checks() -> Value {
+        json!([
+            {"check": "requirements", "status": "pass"},
+            {"check": "test_plan", "status": "pass"},
+            {"check": "coverage", "status": "not_applicable"},
+            {"check": "architecture", "status": "pass"},
+        ])
     }
 
     fn clean(rule: &str, path: &str) -> Value {
@@ -369,7 +475,8 @@ mod tests {
             "findings": [
                 {"ruleId": "long-methods", "path": "src/b.rs", "line": 12,
                  "description": "Function `load` has 31 logical lines; the rule allows 20."}
-            ]
+            ],
+            "existingChecks": green_checks(),
         })
     }
 
@@ -436,6 +543,57 @@ mod tests {
         assert!(none.is_empty());
         let ok = validate(r#"{"dispositions": []}"#, &none, &ContentScanner::default());
         assert_eq!(ok, Ok(ValidSubmission::default()));
+    }
+
+    #[test]
+    fn ts62_a_first_run_reports_all_four_existing_checks_once() {
+        let ok = check(&full()).unwrap();
+        assert_eq!(ok.failed_checks, Some(vec![]));
+        let mut v = full();
+        v["existingChecks"][2]["status"] = json!("fail");
+        assert_eq!(
+            check(&v).unwrap().failed_checks,
+            Some(vec!["coverage".into()])
+        );
+        let mut v = full();
+        v.as_object_mut().unwrap().remove("existingChecks");
+        let r = check(&v).unwrap_err();
+        assert_eq!(r.code, "incomplete-existing-checks");
+        assert_eq!(r.problems.len(), 4);
+        let mut v = full();
+        v["existingChecks"][0]["check"] = json!("coverage");
+        let r = check(&v).unwrap_err();
+        assert!(
+            r.problems
+                .contains(&"missing existing check `requirements`".to_string())
+        );
+        assert!(
+            r.problems
+                .contains(&"repeated existing check `coverage`".to_string())
+        );
+        for bad in [
+            json!({"check": "lint", "status": "pass"}),
+            json!({"check": "coverage", "status": "skipped"}),
+            json!({"check": "coverage", "status": "pass", "note": "x"}),
+        ] {
+            let mut v = full();
+            v["existingChecks"][2] = bad.clone();
+            assert_eq!(check(&v).unwrap_err().code, "schema", "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_second_run_reports_no_existing_checks() {
+        let second = Matrix {
+            existing_checks: false,
+            ..matrix()
+        };
+        let r = validate(&full().to_string(), &second, &ContentScanner::default()).unwrap_err();
+        assert_eq!(r.code, "unexpected-existing-checks");
+        let mut v = full();
+        v.as_object_mut().unwrap().remove("existingChecks");
+        let ok = validate(&v.to_string(), &second, &ContentScanner::default()).unwrap();
+        assert_eq!(ok.failed_checks, None);
     }
 
     #[test]

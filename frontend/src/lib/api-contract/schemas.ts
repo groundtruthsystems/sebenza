@@ -1450,6 +1450,22 @@ export const SubmitReviewRunRequestSchema = z
           .strict(),
       )
       .optional(),
+    /** First runs only: each existing sebenza-review check exactly once. */
+    existingChecks: z
+      .array(
+        z
+          .object({
+            check: z.enum([
+              "requirements",
+              "test_plan",
+              "coverage",
+              "architecture",
+            ]),
+            status: z.enum(["pass", "fail", "not_applicable"]),
+          })
+          .strict(),
+      )
+      .optional(),
   })
   .strict();
 
@@ -1505,6 +1521,13 @@ export const ReviewJobStatusSchema = z.object({
     .nullable(),
   verdict: ReviewVerdictSchema.nullable(),
   existingChecksRecorded: z.boolean(),
+  secondRunPending: z.boolean(),
+  /** Informational only: never a finding, never a verdict input. */
+  notes: z.array(
+    z.object({ code: z.string(), category: z.string(), message: z.string() }),
+  ),
+  /** Why a queued job is not dispatched, e.g. `cli-not-conformant`. */
+  queuedReason: z.string().optional(),
 });
 
 /** `GET /api/review/tracks/:id` — the track's latest review job, if any. */
@@ -1527,6 +1550,20 @@ export const ReviewFindingSchema = z.object({
   origin: z.enum(["agent", "standards-change", "measured", "boundary"]),
   anchor: ReviewAnchorSchema,
   description: z.string(),
+});
+
+/** `POST /api/findings/:id/decision` — the operator settles a finding the
+ *  two runs disagree on: confirm keeps it open, reject resolves it. */
+export const DecideFindingRequestSchema = z
+  .object({ decision: z.enum(["confirm", "reject"]) })
+  .strict();
+
+export const DecideFindingResponseSchema = z.object({
+  ok: z.literal(true),
+  findingId: z.string(),
+  from: ReviewFindingSchema.shape.status,
+  status: ReviewFindingSchema.shape.status,
+  verdict: ReviewVerdictSchema,
 });
 
 /** `GET /api/review/tracks/:id/findings` — every finding with its status. */

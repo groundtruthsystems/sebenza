@@ -6,14 +6,17 @@
 //! per (job, kind, attempt), and an attempt failure, a block or a
 //! submission only ends the run whose lease id it names, once. Plan
 //! approvals are kept per track; the latest one is the boundary in force.
+//! An operator decision moves a finding only from the status it names and
+//! only as the transition table allows the operator.
 //!
 //! [`JobKey`]: common::adapters::review_log::JobKey
 
 use super::findings::{Actor, check_transition};
 use common::adapters::review_log::{ReviewEvent, ReviewEventKind, TrackCompleted};
 use common::domain::review_records::{
-    AttemptCause, AttemptFailed, BlockerRecord, FindingRecord, FindingStatus, JobBlocked,
-    PlanApproved, RunKind, RunLeased, RunSubmitted, TransitionRecord, VerdictRecord,
+    AttemptCause, AttemptFailed, BlockerRecord, FindingDecided, FindingRecord, FindingStatus,
+    JobBlocked, PairRef, PlanApproved, RunKind, RunLeased, RunSubmitted, TransitionRecord,
+    VerdictRecord,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -48,6 +51,8 @@ pub struct Job {
     pub submissions: Vec<RunSubmitted>,
     /// Failed existing-check ids once recorded; `None` until then.
     pub existing_checks: Option<Vec<String>>,
+    /// The verdict of the latest submission or operator decision.
+    pub latest_verdict: Option<VerdictRecord>,
 }
 
 impl Job {
@@ -58,7 +63,24 @@ impl Job {
 
     /// The latest derived verdict.
     pub fn verdict(&self) -> Option<&VerdictRecord> {
-        self.submissions.last().map(|s| &s.verdict)
+        self.latest_verdict.as_ref()
+    }
+
+    /// The job's accepted first-run submission.
+    pub fn first_submission(&self) -> Option<&RunSubmitted> {
+        self.submissions.iter().find(|s| s.kind == RunKind::First)
+    }
+
+    /// The pairs the daemon scheduled for the second run, once a first run
+    /// was accepted.
+    pub fn second_run_plan(&self) -> Option<&[PairRef]> {
+        self.first_submission().map(|s| s.second_run.as_slice())
+    }
+
+    /// A second run is scheduled and no second run was accepted yet.
+    pub fn second_run_pending(&self) -> bool {
+        let planned = self.second_run_plan().is_some_and(|p| !p.is_empty());
+        planned && !self.submissions.iter().any(|s| s.kind == RunKind::Second)
     }
 
     /// The manifest rule ids recorded by the job's first accepted submission.
@@ -135,6 +157,7 @@ impl ReviewView {
                 }
             }
             ReviewEventKind::PlanApproved(a) => self.approvals.push(a.clone()),
+            ReviewEventKind::FindingDecided(d) => self.decide(d),
         }
     }
 
@@ -148,6 +171,7 @@ impl ReviewView {
                 blocked: None,
                 submissions: Vec::new(),
                 existing_checks: None,
+                latest_verdict: None,
             });
         }
     }
@@ -206,12 +230,28 @@ impl ReviewView {
         }
         if let Some(job) = self.job_mut(&s.job_id) {
             job.submissions.push(s.clone());
+            job.latest_verdict = Some(s.verdict.clone());
         }
         for record in &s.opened {
             self.open_finding(record);
         }
         for t in &s.transitions {
-            self.move_finding(t);
+            self.move_finding(t, Actor::Daemon);
+        }
+    }
+
+    fn decide(&mut self, d: &FindingDecided) {
+        let t = TransitionRecord {
+            finding_id: d.finding_id.clone(),
+            from: d.from,
+            to: d.to,
+            cause: "operator-decision".to_string(),
+        };
+        if self.move_finding(&t, Actor::Operator)
+            && let Some(job) = self.job_mut(&d.job_id)
+            && !job.submissions.is_empty()
+        {
+            job.latest_verdict = Some(d.verdict.clone());
         }
     }
 
@@ -225,16 +265,18 @@ impl ReviewView {
     }
 
     /// Applied only from the status it names and only when the table
-    /// allows the daemon that move.
-    fn move_finding(&mut self, t: &TransitionRecord) {
+    /// allows `actor` that move; false when nothing moved.
+    fn move_finding(&mut self, t: &TransitionRecord, actor: Actor) -> bool {
         let found = self
             .findings
             .iter_mut()
             .find(|f| f.record.finding_id == t.finding_id && f.status == t.from);
-        if let Some(f) = found
-            && check_transition(t.from, t.to, Actor::Daemon).is_ok()
-        {
-            f.status = t.to;
+        match found {
+            Some(f) if check_transition(t.from, t.to, actor).is_ok() => {
+                f.status = t.to;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -426,6 +468,8 @@ pub(crate) mod tests {
                 passing: false,
                 reasons: vec!["open-findings".into()],
             },
+            second_run: vec![],
+            notes: vec![],
         }
     }
 

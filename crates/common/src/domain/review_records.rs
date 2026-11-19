@@ -257,6 +257,46 @@ pub struct RunSubmitted {
     pub opened: Vec<FindingRecord>,
     pub transitions: Vec<TransitionRecord>,
     pub verdict: VerdictRecord,
+    /// First run only: the (rule, file) pairs the daemon scheduled for the
+    /// second run. Empty when no second run is needed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub second_run: Vec<PairRef>,
+    /// First run only: informational notes, never findings (FR-26).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<NoteRecord>,
+}
+
+/// One (rule, in-scope file) pair.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct PairRef {
+    pub rule_id: String,
+    pub path: String,
+}
+
+/// An informational note: a code and the category it concerns. Notes carry
+/// no free text; the views render the code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoteRecord {
+    /// A kebab-case code such as `category-rule-absent`.
+    pub code: String,
+    pub category: String,
+}
+
+/// The operator decided a `needs-operator-decision` finding (FR-19).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FindingDecided {
+    pub finding_id: String,
+    pub track_id: String,
+    /// The track's latest job when decided.
+    pub job_id: String,
+    pub head_sha: String,
+    pub base_sha: String,
+    pub from: FindingStatus,
+    pub to: FindingStatus,
+    /// The credential class that decided (`operator_session`, `operator_cli`).
+    pub credential: String,
+    /// The job's verdict re-derived after the move.
+    pub verdict: VerdictRecord,
 }
 
 /// The existing sebenza-review check results for a job: a required verdict
