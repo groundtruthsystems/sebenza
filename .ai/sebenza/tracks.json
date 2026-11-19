@@ -151,38 +151,38 @@
       "track_id": "fullscreen_request_20261119",
       "type": "bug",
       "description": "Full-screen view for inbox requests and their documents and notes, URL-addressable with context restore; handover full screen on the same pattern (AC-07)",
-      "status": "backlog",
+      "status": "doing",
       "created_at": "2026-11-19T15:47:55Z",
-      "updated_at": "2026-11-19T15:47:55Z",
+      "updated_at": "2026-11-19T16:16:55Z",
       "phases_summary": [
         {
           "id": "phase-1",
           "name": "Full-screen request route",
-          "status": "backlog",
+          "status": "done",
           "blocked_reason": null
         },
         {
           "id": "phase-2",
           "name": "Handover full screen on the shared URL pattern",
-          "status": "backlog",
+          "status": "done",
           "blocked_reason": null
         },
         {
           "id": "phase-3",
           "name": "Final verification",
-          "status": "backlog",
+          "status": "doing",
           "blocked_reason": null
         }
       ],
       "progress": {
         "total_tasks": 10,
-        "completed_tasks": 0,
-        "percentage": 0.0
+        "completed_tasks": 8,
+        "percentage": 80.0
       },
       "spec_path": "./tracks/fullscreen_request_20261119/spec.md",
       "plan_path": "./tracks/fullscreen_request_20261119/plan.json",
       "test_plan_path": "./tracks/fullscreen_request_20261119/test-plan.md",
-      "current_phase_id": "phase-1",
+      "current_phase_id": "phase-3",
       "origin": {
         "inbox_item_id": "01M7JGDPT7M8ACRE1KFTCH4CP3",
         "worktree": "sebenza",

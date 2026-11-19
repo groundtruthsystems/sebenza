@@ -5,26 +5,28 @@
     {
       "id": "phase-1",
       "name": "Full-screen request route",
-      "status": "backlog",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-1-task-1",
           "name": "Write tests for request full-screen route",
           "description": "Add failing component tests for view=full and doc= entry from list, detail, direct URL, reload and unknown id.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "0e82a0f"
         },
         {
           "id": "phase-1-task-2",
           "name": "Implement request full-screen route",
           "description": "Add a History-API full-screen view to InboxView that saves and restores route, selection and scroll.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "d82eee5"
         },
         {
           "id": "phase-1-task-3",
           "name": "Execute test scenarios TS-01..TS-11",
           "description": "Run and record evidence for every scenario this phase delivers.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-01",
             "TS-02",
@@ -35,63 +37,71 @@
             "TS-07",
             "TS-10",
             "TS-11"
-          ]
+          ],
+          "commit_sha": "d82eee5"
         },
         {
           "id": "phase-1-task-4",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "d82eee5"
         }
-      ]
+      ],
+      "checkpoint_sha": "d82eee5"
     },
     {
       "id": "phase-2",
       "name": "Handover full screen on the shared URL pattern",
-      "status": "backlog",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-2-task-1",
           "name": "Write tests for handover full-screen URL",
           "description": "Add failing tests for handover view=full via Close, Esc and Back with nested overlays.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "8f7db95"
         },
         {
           "id": "phase-2-task-2",
           "name": "Implement handover full-screen URL",
           "description": "Move HandoverReview full screen to the view=full URL pattern while keeping its Esc stack.",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "42ad141"
         },
         {
           "id": "phase-2-task-3",
           "name": "Execute test scenarios TS-08..TS-09",
           "description": "Run and record evidence for every scenario this phase delivers.",
-          "status": "backlog",
+          "status": "done",
           "test_scenarios": [
             "TS-08",
             "TS-09"
-          ]
+          ],
+          "commit_sha": "42ad141"
         },
         {
           "id": "phase-2-task-4",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "42ad141"
         }
-      ]
+      ],
+      "checkpoint_sha": "42ad141"
     },
     {
       "id": "phase-3",
       "name": "Final verification",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Re-run the whole test plan",
           "description": "Re-run TS-01..TS-12 against the finished feature and record the manual browser check.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-01",
             "TS-02",
