@@ -323,7 +323,7 @@
           "id": "phase-6-task-3",
           "name": "Execute test scenarios TS-02..TS-54",
           "description": "Run and record evidence for every scenario this phase delivers.",
-          "status": "doing",
+          "status": "done",
           "test_scenarios": [
             "TS-02",
             "TS-73",
@@ -332,13 +332,14 @@
             "TS-40",
             "TS-52",
             "TS-54"
-          ]
+          ],
+          "commit_sha": "3e25211"
         },
         {
           "id": "phase-6-task-4",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "doing"
         }
       ]
     },
