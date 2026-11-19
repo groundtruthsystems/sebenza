@@ -309,13 +309,14 @@
           "id": "phase-6-task-1",
           "name": "Write tests for the sign-off gate",
           "description": "Add failing tests for refusal without a verdict, stale refs, refs moved mid-commit, audit records and contract parity.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "8db322c"
         },
         {
           "id": "phase-6-task-2",
           "name": "Implement the sign-off gate and parity",
           "description": "Add operator-token CAS sign-off, audit records, and mirror every new route in the ts-rest contract and sebenza-cli.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-6-task-3",
