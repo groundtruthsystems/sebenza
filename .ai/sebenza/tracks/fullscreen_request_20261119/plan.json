@@ -94,14 +94,14 @@
     {
       "id": "phase-3",
       "name": "Final verification",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-3-task-1",
           "name": "Re-run the whole test plan",
           "description": "Re-run TS-01..TS-12 against the finished feature and record the manual browser check.",
-          "status": "doing",
+          "status": "done",
           "test_scenarios": [
             "TS-01",
             "TS-02",
@@ -115,13 +115,14 @@
             "TS-10",
             "TS-11",
             "TS-12"
-          ]
+          ],
+          "notes": "Full re-run 2026-11-19: cargo 542/78/505, skills 195, frontend 582, tsc clean. TS-12 (scroll restore in a real browser) deferred to operator final verification."
         },
         {
           "id": "phase-3-task-2",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "done"
         }
       ]
     }
