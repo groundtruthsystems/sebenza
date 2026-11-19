@@ -104,6 +104,7 @@ agents/solutions-architect.md
 agents/system-analyst.md
 scripts/test_factory.py
 scripts/test_migration.py
+scripts/test_standards_stage.py
 scripts/test_writing_guidance.py
 ```
 
