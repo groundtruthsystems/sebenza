@@ -302,7 +302,7 @@
     {
       "id": "phase-6",
       "name": "Compare-and-swap sign-off gate",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -339,9 +339,11 @@
           "id": "phase-6-task-4",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "75ef5f3"
         }
-      ]
+      ],
+      "checkpoint_sha": "75ef5f3"
     },
     {
       "id": "phase-7",
