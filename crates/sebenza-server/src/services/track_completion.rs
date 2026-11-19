@@ -11,7 +11,9 @@
 use crate::services::standards_review::git_pinned::{branch_ref, merge_base, rev_parse};
 use crate::services::standards_review::standards_rev::standards_rev;
 use crate::services::tracks_projection::{Projected, ProjectionError, project_done};
-use common::adapters::review_log::{CompletionSource, ReviewLog, TrackCompleted};
+use common::adapters::review_log::{
+    CompletionSource, ReviewEventKind, ReviewLog, ReviewState, TrackCompleted,
+};
 use common::domain::solution::CredentialClass;
 use std::path::{Path, PathBuf};
 
@@ -30,6 +32,12 @@ impl CompletionTarget {
     /// The worktree's `.ai/sebenza/tracks.json`.
     pub fn tracks_path(&self) -> PathBuf {
         tracks_path(&self.worktree_path)
+    }
+
+    /// Whether `completion` was recorded from this worktree and branch.
+    pub fn recorded(&self, completion: &TrackCompleted) -> bool {
+        Path::new(&completion.worktree_path) == self.worktree_path
+            && completion.branch == self.branch
     }
 }
 
@@ -105,12 +113,7 @@ impl TrackCompletionService {
     ) -> Result<Completion, CompletionError> {
         check_own_track(target, track_id)?;
         let event = completion_event(target, track_id, &pin(target)?, CompletionSource::Daemon);
-        let key = event.job_key();
-        let (event, appended) = self
-            .log(&target.project_key)
-            .append_completion_unless(with_credential(event, credential), |s| {
-                s.job(&key).cloned()
-            })?;
+        let (event, appended) = self.append_bound(target, with_credential(event, credential))?;
         #[cfg(test)]
         hooks::after_log_fsync()?;
         let projected = project_done(&target.tracks_path(), track_id)?;
@@ -118,6 +121,33 @@ impl TrackCompletionService {
             event,
             appended,
             projected,
+        })
+    }
+
+    /// Append `event` unless its job is already in the log. The first
+    /// completion of a track binds it to its worktree and branch; one
+    /// recorded anywhere else refuses the track, origin or not.
+    fn append_bound(
+        &self,
+        target: &CompletionTarget,
+        event: TrackCompleted,
+    ) -> Result<(TrackCompleted, bool), CompletionError> {
+        self.log(&target.project_key).transact(|events| {
+            let state = ReviewState::fold(events);
+            let mut prior = state
+                .completions
+                .iter()
+                .filter(|c| c.track_id == event.track_id);
+            if prior.any(|c| !target.recorded(c)) {
+                return Err(CompletionError::ForeignTrack(event.track_id.clone()));
+            }
+            Ok(match state.job(&event.job_key()) {
+                Some(found) => (None, (found.clone(), false)),
+                None => {
+                    let kind = ReviewEventKind::TrackCompleted(event.clone());
+                    (Some(kind), (event, true))
+                }
+            })
         })
     }
 
@@ -129,6 +159,7 @@ impl TrackCompletionService {
         target: &CompletionTarget,
         track_id: &str,
     ) -> Result<Option<TrackCompleted>, CompletionError> {
+        check_own_track(target, track_id)?;
         let event = completion_event(
             target,
             track_id,
@@ -240,7 +271,9 @@ pub mod hooks {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::review_test_repo::{OTHER_TRACK, TRACK, TestRepo};
+    use crate::services::review_test_repo::{
+        OTHER_TRACK, TRACK, TestRepo, tracks_json, tracks_json_without_origin,
+    };
     use std::io::Write;
 
     fn target(r: &TestRepo) -> CompletionTarget {
@@ -356,6 +389,46 @@ mod tests {
             Err(CompletionError::BadTrack)
         ));
         assert!(!svc.log("proj").path().exists());
+    }
+
+    fn other(r: &TestRepo, branch: &str, tracks: &str) -> CompletionTarget {
+        CompletionTarget {
+            worktree_path: r.add_worktree(branch, tracks),
+            branch: branch.into(),
+            ..target(r)
+        }
+    }
+
+    #[test]
+    fn ts66_a_track_completed_from_another_worktree_is_refused() {
+        let r = TestRepo::new("bound-elsewhere");
+        let svc = service(&r);
+        svc.complete(&target(&r), TRACK, CredentialClass::Control)
+            .unwrap();
+        let b = other(&r, "feat2", &tracks_json("doing", "feat2"));
+        let err = svc
+            .complete(&b, TRACK, CredentialClass::Control)
+            .unwrap_err();
+        assert!(matches!(err, CompletionError::ForeignTrack(_)), "{err}");
+        assert_eq!(svc.log("proj").open().unwrap().job_count(TRACK), 1);
+    }
+
+    #[test]
+    fn ts66_an_originless_track_is_bound_by_its_first_completion() {
+        let r = TestRepo::new("bound-first");
+        crate::services::review_test_repo::write(
+            &r.worktree,
+            ".ai/sebenza/tracks.json",
+            &tracks_json_without_origin("doing"),
+        );
+        let b = other(&r, "feat2", &tracks_json_without_origin("doing"));
+        let svc = service(&r);
+        assert!(svc.complete(&b, TRACK, CredentialClass::Control).is_ok());
+        let err = svc
+            .complete(&target(&r), TRACK, CredentialClass::Control)
+            .unwrap_err();
+        assert!(matches!(err, CompletionError::ForeignTrack(_)), "{err}");
+        assert!(svc.complete(&b, TRACK, CredentialClass::Control).is_ok());
     }
 
     #[test]

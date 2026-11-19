@@ -27,6 +27,7 @@ use super::scope::ReviewLimits;
 use super::scope_proof::prove_pins;
 use super::second_run::{JobRef, Reconciled, absent_category_notes, plan_pairs, reconcile};
 use super::submission::{Rejection, ValidSubmission, validate};
+use crate::services::track_completion::CompletionTarget;
 use common::adapters::review_log::{ReviewEventKind, ReviewLog};
 use common::domain::review_records::{
     AttemptCause, AttemptFailed, BlockerRecord, ExistingChecksRecorded, FindingDecided,
@@ -140,6 +141,15 @@ pub struct Claimed {
     pub run: Run,
     pub job: Job,
     pub context: RunContext,
+}
+
+/// Why existing-check results were not recorded.
+#[derive(Debug, thiserror::Error)]
+pub enum ChecksError {
+    #[error("the track's latest review job belongs to another worktree or branch")]
+    ForeignTrack,
+    #[error("review log: {0}")]
+    Log(#[from] std::io::Error),
 }
 
 /// Leases, claims and submissions over each project's review log.
@@ -329,18 +339,22 @@ impl ReviewRuns {
 
     /// Record the existing sebenza-review check results on the latest job
     /// of `track_id`, re-deriving its verdict once a run was accepted.
-    /// Returns `None` when the track has no review job.
+    /// Returns `None` when the track has no review job, and refuses a
+    /// `caller` other than the worktree and branch that recorded the job.
     pub fn record_existing_checks(
         &self,
-        project_key: &str,
+        caller: &CompletionTarget,
         track_id: &str,
         failed: Vec<String>,
-    ) -> std::io::Result<Option<ExistingChecksRecorded>> {
-        self.log(project_key).transact(|events| {
+    ) -> Result<Option<ExistingChecksRecorded>, ChecksError> {
+        self.log(&caller.project_key).transact(|events| {
             let view = ReviewView::fold(events);
             let Some(job) = view.latest_job(track_id) else {
                 return Ok((None, None));
             };
+            if !caller.recorded(&job.completion) {
+                return Err(ChecksError::ForeignTrack);
+            }
             let verdict = job.verdict().map(|_| {
                 let statuses = track_statuses(&view, job, None);
                 verdict_of(&statuses, job.second_run_pending(), Some(&failed))
@@ -783,7 +797,7 @@ pub(crate) mod tests {
     use crate::services::standards_review::free_text::ContentScanner;
     use crate::services::standards_review::git_pinned::Git;
     use crate::services::standards_review::plan_approval::approve_plan;
-    use crate::services::track_completion::{CompletionTarget, TrackCompletionService};
+    use crate::services::track_completion::TrackCompletionService;
     use common::domain::review_records::{FindingOrigin, FindingStatus, PairRef};
     use common::domain::solution::CredentialClass;
     use serde_json::{Value, json};
@@ -849,7 +863,7 @@ pub(crate) mod tests {
         pub(crate) fn record_checks(&self, failed: &[&str]) -> Option<ExistingChecksRecorded> {
             let failed = failed.iter().map(|c| c.to_string()).collect();
             self.runs
-                .record_existing_checks("proj", TRACK, failed)
+                .record_existing_checks(&target(&self.r), TRACK, failed)
                 .unwrap()
         }
 
@@ -1095,11 +1109,34 @@ pub(crate) mod tests {
         assert!(e.runs.lease_next_second("proj", NOW).unwrap().is_none());
         assert!(
             e.runs
-                .record_existing_checks("proj", "t_unknown", vec![])
+                .record_existing_checks(&target(&e.r), "t_unknown", vec![])
                 .unwrap()
                 .is_none(),
             "a track without a job records nothing"
         );
+    }
+
+    #[test]
+    fn ts66_existing_checks_from_another_worktree_are_refused() {
+        let e = Env::new("store-checks-foreign");
+        e.complete();
+        let elsewhere = CompletionTarget {
+            worktree_path: e.r.base.join("wt-other"),
+            ..target(&e.r)
+        };
+        let other_branch = CompletionTarget {
+            branch: "feat2".into(),
+            ..target(&e.r)
+        };
+        let before = e.runs.log("proj").events().unwrap().len();
+        for caller in [elsewhere, other_branch] {
+            let err = e
+                .runs
+                .record_existing_checks(&caller, TRACK, vec![])
+                .unwrap_err();
+            assert!(matches!(err, ChecksError::ForeignTrack), "{err}");
+        }
+        assert_eq!(e.runs.log("proj").events().unwrap().len(), before);
     }
 
     #[test]

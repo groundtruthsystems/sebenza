@@ -97,6 +97,15 @@ pub fn tracks_json(own_status: &str, branch: &str) -> String {
     )
 }
 
+/// [`tracks_json`] with no `origin` on the track.
+pub fn tracks_json_without_origin(own_status: &str) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(&tracks_json(own_status, "")).unwrap();
+    for t in v["tracks"].as_array_mut().unwrap() {
+        t.as_object_mut().unwrap().remove("origin");
+    }
+    serde_json::to_string_pretty(&v).unwrap()
+}
+
 impl TestRepo {
     pub fn new(name: &str) -> TestRepo {
         let base = std::env::temp_dir().join(format!(
@@ -144,6 +153,28 @@ impl TestRepo {
             repo: repo.canonicalize().unwrap(),
             worktree,
         }
+    }
+
+    /// A second linked worktree on a new `branch` off `main`, registering
+    /// the track (with its directory) in a `tracks.json` of `tracks`.
+    pub fn add_worktree(&self, branch: &str, tracks: &str) -> PathBuf {
+        let path = self.base.join(format!("wt-{branch}"));
+        git(
+            &self.repo,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                branch,
+                path.to_str().unwrap(),
+                "main",
+            ],
+        );
+        let path = path.canonicalize().unwrap();
+        std::fs::create_dir_all(path.join(".ai/sebenza/tracks").join(TRACK)).unwrap();
+        write(&path, ".ai/sebenza/tracks.json", tracks);
+        path
     }
 
     pub fn head(&self) -> String {

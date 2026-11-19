@@ -223,6 +223,23 @@ mod tests {
     }
 
     #[test]
+    fn ts66_a_track_marked_done_in_a_worktree_that_does_not_own_it_is_not_recorded() {
+        let r = TestRepo::new("rec-foreign");
+        let b = r.add_worktree("feat2", &tracks_json("done", "feat"));
+        let project = ProjectWorktrees {
+            project_key: "proj".into(),
+            worktrees: vec![CompletionTarget {
+                worktree_path: b,
+                branch: "feat2".into(),
+                ..project(&r).worktrees[0].clone()
+            }],
+        };
+        let svc = service(&r);
+        assert_eq!(reconcile_project(&svc, &project).appended, 0);
+        assert_eq!(svc.log("proj").open().unwrap().job_count(TRACK), 0);
+    }
+
+    #[test]
     fn ts68_done_set_by_hand_gets_one_reconciled_event_across_passes() {
         let r = TestRepo::new("rec-hand");
         mark_done_by_hand(&r);

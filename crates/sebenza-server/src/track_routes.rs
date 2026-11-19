@@ -9,7 +9,9 @@
 //! names its worktree by the id the daemon wrote into that worktree's
 //! `control.env`, and the daemon resolves the path, branch and target from
 //! its own record of that worktree, never from the request. Only a track
-//! registered in that worktree can be completed. Every completion and refusal
+//! registered in that worktree can be completed, and the first completion
+//! binds the track to that worktree and branch: a completion or a checks
+//! report from any other gets 403 `foreign_track`. Every completion and refusal
 //! is audited with the credential class, ids and SHAs only.
 //!
 //! Plan approval and sign-off need the operator token; the control token
@@ -25,6 +27,7 @@ use crate::services::completion_reconciler::project_worktrees;
 use crate::services::standards_review::existing_checks::{ExistingChecksBody, failed_checks};
 use crate::services::standards_review::git_pinned::Git;
 use crate::services::standards_review::plan_approval::{ApprovalError, approve_plan};
+use crate::services::standards_review::run_store::ChecksError;
 use crate::services::standards_review::signoff::{Signoff, SignoffError, SignoffRefs, sign_off};
 use crate::services::track_completion::check_own_track;
 use crate::services::track_completion::{Completion, CompletionError, CompletionTarget};
@@ -131,8 +134,8 @@ fn checks_blocking(
     check_own_track(&target, track_id).map_err(completion_error)?;
     let recorded = state
         .review_runs()
-        .record_existing_checks(&target.project_key, track_id, failed)
-        .map_err(|e| ApiError::coded(500, "review_log", e.to_string()))?
+        .record_existing_checks(&target, track_id, failed)
+        .map_err(checks_error)?
         .ok_or_else(|| {
             ApiError::coded(
                 404,
@@ -142,6 +145,14 @@ fn checks_blocking(
         })?;
     audit_checks(&target, track_id, &recorded);
     Ok(checks_json(track_id, &recorded))
+}
+
+fn checks_error(e: ChecksError) -> ApiError {
+    let msg = e.to_string();
+    match e {
+        ChecksError::ForeignTrack => ApiError::coded(403, "foreign_track", msg),
+        ChecksError::Log(_) => ApiError::coded(500, "review_log", msg),
+    }
 }
 
 fn checks_json(track_id: &str, r: &ExistingChecksRecorded) -> serde_json::Value {
