@@ -7,7 +7,6 @@
 //! This is the minimal resolver phase 1 needs for the job key. The phase-2
 //! resolver extends [`resolve_entries`] with the path, mode, size and type
 //! checks that make a job `standards-unavailable`.
-#![allow(unused_imports, unused_variables)] // red: stubs until phase-1-task-2
 
 use crate::services::git_pinned::git;
 use common::domain::solution::sha256_hex;
@@ -34,12 +33,33 @@ pub fn standards_rev(repo: &Path, base_sha: &str) -> Result<String, String> {
 
 /// The hash of `entries`, independent of their order.
 pub fn rev_of(entries: &[StandardsEntry]) -> String {
-    todo!("phase-1-task-2")
+    let mut sorted = entries.to_vec();
+    sorted.sort();
+    sorted.dedup();
+    let mut text = String::new();
+    for e in &sorted {
+        text.push_str(&e.path);
+        text.push('\0');
+        text.push_str(e.blob.as_deref().unwrap_or(MISSING));
+        text.push('\n');
+    }
+    sha256_hex(&text)
 }
 
 /// `index.md` and every blob its listed documents name at `base_sha`.
 pub fn resolve_entries(repo: &Path, base_sha: &str) -> Result<Vec<StandardsEntry>, String> {
-    todo!("phase-1-task-2")
+    let index = blobs_at(repo, base_sha, INDEX_PATH)?;
+    let Some(index_entry) = index.into_iter().next() else {
+        return Ok(vec![missing(INDEX_PATH)]);
+    };
+    let text = git(repo, &["cat-file", "blob", &blob_of(&index_entry)])?;
+    let mut entries = vec![index_entry];
+    for path in listed_paths(&String::from_utf8_lossy(&text)) {
+        entries.extend(listed_entries(repo, base_sha, &path)?);
+    }
+    entries.sort();
+    entries.dedup();
+    Ok(entries)
 }
 
 fn listed_entries(repo: &Path, base: &str, path: &str) -> Result<Vec<StandardsEntry>, String> {

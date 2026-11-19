@@ -5,7 +5,6 @@
 //! bytes change; every other byte, including formatting, stays as the skill
 //! wrote it. The write holds an advisory lock on `.ai/sebenza/`, re-reads the
 //! file before replacing it and retries when its content hash moved (CAS).
-#![allow(unused_imports, unused_variables)] // red: stubs until phase-1-task-2
 
 use common::domain::solution::sha256_hex;
 use serde_json::Value;
@@ -38,12 +37,43 @@ pub enum ProjectionError {
 
 /// Every `(track_id, status)` in a `tracks.json`.
 pub fn track_statuses(path: &Path) -> Result<Vec<(String, String)>, ProjectionError> {
-    todo!("phase-1-task-2")
+    let text = fs::read_to_string(path)?;
+    let v: Value =
+        serde_json::from_str(&text).map_err(|e| ProjectionError::Malformed(e.to_string()))?;
+    let tracks = v["tracks"].as_array().cloned().unwrap_or_default();
+    Ok(tracks
+        .iter()
+        .filter_map(|t| {
+            let id = t["track_id"].as_str()?;
+            Some((
+                id.to_string(),
+                t["status"].as_str().unwrap_or("").to_string(),
+            ))
+        })
+        .collect())
 }
 
 /// Project `status: "done"` for `track_id` into the `tracks.json` at `path`.
 pub fn project_done(path: &Path, track_id: &str) -> Result<Projected, ProjectionError> {
-    todo!("phase-1-task-2")
+    let dir = path
+        .parent()
+        .ok_or_else(|| ProjectionError::Malformed("no parent directory".into()))?;
+    let lock = fs::File::open(dir)?;
+    lock.lock()?;
+    for _ in 0..CAS_ATTEMPTS {
+        let before = fs::read_to_string(path)?;
+        let Some(after) = mark_done_text(&before, track_id, &now())? else {
+            return Ok(Projected::AlreadyDone);
+        };
+        #[cfg(test)]
+        hooks::before_cas(path);
+        if sha256_hex(&fs::read_to_string(path)?) != sha256_hex(&before) {
+            continue;
+        }
+        replace_atomically(path, &after)?;
+        return Ok(Projected::Applied);
+    }
+    Err(ProjectionError::Contended)
 }
 
 fn now() -> String {
@@ -74,7 +104,14 @@ pub fn mark_done_text(
     track_id: &str,
     now: &str,
 ) -> Result<Option<String>, ProjectionError> {
-    todo!("phase-1-task-2")
+    let track = find_track(text.as_bytes(), track_id)?;
+    let status = track.iter().find(|m| m.key == "status");
+    if status.is_some_and(|m| &text[m.start..m.end] == "\"done\"") {
+        return Ok(None);
+    }
+    let edited = apply_edits(text, edits_for(&track, now)?);
+    verify(text, &edited, track_id, now)?;
+    Ok(Some(edited))
 }
 
 /// A member of a JSON object: its key and the byte span of its value.

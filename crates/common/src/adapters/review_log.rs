@@ -5,7 +5,6 @@
 //! fold over the log. A crash mid-write leaves a torn final line; it never
 //! held a committed event, so it is cut off before the next read or append.
 //! Events carry ids and hashes only, never code, tokens or free text.
-#![allow(unused_imports, unused_variables)] // red: stubs until phase-1-task-2
 
 use crate::adapters::inbox_store::write_durably;
 use crate::util::id::random_ulid;
@@ -181,7 +180,11 @@ impl ReviewLog {
 
     /// Open the log: cut a torn final line, then return the fold.
     pub fn open(&self) -> std::io::Result<ReviewState> {
-        todo!("phase-1-task-2")
+        let Some(mut file) = self.locked_file(false)? else {
+            return Ok(ReviewState::default());
+        };
+        let events = read_repaired(&mut file)?;
+        Ok(ReviewState::fold(&events))
     }
 
     /// Append `completion` durably unless `existing` finds a completion that
@@ -192,7 +195,19 @@ impl ReviewLog {
         completion: TrackCompleted,
         existing: impl FnOnce(&ReviewState) -> Option<TrackCompleted>,
     ) -> std::io::Result<(TrackCompleted, bool)> {
-        todo!("phase-1-task-2")
+        let mut file = self
+            .locked_file(true)?
+            .ok_or_else(|| std::io::Error::other("review log missing after create"))?;
+        let events = read_repaired(&mut file)?;
+        if let Some(found) = existing(&ReviewState::fold(&events)) {
+            return Ok((found, false));
+        }
+        let event = ReviewEvent::new(ReviewEventKind::TrackCompleted(completion.clone()));
+        let mut line = serde_json::to_string(&event)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        line.push('\n');
+        write_durably(&mut file, line.as_bytes())?;
+        Ok((completion, true))
     }
 
     /// The log file opened for read and append under an exclusive lock that

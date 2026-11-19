@@ -7,7 +7,6 @@
 //! into the worktree's `tracks.json`; a crash in between is repaired by the
 //! reconciler, because the log wins. A repeat with the same job key appends
 //! nothing. No lock is held across a git call.
-#![allow(unused_imports, unused_variables)] // red: stubs until phase-1-task-2
 
 use crate::services::git_pinned::{merge_base, rev_parse};
 use crate::services::standards_rev::standards_rev;
@@ -99,7 +98,22 @@ impl TrackCompletionService {
         track_id: &str,
         credential: CredentialClass,
     ) -> Result<Completion, CompletionError> {
-        todo!("phase-1-task-2")
+        check_own_track(target, track_id)?;
+        let event = completion_event(target, track_id, &pin(target)?, CompletionSource::Daemon);
+        let key = event.job_key();
+        let (event, appended) = self
+            .log(&target.project_key)
+            .append_completion_unless(with_credential(event, credential), |s| {
+                s.job(&key).cloned()
+            })?;
+        #[cfg(test)]
+        hooks::after_log_fsync()?;
+        let projected = project_done(&target.tracks_path(), track_id)?;
+        Ok(Completion {
+            event,
+            appended,
+            projected,
+        })
     }
 
     /// Record a completion the log lacks for a track already marked done,
@@ -110,7 +124,16 @@ impl TrackCompletionService {
         target: &CompletionTarget,
         track_id: &str,
     ) -> Result<Option<TrackCompleted>, CompletionError> {
-        todo!("phase-1-task-2")
+        let event = completion_event(
+            target,
+            track_id,
+            &pin(target)?,
+            CompletionSource::Reconciled,
+        );
+        let (event, appended) = self
+            .log(&target.project_key)
+            .append_completion_unless(event, |s| s.completion_for(track_id).cloned())?;
+        Ok(appended.then_some(event))
     }
 }
 
@@ -140,7 +163,17 @@ fn completion_event(
 /// Pin the branch head, its merge-base with the target and the standards
 /// revision at that base.
 pub fn pin(target: &CompletionTarget) -> Result<Pins, CompletionError> {
-    todo!("phase-1-task-2")
+    let dir = &target.worktree_path;
+    let head = rev_parse(dir, &format!("refs/heads/{}", target.branch))
+        .map_err(CompletionError::Unpinnable)?;
+    let target_sha = rev_parse(dir, &target.target_branch).map_err(CompletionError::Unpinnable)?;
+    let base = merge_base(dir, &head, &target_sha).map_err(CompletionError::Unpinnable)?;
+    let rev = standards_rev(dir, &base).map_err(CompletionError::Unpinnable)?;
+    Ok(Pins {
+        head_sha: head,
+        base_sha: base,
+        standards_rev: rev,
+    })
 }
 
 /// A track id names one directory under `.ai/sebenza/tracks/`.
@@ -155,7 +188,25 @@ pub fn valid_track_id(id: &str) -> bool {
 /// The track must be registered in this worktree's `tracks.json`, have its
 /// directory here, and not record a different origin branch.
 pub fn check_own_track(target: &CompletionTarget, track_id: &str) -> Result<(), CompletionError> {
-    todo!("phase-1-task-2")
+    if !valid_track_id(track_id) {
+        return Err(CompletionError::BadTrack);
+    }
+    let foreign = || CompletionError::ForeignTrack(track_id.to_string());
+    let text = std::fs::read_to_string(target.tracks_path()).map_err(|_| foreign())?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|_| foreign())?;
+    let track = v["tracks"]
+        .as_array()
+        .and_then(|ts| ts.iter().find(|t| t["track_id"] == track_id))
+        .ok_or_else(foreign)?;
+    let origin = track["origin"]["branch"].as_str();
+    let dir = target
+        .worktree_path
+        .join(".ai/sebenza/tracks")
+        .join(track_id);
+    if origin.is_some_and(|b| b != target.branch) || !dir.is_dir() {
+        return Err(foreign());
+    }
+    Ok(())
 }
 
 /// Test-only fault injection between the log fsync and the projection.
