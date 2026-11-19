@@ -146,7 +146,44 @@ pub struct StandardsChange {
 
 /// The first-parent commits base..head, oldest first.
 pub fn first_parent_commits(git: &Git, pins: &SnapshotPins) -> Result<Vec<ScopeCommit>, GitError> {
-    todo!("phase-2-task-2")
+    let range = format!("{}..{}", pins.base_sha, pins.head_sha);
+    let out = git.text(&[
+        "rev-list",
+        "--first-parent",
+        "--parents",
+        "--reverse",
+        &range,
+    ])?;
+    out.lines()
+        .map(|line| scope_commit(git, line, &pins.target_sha))
+        .collect()
+}
+
+/// A `rev-list --parents` line: the commit, then its parents.
+fn scope_commit(git: &Git, line: &str, target: &str) -> Result<ScopeCommit, GitError> {
+    let mut shas = line.split_whitespace().map(str::to_string);
+    let sha = shas.next().unwrap_or_default();
+    let parents: Vec<String> = shas.collect();
+    let kind = if parents.len() < 2 {
+        CommitKind::Change
+    } else if all_reachable(git, &parents[1..], target)? {
+        CommitKind::TargetMerge
+    } else {
+        CommitKind::ForeignMerge
+    };
+    Ok(ScopeCommit { sha, parents, kind })
+}
+
+fn all_reachable(git: &Git, commits: &[String], target: &str) -> Result<bool, GitError> {
+    for c in commits {
+        match git.run(&["merge-base", "--is-ancestor", c, target]) {
+            Ok(_) => {}
+            // Exit 1 with no message is git's "not an ancestor".
+            Err(GitError::Failed(msg)) if msg.is_empty() => return Ok(false),
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(true)
 }
 
 /// The scope diff base→head under `limits`.
@@ -155,7 +192,186 @@ pub fn scope_diff(
     pins: &SnapshotPins,
     limits: &ReviewLimits,
 ) -> Result<ScopeDiff, GitError> {
-    todo!("phase-2-task-2")
+    let (base, head) = (pins.base_sha.as_str(), pins.head_sha.as_str());
+    let raw = git.run(&["diff", "--raw", "-z", "--no-abbrev", "-M", base, head])?;
+    let mut files = parse_raw(&raw);
+    let mut blockers = oversized_blobs(git, &files, limits.max_blob_bytes)?;
+    match patch_blocks(git, pins, limits.max_diff_bytes) {
+        Err(GitError::OutputTooLarge) => blockers.push(Blocker::whole(Reason::DiffTooLarge)),
+        Err(e) => return Err(e),
+        Ok(blocks) => {
+            if let Some(b) = attach_hunks(&mut files, blocks, pins, limits.max_hunks)? {
+                blockers.push(b);
+            }
+        }
+    }
+    blockers.sort();
+    Ok(ScopeDiff { files, blockers })
+}
+
+/// Parse `diff --raw -z`: `:<old mode> <new mode> <old oid> <new oid>
+/// <status>`, then one path, or two for a rename or copy.
+fn parse_raw(raw: &[u8]) -> Vec<DiffFile> {
+    let fields: Vec<String> = raw
+        .split(|b| *b == 0)
+        .map(|f| String::from_utf8_lossy(f).to_string())
+        .collect();
+    let mut files = Vec::new();
+    let mut i = 0;
+    while i < fields.len() {
+        let Some(meta) = fields[i].strip_prefix(':') else {
+            i += 1;
+            continue;
+        };
+        let meta: Vec<&str> = meta.split(' ').collect();
+        let letter = meta.get(4).and_then(|s| s.chars().next()).unwrap_or('M');
+        let paths = if matches!(letter, 'R' | 'C') { 2 } else { 1 };
+        let old = fields.get(i + 1).cloned().unwrap_or_default();
+        let new = fields.get(i + paths).cloned().unwrap_or_default();
+        files.push(raw_file(&meta, letter, old, new));
+        i += 1 + paths;
+    }
+    files
+}
+
+fn raw_file(meta: &[&str], letter: char, old: String, new: String) -> DiffFile {
+    let status = match letter {
+        'A' => FileStatus::Added,
+        'D' => FileStatus::Deleted,
+        'R' => FileStatus::Renamed,
+        'C' => FileStatus::Copied,
+        'T' => FileStatus::TypeChanged,
+        _ => FileStatus::Modified,
+    };
+    let new_oid = meta
+        .get(3)
+        .filter(|o| o.bytes().any(|b| b != b'0'))
+        .map(|o| o.to_string());
+    DiffFile {
+        status,
+        old_path: (status != FileStatus::Added).then_some(old),
+        new_path: (status != FileStatus::Deleted).then_some(new),
+        new_mode: meta.get(1).map(|m| m.to_string()).unwrap_or_default(),
+        new_oid,
+        binary: false,
+        hunks: Vec::new(),
+    }
+}
+
+/// A blocker per regular file at head over the blob cap.
+fn oversized_blobs(git: &Git, files: &[DiffFile], max: u64) -> Result<Vec<Blocker>, GitError> {
+    let regular: Vec<&DiffFile> = files
+        .iter()
+        .filter(|f| matches!(f.new_mode.as_str(), "100644" | "100755"))
+        .collect();
+    let oids: Vec<String> = regular.iter().filter_map(|f| f.new_oid.clone()).collect();
+    let sizes = blob_sizes(git, &oids)?;
+    Ok(regular
+        .into_iter()
+        .filter(|f| {
+            f.new_oid
+                .as_ref()
+                .and_then(|o| sizes.get(o))
+                .is_some_and(|s| *s > max)
+        })
+        .map(|f| Blocker::at(Reason::BlobTooLarge, f.path()))
+        .collect())
+}
+
+/// One file's section of the patch.
+#[derive(Debug, Default)]
+struct PatchBlock {
+    binary: bool,
+    /// (old start, old lines, new start, new lines) per hunk.
+    ranges: Vec<(u32, u32, u32, u32)>,
+}
+
+fn patch_blocks(
+    git: &Git,
+    pins: &SnapshotPins,
+    max_bytes: usize,
+) -> Result<Vec<PatchBlock>, GitError> {
+    let args = [
+        "diff",
+        "-U0",
+        "-M",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        &pins.base_sha,
+        &pins.head_sha,
+    ];
+    let limits = RunLimits {
+        max_output: Some(max_bytes),
+        ..RunLimits::default()
+    };
+    let patch = git.run_limited(&args, limits)?;
+    Ok(parse_patch(&String::from_utf8_lossy(&patch)))
+}
+
+fn parse_patch(patch: &str) -> Vec<PatchBlock> {
+    let mut blocks: Vec<PatchBlock> = Vec::new();
+    for line in patch.lines() {
+        if line.starts_with("diff --git ") {
+            blocks.push(PatchBlock::default());
+        } else if let Some(block) = blocks.last_mut() {
+            if line.starts_with("Binary files ") || line == "GIT binary patch" {
+                block.binary = true;
+            } else if let Some(range) = parse_hunk_header(line) {
+                block.ranges.push(range);
+            }
+        }
+    }
+    blocks
+}
+
+/// `@@ -<old>[,<n>] +<new>[,<n>] @@`.
+fn parse_hunk_header(line: &str) -> Option<(u32, u32, u32, u32)> {
+    let (ranges, _) = line.strip_prefix("@@ -")?.split_once(" @@")?;
+    let (old, new) = ranges.split_once(" +")?;
+    let ((os, ol), (ns, nl)) = (parse_range(old)?, parse_range(new)?);
+    Some((os, ol, ns, nl))
+}
+
+fn parse_range(range: &str) -> Option<(u32, u32)> {
+    match range.split_once(',') {
+        Some((start, len)) => Some((start.parse().ok()?, len.parse().ok()?)),
+        None => Some((range.parse().ok()?, 1)),
+    }
+}
+
+/// Give each file its patch block's hunks, or none when there are more
+/// than `max_hunks` in all.
+fn attach_hunks(
+    files: &mut [DiffFile],
+    blocks: Vec<PatchBlock>,
+    pins: &SnapshotPins,
+    max_hunks: usize,
+) -> Result<Option<Blocker>, GitError> {
+    if blocks.len() != files.len() {
+        return Err(GitError::Failed("raw and patch diffs disagree".to_string()));
+    }
+    let total: usize = blocks.iter().map(|b| b.ranges.len()).sum();
+    for (file, block) in files.iter_mut().zip(blocks) {
+        file.binary = block.binary;
+        if total > max_hunks {
+            continue;
+        }
+        file.hunks = block
+            .ranges
+            .into_iter()
+            .map(|(os, ol, ns, nl)| Hunk {
+                old_start: os,
+                old_lines: ol,
+                new_start: ns,
+                new_lines: nl,
+                anchor: anchor_for(file, os, ns, nl, pins),
+            })
+            .collect();
+    }
+    Ok((total > max_hunks).then(|| Blocker::whole(Reason::TooManyHunks)))
 }
 
 /// The anchor of a hunk with the given ranges in `file`.
@@ -166,12 +382,34 @@ pub fn anchor_for(
     new_lines: u32,
     pins: &SnapshotPins,
 ) -> Anchor {
-    todo!("phase-2-task-2")
+    if new_lines == 0 {
+        return Anchor {
+            path: file.old_path.as_deref().unwrap_or(file.path()).to_string(),
+            line: old_start,
+            side: Side::Base,
+            sha: pins.base_sha.clone(),
+        };
+    }
+    Anchor {
+        path: file.path().to_string(),
+        line: new_start,
+        side: Side::Head,
+        sha: pins.head_sha.clone(),
+    }
 }
 
 /// The standards documents `files` touch, if any.
 pub fn standards_change(files: &[DiffFile]) -> Option<StandardsChange> {
-    todo!("phase-2-task-2")
+    let prefix = format!("{WORKSPACE}/");
+    let mut paths: Vec<String> = files
+        .iter()
+        .flat_map(|f| [f.old_path.clone(), f.new_path.clone()])
+        .flatten()
+        .filter(|p| p.starts_with(&prefix) && !is_track_bookkeeping(p))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    (!paths.is_empty()).then_some(StandardsChange { paths })
 }
 
 #[cfg(test)]
@@ -303,6 +541,15 @@ mod tests {
         assert_eq!(gone.hunks[0].anchor.side, Side::Base);
         assert!(file(&d, "img.bin").binary);
         assert_eq!(file(&d, "src.rs").status, FileStatus::Added);
+    }
+
+    #[test]
+    fn unusual_file_names_keep_their_exact_paths() {
+        let r = TestRepo::new("scope-names");
+        r.commit_on_feat("dir with space/\u{fc}n\u{ef} \"q\".rs", "x\n");
+        let d = diff(&r, &ReviewLimits::default());
+        let f = file(&d, "dir with space/\u{fc}n\u{ef} \"q\".rs");
+        assert_eq!(f.hunks[0].anchor.path, f.path());
     }
 
     #[test]

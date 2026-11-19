@@ -52,16 +52,45 @@ impl ReviewInputs {
 
 /// Pin `head_rev`, `target_rev` and their merge-base to commit SHAs.
 pub fn pin(git: &Git, head_rev: &str, target_rev: &str) -> Result<SnapshotPins, ResolveError> {
-    todo!("phase-2-task-2")
+    let head_sha = git.commit_sha(head_rev)?;
+    let target_sha = git.commit_sha(target_rev)?;
+    let base_sha = git.text(&["merge-base", &head_sha, &target_sha])?;
+    Ok(SnapshotPins {
+        head_sha,
+        base_sha,
+        target_sha,
+    })
 }
 
-/// Resolve the inputs at `pins`.
+/// Resolve the inputs at `pins`: standards and rules from the merge-base,
+/// scope from base→head.
 pub fn resolve(
     git: &Git,
     pins: &SnapshotPins,
     limits: &ReviewLimits,
 ) -> Result<ReviewInputs, ResolveError> {
-    todo!("phase-2-task-2")
+    let standards = resolve_standards(git, &pins.base_sha, limits.max_blob_bytes)?;
+    let standards_rev = rev_of(&standards.entries);
+    let (manifest, rule_blockers) = build_manifest(&standards_rev, &standards.docs);
+    let commits = first_parent_commits(git, pins)?;
+    let diff = scope_diff(git, pins, limits)?;
+    let mut blockers: Vec<Blocker> = standards
+        .blockers
+        .into_iter()
+        .chain(rule_blockers)
+        .chain(diff.blockers)
+        .collect();
+    blockers.sort();
+    Ok(ReviewInputs {
+        pins: pins.clone(),
+        standards_rev,
+        standards: standards.entries,
+        manifest,
+        commits,
+        standards_change: standards_change(&diff.files),
+        files: diff.files,
+        blockers,
+    })
 }
 
 #[cfg(test)]
@@ -162,17 +191,19 @@ mod tests {
     fn ts09_an_escaping_entry_blocks_the_job() {
         let r = TestRepo::new("resolve-ts09");
         r.commit_on_main(".ai/sebenza/index.md", "- [E](../../src.rs)\n");
+        r.merge_main_into_feat();
         let i = inputs(&r);
         assert!(i.is_blocked());
         let json = serde_json::to_value(&i.blockers).unwrap();
         assert_eq!(json[0]["code"], "standards-unavailable");
-        assert_eq!(json[0]["reason"], "path-traversal");
+        assert_eq!(json[0]["reason"], "outside-workspace");
     }
 
     #[test]
     fn ts11_a_missing_doc_puts_its_sentinel_in_the_job() {
         let r = TestRepo::new("resolve-ts11");
         r.commit_on_main(".ai/sebenza/index.md", "- [G](./product-guidelines.md)\n");
+        r.merge_main_into_feat();
         let i = inputs(&r);
         assert!(i.is_blocked());
         assert!(i.standards.contains(&StandardsEntry {

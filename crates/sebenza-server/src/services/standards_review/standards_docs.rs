@@ -13,8 +13,7 @@
 use super::git_pinned::{Git, GitError};
 use super::objects::{blob_sizes, read_blobs};
 use super::reasons::{Blocker, Reason};
-use super::standards_rev::{INDEX_PATH, StandardsEntry};
-use std::collections::BTreeMap;
+use super::standards_rev::{INDEX_PATH, StandardsEntry, missing};
 
 /// The workspace every standards document lives under.
 pub const WORKSPACE: &str = ".ai/sebenza";
@@ -49,18 +48,206 @@ struct TreeEntry {
 
 /// Resolve the standards at `base`, reading no blob over `max_blob` bytes.
 pub fn resolve_standards(git: &Git, base: &str, max_blob: u64) -> Result<Standards, GitError> {
-    todo!("phase-2-task-2")
+    let mut acc = Standards::default();
+    let index_tree = ls_tree(git, base, &[INDEX_PATH.to_string()])?;
+    let index_blobs = admit(&mut acc, INDEX_PATH, index_tree);
+    let Some(index) = load(git, &index_blobs, max_blob, &mut acc)?.pop() else {
+        return Ok(finish(acc));
+    };
+    let listed = listed_repo_paths(&index.text, &mut acc);
+    let tree = ls_tree(git, base, &listed)?;
+    let mut blobs = Vec::new();
+    for path in &listed {
+        blobs.extend(admit(&mut acc, path, under(&tree, path)));
+    }
+    let mut docs = load(git, &blobs, max_blob, &mut acc)?;
+    docs.sort_by(|a, b| a.path.cmp(&b.path));
+    docs.dedup_by(|a, b| a.path == b.path);
+    docs.retain(|d| d.path != INDEX_PATH);
+    acc.docs = std::iter::once(index).chain(docs).collect();
+    Ok(finish(acc))
+}
+
+fn finish(mut acc: Standards) -> Standards {
+    acc.entries.sort();
+    acc.entries.dedup();
+    acc.blockers.sort();
+    acc.blockers.dedup();
+    acc
+}
+
+/// The workspace paths `index_md` lists; each refused link becomes a
+/// blocker and a (link, `missing`) revision entry.
+fn listed_repo_paths(index_md: &str, acc: &mut Standards) -> Vec<String> {
+    let mut paths = Vec::new();
+    for target in link_targets(index_md) {
+        match classify_link(&target) {
+            Ok(path) if is_track_bookkeeping(&path) => {}
+            Ok(path) => paths.push(path),
+            Err(reason) => {
+                acc.entries.push(missing(&target));
+                acc.blockers.push(Blocker::at(reason, &target));
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+/// Record what `path` names in the revision, and return its regular blobs.
+fn admit(acc: &mut Standards, path: &str, found: Vec<TreeEntry>) -> Vec<TreeEntry> {
+    if found.is_empty() {
+        acc.entries.push(missing(path));
+        acc.blockers.push(Blocker::at(Reason::Missing, path));
+    }
+    let mut regular = Vec::new();
+    for e in found {
+        acc.entries.push(StandardsEntry {
+            path: e.path.clone(),
+            blob: Some(e.oid.clone()),
+        });
+        match e.mode.as_str() {
+            "100644" | "100755" => regular.push(e),
+            "120000" => acc.blockers.push(Blocker::at(Reason::Symlink, &e.path)),
+            "160000" => acc.blockers.push(Blocker::at(Reason::Submodule, &e.path)),
+            _ => acc.blockers.push(Blocker::at(Reason::Binary, &e.path)),
+        }
+    }
+    regular
+}
+
+/// Read `blobs` as text; an oversized, binary or non-UTF-8 blob becomes a
+/// blocker instead of a document, and an oversized one is never read.
+fn load(
+    git: &Git,
+    blobs: &[TreeEntry],
+    max_blob: u64,
+    acc: &mut Standards,
+) -> Result<Vec<StandardsDoc>, GitError> {
+    let oids: Vec<String> = blobs.iter().map(|b| b.oid.clone()).collect();
+    let sizes = blob_sizes(git, &oids)?;
+    let (small, big): (Vec<&TreeEntry>, Vec<&TreeEntry>) = blobs
+        .iter()
+        .partition(|b| sizes.get(&b.oid).is_some_and(|s| *s <= max_blob));
+    for b in big {
+        acc.blockers.push(Blocker::at(Reason::Oversized, &b.path));
+    }
+    let small_oids: Vec<String> = small.iter().map(|b| b.oid.clone()).collect();
+    let total = small_oids.iter().filter_map(|o| sizes.get(o)).sum::<u64>();
+    let contents = read_blobs(git, &small_oids, total as usize)?;
+    Ok(small
+        .into_iter()
+        .filter_map(|b| as_doc(b, contents.get(&b.oid), acc))
+        .collect())
+}
+
+fn as_doc(b: &TreeEntry, bytes: Option<&Vec<u8>>, acc: &mut Standards) -> Option<StandardsDoc> {
+    let bytes = bytes.map(Vec::as_slice).unwrap_or_default();
+    let text = match std::str::from_utf8(bytes) {
+        _ if bytes.contains(&0) => Err(Reason::Binary),
+        Ok(text) => Ok(text.to_string()),
+        Err(_) => Err(Reason::NotUtf8),
+    };
+    text.map_err(|reason| acc.blockers.push(Blocker::at(reason, &b.path)))
+        .ok()
+        .map(|text| StandardsDoc {
+            path: b.path.clone(),
+            blob: b.oid.clone(),
+            text,
+        })
+}
+
+/// Every entry at or under `paths` in `rev`, recursively.
+fn ls_tree(git: &Git, rev: &str, paths: &[String]) -> Result<Vec<TreeEntry>, GitError> {
+    if paths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut args = vec!["ls-tree", "-r", "-z", "--full-tree", rev, "--"];
+    args.extend(paths.iter().map(String::as_str));
+    let out = git.run(&args)?;
+    Ok(out
+        .split(|b| *b == 0)
+        .filter_map(|rec| parse_ls_tree_record(&String::from_utf8_lossy(rec)))
+        .collect())
+}
+
+/// `<mode> <type> <oid>\t<path>`.
+fn parse_ls_tree_record(rec: &str) -> Option<TreeEntry> {
+    let (meta, path) = rec.split_once('\t')?;
+    let mut f = meta.split_whitespace();
+    let (mode, _kind, oid) = (f.next()?, f.next()?, f.next()?);
+    Some(TreeEntry {
+        mode: mode.to_string(),
+        oid: oid.to_string(),
+        path: path.to_string(),
+    })
+}
+
+fn under(tree: &[TreeEntry], path: &str) -> Vec<TreeEntry> {
+    let dir = format!("{path}/");
+    tree.iter()
+        .filter(|e| e.path == path || e.path.starts_with(&dir))
+        .cloned()
+        .collect()
 }
 
 /// The raw link targets of `index_md`, minus URLs, fragments-only links and
 /// mail links, each without its `#fragment` or title.
 pub fn link_targets(index_md: &str) -> Vec<String> {
-    todo!("phase-2-task-2")
+    index_md
+        .split("](")
+        .skip(1)
+        .filter_map(link_target)
+        .filter(|t| !t.contains("://") && !t.starts_with("mailto:"))
+        .collect()
+}
+
+/// The target at the start of `rest`, the text after a link's `](`.
+fn link_target(rest: &str) -> Option<String> {
+    let raw = match rest.strip_prefix('<') {
+        Some(bracketed) => bracketed.split('>').next()?,
+        None => rest.split(')').next()?.split_whitespace().next()?,
+    };
+    let target = raw.split('#').next().unwrap_or_default().trim();
+    (!target.is_empty()).then(|| target.to_string())
 }
 
 /// The repo path an index link names, or why it is refused.
 pub fn classify_link(target: &str) -> Result<String, Reason> {
-    todo!("phase-2-task-2")
+    if is_absolute(target) {
+        return Err(Reason::AbsolutePath);
+    }
+    let rel = target.strip_prefix("./").unwrap_or(target);
+    let rel = rel.strip_suffix('/').unwrap_or(rel);
+    let segments: Vec<&str> = rel.split('/').collect();
+    if segments.contains(&"..") {
+        return Err(traversal_reason(&segments));
+    }
+    let odd_segment = segments.iter().any(|s| s.is_empty() || *s == ".");
+    if odd_segment || rel.contains('\\') || rel.chars().any(char::is_control) {
+        return Err(Reason::NonNormalisedPath);
+    }
+    Ok(format!("{WORKSPACE}/{rel}"))
+}
+
+/// A `..` that climbs above `.ai/sebenza/` leaves the workspace; one that
+/// stays inside is still refused, as an unnormalised traversal.
+fn traversal_reason(segments: &[&str]) -> Reason {
+    let mut depth = 0i32;
+    for s in segments {
+        depth += if *s == ".." { -1 } else { 1 };
+        if depth < 0 {
+            return Reason::OutsideWorkspace;
+        }
+    }
+    Reason::PathTraversal
+}
+
+fn is_absolute(target: &str) -> bool {
+    let b = target.as_bytes();
+    let drive = b.len() > 1 && b[0].is_ascii_alphabetic() && b[1] == b':';
+    target.starts_with('/') || target.starts_with('~') || drive
 }
 
 /// Whether `path` is the track registry or under the tracks directory.
@@ -126,7 +313,8 @@ mod tests {
             ("/etc/passwd", Reason::AbsolutePath),
             ("~/notes.md", Reason::AbsolutePath),
             ("C:/x.md", Reason::AbsolutePath),
-            ("../../etc/passwd", Reason::PathTraversal),
+            ("../../etc/passwd", Reason::OutsideWorkspace),
+            ("../sebenza/workflow.md", Reason::OutsideWorkspace),
             ("./code_styleguides/../workflow.md", Reason::PathTraversal),
             ("./a//b.md", Reason::NonNormalisedPath),
             ("./a/./b.md", Reason::NonNormalisedPath),
@@ -182,7 +370,7 @@ mod tests {
             reasons(&s),
             vec![
                 (Reason::AbsolutePath, "/etc/passwd".into()),
-                (Reason::PathTraversal, "../../src.rs".into()),
+                (Reason::OutsideWorkspace, "../../src.rs".into()),
             ]
         );
         assert!(s.docs.iter().all(|d| d.path.starts_with(".ai/sebenza/")));

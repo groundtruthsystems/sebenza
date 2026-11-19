@@ -61,13 +61,122 @@ pub struct RuleManifest {
 }
 
 /// The manifest of `docs`, plus a blocker per malformed or duplicate tag.
+/// The first declaration of a rule id wins.
 pub fn build_manifest(standards_rev: &str, docs: &[StandardsDoc]) -> (RuleManifest, Vec<Blocker>) {
-    todo!("phase-2-task-2")
+    let mut rules: Vec<Rule> = Vec::new();
+    let mut blockers = Vec::new();
+    for doc in docs {
+        for parsed in parse_rules(&doc.path, &doc.text) {
+            match parsed {
+                Err(line) => {
+                    blockers.push(Blocker::at_line(Reason::MalformedRule, &doc.path, line))
+                }
+                Ok(rule) if rules.iter().any(|r| r.rule_id == rule.rule_id) => blockers.push(
+                    Blocker::at_line(Reason::DuplicateRule, &rule.source_doc, rule.line),
+                ),
+                Ok(rule) => rules.push(rule),
+            }
+        }
+    }
+    blockers.sort();
+    let manifest = RuleManifest {
+        standards_rev: standards_rev.to_string(),
+        rules,
+    };
+    (manifest, blockers)
 }
 
-/// The rules `text` declares; `Err` lines are malformed tags.
+/// The rules `text` declares; `Err` holds the line of a malformed tag.
 pub fn parse_rules(source_doc: &str, text: &str) -> Vec<Result<Rule, usize>> {
-    todo!("phase-2-task-2")
+    let mut fence: Option<&str> = None;
+    let mut parsed = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if let Some(marker) = fence_marker(trimmed) {
+            fence = match fence {
+                Some(open) if open == marker => None,
+                None => Some(marker),
+                still_open => still_open,
+            };
+            continue;
+        }
+        let tag = strip_list_marker(trimmed).strip_prefix("[rule:");
+        if let (None, Some(tag)) = (fence, tag) {
+            parsed.push(
+                parse_tag(tag)
+                    .map(|t| t.into_rule(source_doc, i + 1))
+                    .ok_or(i + 1),
+            );
+        }
+    }
+    parsed
+}
+
+fn fence_marker(line: &str) -> Option<&'static str> {
+    ["```", "~~~"].into_iter().find(|m| line.starts_with(m))
+}
+
+fn strip_list_marker(line: &str) -> &str {
+    if let Some(rest) = ["- ", "* ", "+ "].iter().find_map(|m| line.strip_prefix(m)) {
+        return rest.trim_start();
+    }
+    let rest = line.trim_start_matches(|c: char| c.is_ascii_digit());
+    match rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") ")) {
+        Some(item) if rest.len() < line.len() => item.trim_start(),
+        _ => line,
+    }
+}
+
+/// The attributes of one well-formed tag.
+struct Tag<'a> {
+    id: &'a str,
+    category: &'a str,
+    max_lines: Option<u32>,
+}
+
+impl Tag<'_> {
+    fn into_rule(self, source_doc: &str, line: usize) -> Rule {
+        Rule {
+            rule_id: self.id.to_string(),
+            category: self.category.to_string(),
+            source_doc: source_doc.to_string(),
+            line,
+            max_lines: self.max_lines,
+        }
+    }
+}
+
+/// Parse the text after `[rule:` up to the closing `]`.
+fn parse_tag(after_prefix: &str) -> Option<Tag<'_>> {
+    let (body, _prose) = after_prefix.split_once(']')?;
+    let mut tokens = body.split(' ').filter(|t| !t.is_empty());
+    let id = tokens
+        .next()
+        .filter(|id| body.starts_with(id) && valid_name(id) && !RESERVED_RULE_IDS.contains(id))?;
+    let (mut category, mut max_lines) = (None, None);
+    for token in tokens {
+        match token.split_once('=')? {
+            ("category", v) if valid_name(v) && category.is_none() => category = Some(v),
+            ("max_lines", v) if max_lines.is_none() => {
+                max_lines = Some(v.parse::<u32>().ok().filter(|n| *n > 0)?)
+            }
+            _ => return None,
+        }
+    }
+    let category = category?;
+    ((category == LONG_METHODS) == max_lines.is_some()).then_some(Tag {
+        id,
+        category,
+        max_lines,
+    })
+}
+
+fn valid_name(name: &str) -> bool {
+    (1..=64).contains(&name.len())
+        && !name.starts_with('-')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
 #[cfg(test)]
