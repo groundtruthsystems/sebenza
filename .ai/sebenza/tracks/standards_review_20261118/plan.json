@@ -376,13 +376,14 @@
           "id": "phase-8-task-4",
           "name": "Bind the control token to the caller's worktree",
           "description": "Regression test: record_existing_checks and complete must refuse (403 foreign_track) a track whose jobs were recorded by another worktree or branch, and an origin-less track recorded elsewhere; the first completion binds it.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "efb49a8"
         },
         {
           "id": "phase-8-task-5",
           "name": "Handle symlink type changes in scope",
           "description": "Regression test: a file-to-symlink type change in scope yields a blocker instead of an error, and resolver input errors fail the attempt immediately with a recorded reason.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-8-task-6",
