@@ -266,7 +266,7 @@
           "id": "phase-5-task-5",
           "name": "Execute test scenarios TS-23..TS-71",
           "description": "Run and record evidence for every scenario this phase delivers.",
-          "status": "doing",
+          "status": "done",
           "test_scenarios": [
             "TS-23",
             "TS-24",
@@ -286,7 +286,8 @@
             "TS-58",
             "TS-62",
             "TS-71"
-          ]
+          ],
+          "commit_sha": "5ce833a"
         },
         {
           "id": "phase-5-task-6",
