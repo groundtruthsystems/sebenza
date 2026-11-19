@@ -359,6 +359,13 @@ mod tests {
         let restarted = service(&r);
         assert_eq!(restarted.log("proj").open().unwrap().job_count(TRACK), 1);
         assert_eq!(r.track_status(TRACK), "doing", "not projected yet");
+        let project = crate::services::completion_reconciler::ProjectWorktrees {
+            project_key: "proj".into(),
+            worktrees: vec![target(&r)],
+        };
+        crate::services::completion_reconciler::reconcile_project(&restarted, &project);
+        assert_eq!(r.track_status(TRACK), "done", "the startup pass repairs it");
+        assert_eq!(restarted.log("proj").open().unwrap().job_count(TRACK), 1);
     }
 
     #[test]
