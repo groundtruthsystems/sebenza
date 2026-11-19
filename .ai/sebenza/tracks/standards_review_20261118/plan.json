@@ -244,13 +244,14 @@
           "id": "phase-5-task-2",
           "name": "Implement numeric-rule measurers",
           "description": "Add in-tree method-length measurers for Rust, TS/JS and Python with fallback to the second run.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "a37ead5"
         },
         {
           "id": "phase-5-task-3",
           "name": "Implement second-run scheduling, decisions and the sandboxed launch",
           "description": "Schedule kind=second runs, reconcile agreement, add the operator decision route and launch claude read-only with allowlisted egress.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-5-task-4",
