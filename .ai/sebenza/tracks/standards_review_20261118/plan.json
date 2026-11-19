@@ -63,7 +63,7 @@
     {
       "id": "phase-2",
       "name": "Snapshot and input resolver",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -101,9 +101,11 @@
           "id": "phase-2-task-4",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "e813901"
         }
-      ]
+      ],
+      "checkpoint_sha": "e813901"
     },
     {
       "id": "phase-3",
