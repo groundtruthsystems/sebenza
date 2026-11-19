@@ -84,7 +84,7 @@
           "id": "phase-2-task-3",
           "name": "Execute test scenarios TS-07..TS-57",
           "description": "Run and record evidence for every scenario this phase delivers.",
-          "status": "doing",
+          "status": "done",
           "test_scenarios": [
             "TS-07",
             "TS-09",
@@ -94,7 +94,8 @@
             "TS-31",
             "TS-51",
             "TS-57"
-          ]
+          ],
+          "commit_sha": "e813901"
         },
         {
           "id": "phase-2-task-4",
