@@ -180,6 +180,11 @@ impl TestRepo {
         self.head()
     }
 
+    /// Commit raw `bytes` at `rel` on the track branch.
+    pub fn commit_bytes_on_feat(&self, rel: &str, bytes: &[u8]) -> String {
+        self.commit_bytes_on(&self.worktree, rel, bytes)
+    }
+
     /// Commit raw `bytes` at `rel` on `main`.
     pub fn commit_bytes_on_main(&self, rel: &str, bytes: &[u8]) -> String {
         self.commit_bytes_on(&self.repo, rel, bytes)

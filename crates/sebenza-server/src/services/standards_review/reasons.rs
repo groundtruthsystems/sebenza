@@ -14,6 +14,8 @@ pub enum BlockCode {
     CapExceeded,
     /// The track's commits cannot be proven to be its own (FR-09).
     ScopeUnproven,
+    /// An in-scope file cannot be shown to a reviewer as text.
+    Unreviewable,
 }
 
 /// The specific cause of a blocker.
@@ -51,6 +53,9 @@ pub enum Reason {
     HeadOffBranch,
     /// The operator has not approved the track's plan.
     PlanNotApproved,
+    /// Git calls an in-scope file binary, yet it is a source file or its
+    /// blob is valid UTF-8.
+    UnreviewableBinary,
 }
 
 impl Reason {
@@ -67,6 +72,7 @@ impl Reason {
             | Reason::MissingBase
             | Reason::HeadOffBranch
             | Reason::PlanNotApproved => BlockCode::ScopeUnproven,
+            Reason::UnreviewableBinary => BlockCode::Unreviewable,
             _ => BlockCode::StandardsUnavailable,
         }
     }

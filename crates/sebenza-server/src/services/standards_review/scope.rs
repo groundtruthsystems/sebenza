@@ -14,7 +14,7 @@
 //! old path; anything that adds lines anchors on the head side.
 
 use super::git_pinned::{Git, GitError, RunLimits};
-use super::objects::blob_sizes;
+use super::objects::{blob_sizes, read_blobs};
 use super::reasons::{Blocker, Reason};
 use super::standards_docs::{WORKSPACE, is_track_bookkeeping};
 use serde::Serialize;
@@ -236,6 +236,7 @@ pub fn scope_diff(
             }
         }
     }
+    blockers.extend(unreviewable_binaries(git, &files, limits.max_blob_bytes)?);
     blockers.sort();
     Ok(ScopeDiff { files, blockers })
 }
@@ -309,6 +310,72 @@ fn oversized_blobs(git: &Git, files: &[DiffFile], max: u64) -> Result<Vec<Blocke
         .collect())
 }
 
+/// Extensions of text a reviewer must read, whatever git's binary
+/// heuristic or a `-diff` attribute says.
+const REVIEWABLE_EXTENSIONS: &[&str] = &[
+    "rs", "ts", "tsx", "js", "jsx", "mjs", "cjs", "py", "go", "java", "kt", "c", "h", "cc", "cpp",
+    "hpp", "cs", "rb", "php", "swift", "scala", "sh", "bash", "sql", "html", "css", "scss", "vue",
+    "svelte", "md", "json", "yaml", "yml", "toml", "xml", "txt",
+];
+
+/// A blocker per in-scope file git calls binary that a reviewer could have
+/// read: a source extension, or a blob that is valid UTF-8. Fails closed,
+/// because `$GIT_DIR/info/attributes` can mark any path `-diff`.
+fn unreviewable_binaries(
+    git: &Git,
+    files: &[DiffFile],
+    max_blob: u64,
+) -> Result<Vec<Blocker>, GitError> {
+    let suspects: Vec<&DiffFile> = files.iter().filter(|f| binary_in_scope(f)).collect();
+    let (by_name, by_content): (Vec<&DiffFile>, Vec<&DiffFile>) = suspects
+        .into_iter()
+        .partition(|f| has_reviewable_extension(f.path()));
+    let mut blocked: Vec<&DiffFile> = by_name;
+    blocked.extend(utf8_blobs(git, by_content, max_blob)?);
+    Ok(blocked
+        .into_iter()
+        .map(|f| Blocker::at(Reason::UnreviewableBinary, f.path()))
+        .collect())
+}
+
+fn binary_in_scope(f: &DiffFile) -> bool {
+    f.binary
+        && f.status != FileStatus::Deleted
+        && matches!(f.new_mode.as_str(), "100644" | "100755")
+        && !f.path().starts_with(&format!("{WORKSPACE}/"))
+}
+
+fn has_reviewable_extension(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| REVIEWABLE_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// Those of `files` whose head blob, within the blob cap, decodes as UTF-8.
+/// A blob over the cap is already an oversized blocker.
+fn utf8_blobs<'a>(
+    git: &Git,
+    files: Vec<&'a DiffFile>,
+    max_blob: u64,
+) -> Result<Vec<&'a DiffFile>, GitError> {
+    let oids: Vec<String> = files.iter().filter_map(|f| f.new_oid.clone()).collect();
+    let sizes = blob_sizes(git, &oids)?;
+    let small: Vec<String> = oids
+        .into_iter()
+        .filter(|o| sizes.get(o).is_some_and(|s| *s <= max_blob))
+        .collect();
+    let total = small.iter().filter_map(|o| sizes.get(o)).sum::<u64>();
+    let blobs = read_blobs(git, &small, usize::try_from(total).unwrap_or(usize::MAX))?;
+    Ok(files
+        .into_iter()
+        .filter(|f| {
+            let blob = f.new_oid.as_ref().and_then(|o| blobs.get(o));
+            blob.is_some_and(|b| std::str::from_utf8(b).is_ok())
+        })
+        .collect())
+}
+
 /// One file's section of the patch.
 #[derive(Debug, Default)]
 struct PatchBlock {
@@ -322,7 +389,13 @@ fn patch_blocks(
     pins: &SnapshotPins,
     max_bytes: usize,
 ) -> Result<Vec<PatchBlock>, GitError> {
+    // Global and HEAD-tree attributes are ignored; `$GIT_DIR/info/attributes`
+    // cannot be, so `unreviewable_binaries` is the real guard.
     let args = [
+        "-c",
+        "core.attributesFile=/dev/null",
+        "-c",
+        "attr.tree=4b825dc642cb6eb9a060e54bf8d69288fbee4904",
         "diff",
         "-U0",
         "-M",
@@ -447,6 +520,7 @@ pub fn standards_change(files: &[DiffFile]) -> Option<StandardsChange> {
 mod tests {
     use super::*;
     use crate::services::review_test_repo::TestRepo;
+    use crate::services::standards_review::reasons::BlockCode;
 
     fn pins_of(r: &TestRepo) -> SnapshotPins {
         let git = Git::open(&r.repo).unwrap();
@@ -572,6 +646,50 @@ mod tests {
         assert_eq!(gone.hunks[0].anchor.side, Side::Base);
         assert!(file(&d, "img.bin").binary);
         assert_eq!(file(&d, "src.rs").status, FileStatus::Added);
+    }
+
+    fn binary_blockers(d: &ScopeDiff) -> Vec<&Blocker> {
+        d.blockers
+            .iter()
+            .filter(|b| b.reason == Reason::UnreviewableBinary)
+            .collect()
+    }
+
+    #[test]
+    fn a_nul_byte_cannot_hide_a_source_file_from_review() {
+        let r = TestRepo::new("scope-nul");
+        r.commit_bytes_on_feat("src/hidden.rs", b"fn evil() {}\0\n");
+        let d = diff(&r, &ReviewLimits::default());
+        assert!(file(&d, "src/hidden.rs").binary);
+        assert_eq!(
+            binary_blockers(&d),
+            vec![&Blocker::at(Reason::UnreviewableBinary, "src/hidden.rs")]
+        );
+        assert_eq!(d.blockers[0].code, BlockCode::Unreviewable);
+    }
+
+    #[test]
+    fn a_diff_attribute_in_the_git_dir_cannot_hide_a_source_file() {
+        let r = TestRepo::new("scope-attr");
+        let info = r.repo.join(".git/info");
+        std::fs::create_dir_all(&info).unwrap();
+        std::fs::write(info.join("attributes"), "*.rs -diff\n").unwrap();
+        r.commit_on_feat("src/a.rs", "fn a() {}\n");
+        let d = diff(&r, &ReviewLimits::default());
+        let blocked: Vec<_> = binary_blockers(&d).iter().map(|b| b.path.clone()).collect();
+        assert!(
+            blocked.contains(&Some("src/a.rs".to_string())),
+            "{blocked:?}"
+        );
+    }
+
+    #[test]
+    fn a_real_binary_asset_is_not_blocked() {
+        let r = TestRepo::new("scope-png");
+        r.commit_bytes_on_feat("img/logo.png", &[0x89, b'P', b'N', b'G', 0xff, 0x00, 0xfe]);
+        let d = diff(&r, &ReviewLimits::default());
+        assert!(file(&d, "img/logo.png").binary);
+        assert!(binary_blockers(&d).is_empty(), "{:?}", d.blockers);
     }
 
     #[test]

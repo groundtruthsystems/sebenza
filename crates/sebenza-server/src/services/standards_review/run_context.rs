@@ -6,7 +6,8 @@
 //! The in-scope files of the matrix are the scope diff's files with hunks,
 //! except binary and deleted files and anything under `.ai/sebenza/`, whose
 //! edits are the daemon's `standards-change` finding rather than a rule
-//! review. A second run's matrix holds only the rules and files of its
+//! review. A binary file a reviewer could have read is an
+//! `unreviewable-binary` blocker from the scope diff. A second run's matrix holds only the rules and files of its
 //! planned pairs, and it never sees prior findings.
 
 use super::deriver::{OUT_OF_SCOPE_EDIT_RULE, PriorFinding, STANDARDS_CHANGE_RULE};
