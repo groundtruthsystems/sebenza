@@ -79,6 +79,8 @@ vi.mock("./solutionApi", async () => {
 
 import InboxView from "./InboxView";
 import * as inboxApi from "./api";
+import { solutionApi } from "./solutionApi";
+import { view as solutionView } from "./solutionTestApi";
 
 beforeAll(() => {
   if (!HTMLDialogElement.prototype.showModal) {
@@ -866,5 +868,24 @@ describe("InboxView full screen", () => {
     await user.keyboard("{Escape}");
     expect(fsRegion()).toBeNull();
     expect(opener).toHaveFocus();
+  });
+
+  // TS-08: a handover's full-screen URL opens the Design tab and that handover, not the request view.
+  it("opens a handover full screen from its URL", async () => {
+    const card = {
+      project: "/code/acme", slug: "acme", status: "drafted", instructionHash: "ih",
+      approvalValid: false, copyStale: false, rejection: null,
+    };
+    const viewMock = vi.mocked(solutionApi.view);
+    viewMock.mockResolvedValue(solutionView({ handovers: [card] }));
+    try {
+      window.history.replaceState(null, "", "/inbox?item=req-s&handover=acme&view=full");
+      render(<InboxView />);
+      expect(await screen.findByRole("region", { name: "Full-screen handover acme" })).toBeInTheDocument();
+      expect(fsRegion()).toBeNull();
+      expect(screen.getByRole("tab", { name: "Design" })).toHaveAttribute("aria-selected", "true");
+    } finally {
+      viewMock.mockResolvedValue(solutionView());
+    }
   });
 });
