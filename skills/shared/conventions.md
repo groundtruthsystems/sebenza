@@ -27,11 +27,19 @@
 - **Agnostic language.** Do NOT tell users to run slash commands like `/sebenza:xxx`. Instead tell
   them to ask you directly (e.g. "to start implementing, just ask me").
 - **Terminal-readable output.** The user is reading a terminal: it renders neither Mermaid nor a long
-  document. Confirm diagrams as **ASCII** sketches and write **Mermaid** into the artifact; review
-  written artifacts by summarizing and giving the file path, not by reproducing them in chat. See
+  document. Write the first version of every artifact section — diagrams included — into the file,
+  then ask the user to review it **there**. In chat give a few summary lines, the file path, and what
+  to check; never reproduce the section or draw a diagram in chat. See
   [`diagrams.md`](./diagrams.md).
 
 ## Interaction protocol
+
+**Draft first, then ask.** When content can be inferred — from the request, inbox notes, the product
+docs, or the code — draft it into the document yourself and mark what you inferred as
+`_(assumption)_`, rather than eliciting it from the user question by question. The user corrects a
+concrete draft far faster than they invent one. Ask before drafting only when there is genuinely too
+little to draft from; otherwise unresolved points go in the document's open questions and the review
+request.
 
 When gathering information or asking the user to decide:
 
