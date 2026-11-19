@@ -231,7 +231,7 @@
     {
       "id": "phase-5",
       "name": "Standards stage, second run, measurers and template defaults",
-      "status": "doing",
+      "status": "done",
       "blocked_reason": null,
       "tasks": [
         {
@@ -293,9 +293,11 @@
           "id": "phase-5-task-6",
           "name": "Phase verification & checkpoint",
           "description": "Per workflow.md",
-          "status": "backlog"
+          "status": "done",
+          "commit_sha": "aee82a6"
         }
-      ]
+      ],
+      "checkpoint_sha": "aee82a6"
     },
     {
       "id": "phase-6",
