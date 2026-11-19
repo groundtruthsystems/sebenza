@@ -124,13 +124,14 @@
           "id": "phase-3-task-2",
           "name": "Implement the run store and claim/submit API",
           "description": "Add review jobs and runs with single-use hashed tokens, leases, per-kind attempts and strict submission validation.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "55a0402"
         },
         {
           "id": "phase-3-task-3",
           "name": "Implement the verdict deriver and finding matcher",
           "description": "Derive findings and verdicts in the daemon, with rename and text-hash matching, out-of-scope and rule-withdrawn handling.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-3-task-4",
