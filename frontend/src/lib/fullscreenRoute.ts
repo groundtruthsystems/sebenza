@@ -107,10 +107,11 @@ export function closeFullscreen(item: string): void {
   notify();
 }
 
-/** Return focus to the control that opened full screen. A control that was
+/** Return focus, once, to the control that opened full screen. A control
  *  re-rendered meanwhile is found again by its `data-fullscreen-opener`. */
 export function focusOpener(): void {
   const { element, key } = opener;
+  opener = { element: null, key: null };
   const target =
     element?.isConnected && element instanceof HTMLElement
       ? element

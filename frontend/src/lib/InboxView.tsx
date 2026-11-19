@@ -354,6 +354,11 @@ export default function InboxView() {
 
   const fullItem = route.full && !route.handover ? route.item : null;
 
+  // A handover lives on the Design tab, so its full-screen URL opens that tab.
+  useEffect(() => {
+    if (route.handover) setPageTab("design");
+  }, [route.handover]);
+
   /** Re-read the open item after a note write changed its shape, so the
    *  plain editor and its save token match the server again. */
   const reloadDraft = useCallback(async () => {

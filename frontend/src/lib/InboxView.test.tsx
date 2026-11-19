@@ -873,7 +873,7 @@ describe("InboxView full screen", () => {
   // TS-08: a handover's full-screen URL opens the Design tab and that handover, not the request view.
   it("opens a handover full screen from its URL", async () => {
     const card = {
-      project: "/code/acme", slug: "acme", status: "drafted", instructionHash: "ih",
+      project: "/code/acme", slug: "acme", status: "drafted" as const, instructionHash: "ih",
       approvalValid: false, copyStale: false, rejection: null,
     };
     const viewMock = vi.mocked(solutionApi.view);
