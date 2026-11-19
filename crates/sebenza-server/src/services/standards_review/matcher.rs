@@ -20,7 +20,36 @@ pub type RenameMap = BTreeMap<String, String>;
 
 /// The renames from `from_sha` to `to_sha`, by git's `-M` detection.
 pub fn rename_map(git: &Git, from_sha: &str, to_sha: &str) -> Result<RenameMap, GitError> {
-    todo!()
+    if from_sha == to_sha {
+        return Ok(RenameMap::new());
+    }
+    let out = git.run(&["diff", "--name-status", "-z", "-M", from_sha, to_sha])?;
+    Ok(parse_renames(&out))
+}
+
+/// `--name-status -z`: a status, then one path, or two for `R` and `C`.
+fn parse_renames(out: &[u8]) -> RenameMap {
+    let fields: Vec<String> = out
+        .split(|b| *b == 0)
+        .map(|f| String::from_utf8_lossy(f).to_string())
+        .collect();
+    let mut map = RenameMap::new();
+    let mut i = 0;
+    while i < fields.len() {
+        let status = fields[i].chars().next();
+        let paths = if matches!(status, Some('R' | 'C')) {
+            2
+        } else {
+            1
+        };
+        if status == Some('R')
+            && let (Some(old), Some(new)) = (fields.get(i + 1), fields.get(i + 2))
+        {
+            map.insert(old.clone(), new.clone());
+        }
+        i += 1 + paths;
+    }
+    map
 }
 
 /// A prior open finding as the matcher sees it.
@@ -42,7 +71,28 @@ pub struct ClaimKey {
 
 /// For each claim, the index of the prior it continues, if any.
 pub fn match_claims(claims: &[ClaimKey], priors: &[PriorKey]) -> Vec<Option<usize>> {
-    todo!()
+    let mut taken = vec![false; priors.len()];
+    let mut matched = vec![None; claims.len()];
+    let same_place = |c: &ClaimKey, p: &PriorKey| same_text(c, p) && c.path == p.path;
+    for pass in [
+        &same_place as &dyn Fn(&ClaimKey, &PriorKey) -> bool,
+        &same_text,
+    ] {
+        for (c, slot) in claims.iter().zip(matched.iter_mut()) {
+            if slot.is_some() {
+                continue;
+            }
+            *slot = (0..priors.len()).find(|&i| !taken[i] && pass(c, &priors[i]));
+            if let Some(i) = *slot {
+                taken[i] = true;
+            }
+        }
+    }
+    matched
+}
+
+fn same_text(c: &ClaimKey, p: &PriorKey) -> bool {
+    c.rule_id == p.rule_id && c.text_hash == p.text_hash
 }
 
 #[cfg(test)]

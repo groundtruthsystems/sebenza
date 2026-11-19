@@ -93,8 +93,206 @@ pub struct Derivation {
 }
 
 /// Derive findings and the verdict; `new_id` names each opened finding.
-pub fn derive(inputs: &DeriveInputs, new_id: impl FnMut() -> String) -> Derivation {
-    todo!()
+pub fn derive(inputs: &DeriveInputs, mut new_id: impl FnMut() -> String) -> Derivation {
+    let claims = claims_of(inputs);
+    let matched = continued_priors(inputs, &claims);
+    let continued: BTreeSet<usize> = matched.iter().flatten().copied().collect();
+    let transitions: Vec<TransitionRecord> = inputs
+        .priors
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !continued.contains(i))
+        .filter_map(|(_, p)| prior_transition(inputs, p))
+        .collect();
+    let mut opened: Vec<FindingRecord> = claims
+        .iter()
+        .zip(&matched)
+        .filter(|(_, m)| m.is_none())
+        .map(|((claim, origin), _)| finding_record(inputs, claim, *origin, new_id()))
+        .collect();
+    if needs_standards_change(inputs, &transitions) {
+        opened.extend(standards_change_finding(inputs, new_id()));
+    }
+    let verdict = verdict(inputs, &transitions, &opened);
+    Derivation {
+        opened,
+        transitions,
+        verdict,
+    }
+}
+
+/// Reported then measured findings, without repeats.
+fn claims_of(inputs: &DeriveInputs) -> Vec<(Claim, FindingOrigin)> {
+    let measured = inputs.measured_findings.iter().map(|m| Claim {
+        rule_id: m.rule_id.clone(),
+        path: m.path.clone(),
+        line: m.line,
+        text_hash: text_hash(&m.description),
+        description: m.description.clone(),
+    });
+    let all = inputs
+        .submission
+        .claims
+        .iter()
+        .cloned()
+        .map(|c| (c, FindingOrigin::Agent))
+        .chain(measured.map(|c| (c, FindingOrigin::Measured)));
+    let mut seen = BTreeSet::new();
+    all.filter(|(c, _)| seen.insert((c.rule_id.clone(), c.path.clone(), c.text_hash.clone())))
+        .collect()
+}
+
+/// For each claim, the index of the prior finding it continues.
+fn continued_priors(
+    inputs: &DeriveInputs,
+    claims: &[(Claim, FindingOrigin)],
+) -> Vec<Option<usize>> {
+    let priors: Vec<PriorKey> = inputs
+        .priors
+        .iter()
+        .map(|p| PriorKey {
+            rule_id: p.finding.record.rule_id.clone(),
+            path: p.path_at_head.clone(),
+            text_hash: p.finding.record.text_hash.clone(),
+        })
+        .collect();
+    let keys: Vec<ClaimKey> = claims
+        .iter()
+        .map(|(c, _)| ClaimKey {
+            rule_id: c.rule_id.clone(),
+            path: c.path.clone(),
+            text_hash: c.text_hash.clone(),
+        })
+        .collect();
+    match_claims(&keys, &priors)
+}
+
+/// The move a prior finding no claim continues makes, if the table allows.
+fn prior_transition(inputs: &DeriveInputs, p: &PriorFinding) -> Option<TransitionRecord> {
+    let r = &p.finding.record;
+    let (to, cause) = if p.rule_in_prior_manifest && !inputs.manifest_rule_ids.contains(&r.rule_id)
+    {
+        (FindingStatus::RuleWithdrawn, "rule-withdrawn")
+    } else if !inputs.scope_paths.contains(&p.path_at_head) {
+        (FindingStatus::ResolvedOutOfScope, "out-of-scope")
+    } else if prior_outcome(inputs, &r.finding_id) == Some(Outcome::Clean) {
+        (FindingStatus::Resolved, "verified-clean")
+    } else {
+        return None;
+    };
+    check_transition(p.finding.status, to, Actor::Daemon).ok()?;
+    Some(TransitionRecord {
+        finding_id: r.finding_id.clone(),
+        from: p.finding.status,
+        to,
+        cause: cause.to_string(),
+    })
+}
+
+fn prior_outcome(inputs: &DeriveInputs, finding_id: &str) -> Option<Outcome> {
+    inputs
+        .submission
+        .priors
+        .iter()
+        .find(|p| p.finding_id == finding_id)
+        .map(|p| p.outcome)
+}
+
+fn finding_record(
+    inputs: &DeriveInputs,
+    claim: &Claim,
+    origin: FindingOrigin,
+    finding_id: String,
+) -> FindingRecord {
+    FindingRecord {
+        finding_id,
+        track_id: inputs.track_id.to_string(),
+        job_id: inputs.job_id.to_string(),
+        rule_id: claim.rule_id.clone(),
+        anchor: AnchorRecord {
+            path: claim.path.clone(),
+            line: claim.line,
+            side: AnchorSide::Head,
+            sha: inputs.head_sha.to_string(),
+        },
+        text_hash: claim.text_hash.clone(),
+        description: claim.description.clone(),
+        origin,
+    }
+}
+
+/// A marker with no standards-change finding left open after `moved`.
+fn needs_standards_change(inputs: &DeriveInputs, moved: &[TransitionRecord]) -> bool {
+    let still_open = inputs.priors.iter().any(|p| {
+        p.finding.record.rule_id == STANDARDS_CHANGE_RULE
+            && p.finding.status == FindingStatus::Open
+            && !moved
+                .iter()
+                .any(|t| t.finding_id == p.finding.record.finding_id)
+    });
+    inputs
+        .standards_change
+        .is_some_and(|paths| !paths.is_empty())
+        && !still_open
+}
+
+fn standards_change_finding(inputs: &DeriveInputs, finding_id: String) -> Option<FindingRecord> {
+    let paths = inputs.standards_change?;
+    let description = format!(
+        "The track edits {} standards document(s); rules still come from the merge-base.",
+        paths.len()
+    );
+    let claim = Claim {
+        rule_id: STANDARDS_CHANGE_RULE.to_string(),
+        path: paths.first()?.clone(),
+        line: 1,
+        text_hash: text_hash(&description),
+        description,
+    };
+    Some(finding_record(
+        inputs,
+        &claim,
+        FindingOrigin::StandardsChange,
+        finding_id,
+    ))
+}
+
+fn verdict(
+    inputs: &DeriveInputs,
+    moved: &[TransitionRecord],
+    opened: &[FindingRecord],
+) -> VerdictRecord {
+    let status_now = |p: &PriorFinding| {
+        moved
+            .iter()
+            .find(|t| t.finding_id == p.finding.record.finding_id)
+            .map_or(p.finding.status, |t| t.to)
+    };
+    let statuses: Vec<FindingStatus> = inputs
+        .priors
+        .iter()
+        .map(status_now)
+        .chain(opened.iter().map(|_| FindingStatus::Open))
+        .collect();
+    let mut reasons = Vec::new();
+    if statuses.contains(&FindingStatus::Open) {
+        reasons.push(OPEN_FINDINGS);
+    }
+    if statuses.contains(&FindingStatus::NeedsOperatorDecision) {
+        reasons.push(UNDECIDED_FINDINGS);
+    }
+    if inputs.second_run_pending {
+        reasons.push(SECOND_RUN_PENDING);
+    }
+    match inputs.existing_checks {
+        None => reasons.push(EXISTING_CHECKS_MISSING),
+        Some(failed) if !failed.is_empty() => reasons.push(EXISTING_CHECKS_FAILED),
+        Some(_) => {}
+    }
+    VerdictRecord {
+        passing: reasons.is_empty(),
+        reasons: reasons.into_iter().map(String::from).collect(),
+    }
 }
 
 #[cfg(test)]
