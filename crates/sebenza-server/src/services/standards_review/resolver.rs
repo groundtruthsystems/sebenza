@@ -7,7 +7,7 @@
 //! [`Blocker`] in an otherwise complete [`ReviewInputs`], which makes the
 //! job non-passing.
 
-use super::git_pinned::{Git, GitError};
+use super::git_pinned::{Git, GitError, branch_ref};
 use super::manifest::{RuleManifest, build_manifest};
 use super::reasons::Blocker;
 use super::scope::{
@@ -50,10 +50,11 @@ impl ReviewInputs {
     }
 }
 
-/// Pin `head_rev`, `target_rev` and their merge-base to commit SHAs.
-pub fn pin(git: &Git, head_rev: &str, target_rev: &str) -> Result<SnapshotPins, ResolveError> {
-    let head_sha = git.commit_sha(head_rev)?;
-    let target_sha = git.commit_sha(target_rev)?;
+/// Pin local branches `branch` and `target_branch`, and their merge-base, to
+/// commit SHAs.
+pub fn pin(git: &Git, branch: &str, target_branch: &str) -> Result<SnapshotPins, ResolveError> {
+    let head_sha = git.commit_sha(&branch_ref(branch))?;
+    let target_sha = git.commit_sha(&branch_ref(target_branch))?;
     let base_sha = git.text(&["merge-base", &head_sha, &target_sha])?;
     Ok(SnapshotPins {
         head_sha,
@@ -96,7 +97,7 @@ pub fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::services::review_test_repo::{TestRepo, write};
+    use crate::services::review_test_repo::{TestRepo, git, write};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
@@ -133,6 +134,19 @@ mod tests {
         assert_eq!(p.target_sha, r.main_head());
         assert_eq!(p.base_sha, r.main_head());
         assert!(pin(&git, "no-such-branch", "main").is_err());
+    }
+
+    #[test]
+    fn tags_shadowing_the_branches_do_not_move_the_pins() {
+        let r = TestRepo::new("resolve-tag-shadow");
+        let real_base = r.main_head();
+        r.commit_on_feat("src/extra.rs", "fn extra() {}\n");
+        git(&r.repo, &["tag", "main", &r.head()]);
+        git(&r.repo, &["tag", "feat", &real_base]);
+        let p = pin(&Git::open(&r.repo).unwrap(), "feat", "main").unwrap();
+        assert_eq!(p.head_sha, r.head());
+        assert_eq!(p.target_sha, real_base);
+        assert_eq!(p.base_sha, real_base);
     }
 
     #[test]

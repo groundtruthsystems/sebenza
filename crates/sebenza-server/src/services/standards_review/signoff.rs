@@ -181,11 +181,7 @@ fn signed_off(view: &ReviewView, job: &Job, credential: &str) -> SignedOff {
 
 /// The track ref and its merge-base with the target, pinned now.
 pub fn current_pins(git: &Git, refs: &SignoffRefs) -> Result<SnapshotPins, SignoffError> {
-    Ok(pin(
-        git,
-        &format!("refs/heads/{}", refs.branch),
-        &refs.target_branch,
-    )?)
+    Ok(pin(git, &refs.branch, &refs.target_branch)?)
 }
 
 /// Test-only fault injection between validation and the commit.
@@ -354,6 +350,21 @@ mod tests {
                 assert_ne!(base_sha, base);
                 assert_eq!(base_sha, root);
             }
+            other => panic!("{other:?}"),
+        }
+        assert!(signoffs(&e).is_empty());
+    }
+
+    #[test]
+    fn ts39_a_tag_named_like_the_target_cannot_freshen_a_stale_verdict() {
+        let e = passing("signoff-tag-shadow");
+        let job = e.view().latest_job(TRACK).cloned().unwrap();
+        let root = git(&e.r.repo, &["rev-list", "--max-parents=0", "main"]);
+        git(&e.r.repo, &["update-ref", "refs/heads/main", &root]);
+        git(&e.r.repo, &["tag", "main", &job.completion.base_sha]);
+        git(&e.r.repo, &["tag", "feat", &job.completion.head_sha]);
+        match sign(&e) {
+            Err(SignoffError::Stale { base_sha, .. }) => assert_eq!(base_sha, root),
             other => panic!("{other:?}"),
         }
         assert!(signoffs(&e).is_empty());

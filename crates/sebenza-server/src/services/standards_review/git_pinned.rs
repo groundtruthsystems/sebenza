@@ -126,6 +126,12 @@ pub fn rev_parse(dir: &Path, rev: &str) -> Result<String, String> {
     git_text(dir, &["rev-parse", "--verify", "--quiet", &commit_rev(rev)])
 }
 
+/// The full ref of local branch `name`. Revs are always resolved through it,
+/// because a bare name prefers a tag of the same name over the branch.
+pub fn branch_ref(name: &str) -> String {
+    format!("refs/heads/{name}")
+}
+
 /// The merge-base of two commits.
 pub fn merge_base(dir: &Path, a: &str, b: &str) -> Result<String, String> {
     git_text(dir, &["merge-base", a, b])

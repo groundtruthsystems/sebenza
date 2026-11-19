@@ -8,7 +8,7 @@
 //! reconciler, because the log wins. A repeat with the same job key appends
 //! nothing. No lock is held across a git call.
 
-use crate::services::standards_review::git_pinned::{merge_base, rev_parse};
+use crate::services::standards_review::git_pinned::{branch_ref, merge_base, rev_parse};
 use crate::services::standards_review::standards_rev::standards_rev;
 use crate::services::tracks_projection::{Projected, ProjectionError, project_done};
 use common::adapters::review_log::{CompletionSource, ReviewLog, TrackCompleted};
@@ -169,9 +169,9 @@ fn completion_event(
 /// revision at that base.
 pub fn pin(target: &CompletionTarget) -> Result<Pins, CompletionError> {
     let dir = &target.worktree_path;
-    let head = rev_parse(dir, &format!("refs/heads/{}", target.branch))
-        .map_err(CompletionError::Unpinnable)?;
-    let target_sha = rev_parse(dir, &target.target_branch).map_err(CompletionError::Unpinnable)?;
+    let head = rev_parse(dir, &branch_ref(&target.branch)).map_err(CompletionError::Unpinnable)?;
+    let target_sha =
+        rev_parse(dir, &branch_ref(&target.target_branch)).map_err(CompletionError::Unpinnable)?;
     let base = merge_base(dir, &head, &target_sha).map_err(CompletionError::Unpinnable)?;
     let rev = standards_rev(dir, &base).map_err(CompletionError::Unpinnable)?;
     Ok(Pins {
@@ -309,6 +309,27 @@ mod tests {
             .unwrap();
         assert!(again.appended);
         assert_eq!(svc.log("proj").open().unwrap().job_count(TRACK), 2);
+    }
+
+    #[test]
+    fn a_tag_named_like_the_target_cannot_choose_the_merge_base_or_standards() {
+        let r = TestRepo::new("tag-shadow");
+        let real_base = r.main_head();
+        r.commit_on_feat(
+            ".ai/sebenza/code_styleguides/general.md",
+            "# General\n- [rule:mine category=long-methods max_lines=900] Lax.\n",
+        );
+        crate::services::review_test_repo::git(&r.repo, &["tag", "main", &r.head()]);
+        crate::services::review_test_repo::git(&r.repo, &["tag", "feat", &real_base]);
+        let done = service(&r)
+            .complete(&target(&r), TRACK, CredentialClass::Control)
+            .unwrap();
+        assert_eq!(done.event.head_sha, r.head());
+        assert_eq!(done.event.base_sha, real_base);
+        assert_eq!(
+            done.event.standards_rev,
+            standards_rev(&r.repo, &real_base).unwrap()
+        );
     }
 
     #[test]

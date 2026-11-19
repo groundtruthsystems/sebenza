@@ -10,7 +10,7 @@
 //! the boundary stale.
 
 use super::boundary::valid_glob;
-use super::git_pinned::{Git, GitError};
+use super::git_pinned::{Git, GitError, branch_ref};
 use super::objects::{blob_sizes, read_blobs};
 use super::standards_docs::WORKSPACE;
 use common::adapters::review_log::{ReviewEventKind, ReviewLog};
@@ -57,7 +57,7 @@ pub fn approve_plan(
     branch: &str,
     credential: &str,
 ) -> Result<PlanApproved, ApprovalError> {
-    let head = git.commit_sha(&format!("refs/heads/{branch}"))?;
+    let head = git.commit_sha(&branch_ref(branch))?;
     let bytes =
         plan_at(git, &head, track_id)?.ok_or_else(|| ApprovalError::NoPlan(head.clone()))?;
     let mut approved = snapshot(track_id, &head, &bytes)?;
