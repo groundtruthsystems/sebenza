@@ -9,10 +9,12 @@
 //! nothing. No lock is held across a git call.
 
 use crate::services::standards_review::git_pinned::{branch_ref, merge_base, rev_parse};
+use crate::services::standards_review::jobs::ReviewView;
 use crate::services::standards_review::standards_rev::standards_rev;
 use crate::services::tracks_projection::{Projected, ProjectionError, project_done};
 use common::adapters::review_log::{
-    CompletionSource, ReviewEventKind, ReviewLog, ReviewState, TrackCompleted,
+    CompletionReasserted, CompletionSource, ReviewEvent, ReviewEventKind, ReviewLog, ReviewState,
+    TrackCompleted,
 };
 use common::domain::solution::CredentialClass;
 use std::path::{Path, PathBuf};
@@ -142,7 +144,7 @@ impl TrackCompletionService {
                 return Err(CompletionError::ForeignTrack(event.track_id.clone()));
             }
             Ok(match state.job(&event.job_key()) {
-                Some(found) => (None, (found.clone(), false)),
+                Some(found) => (reassert(events, found, &event), (found.clone(), false)),
                 None => {
                     let kind = ReviewEventKind::TrackCompleted(event.clone());
                     (Some(kind), (event, true))
@@ -171,6 +173,25 @@ impl TrackCompletionService {
             .append_completion_unless(event, |s| s.completion_for(track_id).cloned())?;
         Ok(appended.then_some(event))
     }
+}
+
+/// Make `found`'s job its track's latest again when a later completion
+/// superseded it, as when the branch was reset to an earlier head.
+fn reassert(
+    events: &[ReviewEvent],
+    found: &TrackCompleted,
+    asked: &TrackCompleted,
+) -> Option<ReviewEventKind> {
+    let job_id = found.job_key().job_id();
+    let view = ReviewView::fold(events);
+    let latest = view.latest_job(&found.track_id).map(|j| j.id.as_str());
+    (latest != Some(job_id.as_str())).then(|| {
+        ReviewEventKind::CompletionReasserted(CompletionReasserted {
+            track_id: found.track_id.clone(),
+            job_id,
+            credential: asked.credential.clone(),
+        })
+    })
 }
 
 fn with_credential(mut event: TrackCompleted, credential: CredentialClass) -> TrackCompleted {
@@ -362,6 +383,41 @@ mod tests {
         assert_eq!(
             done.event.standards_rev,
             standards_rev(&r.repo, &real_base).unwrap()
+        );
+    }
+
+    #[test]
+    fn ts65_re_completing_at_an_earlier_head_makes_its_job_latest_again() {
+        use crate::services::review_test_repo::git;
+        use crate::services::standards_review::jobs::ReviewView;
+        let r = TestRepo::new("reassert");
+        let svc = service(&r);
+        let latest = || {
+            let view = ReviewView::fold(&svc.log("proj").events().unwrap());
+            view.latest_job(TRACK)
+                .map(|j| j.completion.head_sha.clone())
+        };
+        let a = svc
+            .complete(&target(&r), TRACK, CredentialClass::Control)
+            .unwrap();
+        r.commit_on_feat("more.rs", "// more\n");
+        svc.complete(&target(&r), TRACK, CredentialClass::Control)
+            .unwrap();
+        git(&r.worktree, &["reset", "-q", "--hard", &a.event.head_sha]);
+        let again = svc
+            .complete(&target(&r), TRACK, CredentialClass::Control)
+            .unwrap();
+        assert!(!again.appended, "no new job");
+        assert_eq!(again.event, a.event);
+        assert_eq!(latest(), Some(a.event.head_sha.clone()));
+        assert_eq!(svc.log("proj").open().unwrap().job_count(TRACK), 2);
+        let events = svc.log("proj").events().unwrap().len();
+        svc.complete(&target(&r), TRACK, CredentialClass::Control)
+            .unwrap();
+        assert_eq!(
+            svc.log("proj").events().unwrap().len(),
+            events,
+            "a repeat appends nothing"
         );
     }
 

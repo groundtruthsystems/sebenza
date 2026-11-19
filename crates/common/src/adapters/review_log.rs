@@ -85,11 +85,22 @@ impl TrackCompleted {
     }
 }
 
+/// A completion whose job is already in the log, at a head the track has
+/// returned to: the job becomes the track's latest again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletionReasserted {
+    pub track_id: String,
+    pub job_id: String,
+    /// The credential class that asked (`control`).
+    pub credential: Option<String>,
+}
+
 /// Every kind of review-log event.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ReviewEventKind {
     TrackCompleted(TrackCompleted),
+    CompletionReasserted(CompletionReasserted),
     RunLeased(RunLeased),
     AttemptFailed(AttemptFailed),
     JobBlocked(JobBlocked),

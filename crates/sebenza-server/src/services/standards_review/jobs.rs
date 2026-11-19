@@ -13,7 +13,9 @@
 //! [`JobKey`]: common::adapters::review_log::JobKey
 
 use super::findings::{Actor, check_transition};
-use common::adapters::review_log::{ReviewEvent, ReviewEventKind, TrackCompleted};
+use common::adapters::review_log::{
+    CompletionReasserted, ReviewEvent, ReviewEventKind, TrackCompleted,
+};
 use common::domain::review_records::{
     AttemptCause, AttemptFailed, BlockerRecord, ExistingChecksRecorded, FindingDecided,
     FindingRecord, FindingStatus, JobBlocked, PairRef, PlanApproved, RunKind, RunLeased,
@@ -130,6 +132,9 @@ pub struct Finding {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReviewView {
     jobs: Vec<Job>,
+    /// Each track's latest job id: its most recent completion, new or
+    /// reasserted.
+    latest: BTreeMap<String, String>,
     runs: Vec<Run>,
     findings: Vec<Finding>,
     approvals: Vec<PlanApproved>,
@@ -149,6 +154,7 @@ impl ReviewView {
     fn apply(&mut self, kind: &ReviewEventKind) {
         match kind {
             ReviewEventKind::TrackCompleted(c) => self.add_job(c),
+            ReviewEventKind::CompletionReasserted(r) => self.reassert(r),
             ReviewEventKind::RunLeased(l) => self.add_run(l),
             ReviewEventKind::AttemptFailed(f) => self.fail_attempt(f),
             ReviewEventKind::JobBlocked(b) => self.block(b),
@@ -166,9 +172,19 @@ impl ReviewView {
         }
     }
 
+    fn reassert(&mut self, r: &CompletionReasserted) {
+        if self
+            .job(&r.job_id)
+            .is_some_and(|j| j.completion.track_id == r.track_id)
+        {
+            self.latest.insert(r.track_id.clone(), r.job_id.clone());
+        }
+    }
+
     fn add_job(&mut self, c: &TrackCompleted) {
         let id = c.job_key().job_id();
         if self.job(&id).is_none() {
+            self.latest.insert(c.track_id.clone(), id.clone());
             self.jobs.push(Job {
                 id,
                 completion: c.clone(),
@@ -308,12 +324,10 @@ impl ReviewView {
         self.jobs.iter().find(|j| j.id == job_id)
     }
 
-    /// The latest job of `track_id`; earlier ones are superseded.
+    /// The job of `track_id`'s most recent completion; others are
+    /// superseded.
     pub fn latest_job(&self, track_id: &str) -> Option<&Job> {
-        self.jobs
-            .iter()
-            .rev()
-            .find(|j| j.completion.track_id == track_id)
+        self.job(self.latest.get(track_id)?)
     }
 
     /// Every run, in lease order.

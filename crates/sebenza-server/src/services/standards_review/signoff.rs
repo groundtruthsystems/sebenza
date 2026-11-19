@@ -371,6 +371,20 @@ mod tests {
     }
 
     #[test]
+    fn ts39_a_branch_reset_to_the_reviewed_head_is_fresh_after_re_completion() {
+        let e = passing("signoff-reset");
+        let reviewed = e.r.head();
+        e.r.commit_on_feat("src/b.rs", "fn b() {}\n");
+        e.complete_unapproved();
+        git(&e.r.worktree, &["reset", "-q", "--hard", &reviewed]);
+        e.completion
+            .complete(&target(&e.r), TRACK, CredentialClass::Control)
+            .unwrap();
+        let done = sign(&e).unwrap();
+        assert_eq!(done.record.head_sha, reviewed);
+    }
+
+    #[test]
     fn ts40_a_ref_moved_between_validation_and_commit_aborts_the_swap() {
         let e = passing("signoff-ts40");
         let worktree = e.r.worktree.clone();
