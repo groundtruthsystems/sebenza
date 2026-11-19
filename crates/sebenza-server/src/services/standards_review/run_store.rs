@@ -700,7 +700,7 @@ fn verdict_after_decision(
 }
 
 /// Every finding status of `job`'s track, with `moved` applied.
-fn track_statuses(
+pub(super) fn track_statuses(
     view: &ReviewView,
     job: &Job,
     moved: Option<(&str, FindingStatus)>,

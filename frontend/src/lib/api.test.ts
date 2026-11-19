@@ -815,6 +815,30 @@ describe("inbox priority, comments and requests", () => {
     expect(call.auth).toBe("Bearer op_1");
   });
 
+  it("signs off a track at the hub with the operator token", async () => {
+    const { clearOperatorToken } = await import("./operator");
+    clearOperatorToken();
+    const seen = recordFetch({
+      token: "op_1",
+      expiresAt: 4_000_000_000,
+      ok: true,
+      appended: true,
+      trackId: "t_1",
+      jobId: "job_1",
+      headSha: "h",
+      baseSha: "b",
+      findingIds: ["f_1"],
+    });
+    window.__SEBENZA_CONTROL_TOKEN__ = "control";
+    const api = await loadApiAt("/myproject/");
+    const got = await api.signOffTrack("t_1");
+    expect(got.headSha).toBe("h");
+    const call = seen[seen.length - 1];
+    expect(call.url).toMatch(/^[^?]*\/api\/tracks\/t_1\/signoff$/);
+    expect(call.url).not.toContain("/myproject/");
+    expect(call.auth).toBe("Bearer op_1");
+  });
+
   it("reads a track's review status and findings under the project prefix", async () => {
     const job = {
       trackId: "t_1",

@@ -299,6 +299,22 @@ pub struct FindingDecided {
     pub verdict: VerdictRecord,
 }
 
+/// The operator signed off a track's latest job (FR-22): the audit record of
+/// the compare-and-swap gate. Ids, SHAs and the credential class only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedOff {
+    pub track_id: String,
+    pub job_id: String,
+    /// The verdict's head SHA, still the track ref's at sign-off.
+    pub head_sha: String,
+    /// The verdict's merge-base, still the target's at sign-off.
+    pub base_sha: String,
+    /// The credential class that signed off (`operator_session`, `operator_cli`).
+    pub credential: String,
+    /// Every finding of the track at sign-off, none of them unresolved.
+    pub finding_ids: Vec<String>,
+}
+
 /// The existing sebenza-review check results for a job: a required verdict
 /// input (FR-18).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

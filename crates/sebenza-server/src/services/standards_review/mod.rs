@@ -27,6 +27,7 @@
 //! - [`measure`]: the in-tree method-length measurers (FR-15, D-03).
 //! - [`second_run`]: the second run's plan, its reconciliation and the
 //!   notes for absent categories (FR-16, FR-26).
+//! - [`signoff`]: the operator's compare-and-swap sign-off gate (FR-22).
 //! - [`views`]: the JSON the run API and review routes return.
 
 pub mod boundary;
@@ -50,6 +51,7 @@ pub mod run_token;
 pub mod scope;
 pub mod scope_proof;
 pub mod second_run;
+pub mod signoff;
 pub mod standards_docs;
 pub mod standards_rev;
 pub mod submission;

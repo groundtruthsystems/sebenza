@@ -27,7 +27,7 @@ use crate::services::tracks_projection::Projected;
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
-use common::domain::review_records::{ExistingChecksRecorded, PlanApproved};
+use common::domain::review_records::{ExistingChecksRecorded, PlanApproved, SignedOff};
 use common::domain::solution::CredentialClass;
 use serde::Deserialize;
 
@@ -343,4 +343,120 @@ fn audit_approval(target: &CompletionTarget, a: &PlanApproved, class: Credential
         tasks = a.boundaries.len(),
         "track audit"
     );
+}
+
+/// `POST /api/tracks/{id}/signoff` — operator token only.
+pub async fn sign_off_track(
+    State(_state): State<AppState>,
+    Path(_track_id): Path<String>,
+    _headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    Err(ApiError::new(501, "not implemented".to_string()))
+}
+
+/// The audit line of a sign-off.
+pub(crate) fn audit_signoff(_project: &str, _s: &SignedOff) {}
+
+#[cfg(test)]
+mod tests {
+    /// How a route of this track is reached from `sebenza-cli`.
+    enum Cli {
+        Command(&'static str),
+        /// Agent-only routes: no operator or agent uses them by hand.
+        Exempt(&'static str),
+    }
+
+    const RUN_TOKEN_ONLY: &str =
+        "run-token only: the sandboxed review agent calls it with its single-use token";
+
+    /// (daemon route, contract key, contract path, CLI) for every route this
+    /// track added (FR-27, TS-54).
+    const ROUTES: [(&str, &str, &str, Cli); 9] = [
+        (
+            "/api/tracks/{id}/complete",
+            "completeTrack",
+            "/api/tracks/:id/complete",
+            Cli::Command("track complete"),
+        ),
+        (
+            "/api/tracks/{id}/plan/approve",
+            "approveTrackPlan",
+            "/api/tracks/:id/plan/approve",
+            Cli::Command("track approve-plan"),
+        ),
+        (
+            "/api/review-runs/claim",
+            "claimReviewRun",
+            "/api/review-runs/claim",
+            Cli::Exempt(RUN_TOKEN_ONLY),
+        ),
+        (
+            "/api/review-runs/{id}/submit",
+            "submitReviewRun",
+            "/api/review-runs/:id/submit",
+            Cli::Exempt(RUN_TOKEN_ONLY),
+        ),
+        (
+            "/{prefix}/api/review/tracks/{id}",
+            "fetchTrackReviewStatus",
+            "/api/review/tracks/:id",
+            Cli::Command("review status"),
+        ),
+        (
+            "/{prefix}/api/review/tracks/{id}/findings",
+            "fetchTrackReviewFindings",
+            "/api/review/tracks/:id/findings",
+            Cli::Command("review findings"),
+        ),
+        (
+            "/api/findings/{id}/decision",
+            "decideFinding",
+            "/api/findings/:id/decision",
+            Cli::Command("review decide"),
+        ),
+        (
+            "/api/review/tracks/{id}/existing-checks",
+            "recordExistingChecks",
+            "/api/review/tracks/:id/existing-checks",
+            Cli::Command("review checks"),
+        ),
+        (
+            "/api/tracks/{id}/signoff",
+            "signOffTrack",
+            "/api/tracks/:id/signoff",
+            Cli::Command("track signoff"),
+        ),
+    ];
+
+    const ROUTER: &str = include_str!("server.rs");
+    const CONTRACT: &str = include_str!("../../../frontend/src/lib/api-contract/contract.ts");
+    const API: &str = include_str!("../../../frontend/src/lib/api.ts");
+    const CLI: [&str; 2] = [
+        include_str!("../../sebenza-cli/src/track.rs"),
+        include_str!("../../sebenza-cli/src/review.rs"),
+    ];
+
+    #[test]
+    fn ts54_every_route_of_the_track_is_in_the_contract_and_the_cli() {
+        for (route, key, path, cli) in &ROUTES {
+            assert!(ROUTER.contains(&format!("\"{route}\"")), "router: {route}");
+            assert!(
+                CONTRACT.contains(&format!("{key}: \"{path}\"")),
+                "apiPaths: {key}"
+            );
+            assert!(
+                CONTRACT.contains(&format!("{key}: {{")),
+                "apiContract: {key}"
+            );
+            assert!(API.contains(&format!(".{key}({{")), "api.ts: {key}");
+            match cli {
+                Cli::Command(cmd) => assert!(
+                    CLI.iter()
+                        .any(|src| src.contains(&format!("sebenza-cli {cmd} "))),
+                    "sebenza-cli {cmd}"
+                ),
+                Cli::Exempt(why) => assert!(!why.is_empty()),
+            }
+        }
+    }
 }

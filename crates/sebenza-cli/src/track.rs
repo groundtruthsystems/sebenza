@@ -20,6 +20,9 @@ enum TrackCommand {
     ApprovePlan {
         track_id: String,
     },
+    Signoff {
+        track_id: String,
+    },
 }
 
 fn usage() -> String {
@@ -48,6 +51,7 @@ fn parse(args: &[String]) -> Result<Option<TrackCommand>> {
         "--help" | "-h" => Ok(None),
         "complete" => parse_complete(&args[1..]).map(Some),
         "approve-plan" => parse_approve_plan(&args[1..]).map(Some),
+        "signoff" => Err(anyhow!("todo: phase-6-task-2")),
         other => Err(anyhow!("Unknown track subcommand: {other}")),
     }
 }
@@ -132,6 +136,7 @@ async fn run_inner(cmd: TrackCommand, port: u16, cwd: &str) -> Result<()> {
             worktree_id,
         } => complete(&track_id, worktree_id, port, cwd).await,
         TrackCommand::ApprovePlan { track_id } => approve_plan(&track_id, port).await,
+        TrackCommand::Signoff { .. } => Err(anyhow!("todo: phase-6-task-2")),
     }
 }
 
@@ -139,6 +144,10 @@ async fn approve_plan(track_id: &str, port: u16) -> Result<()> {
     let approved = Http::new(port).approve_track_plan(track_id).await?;
     println!("{}", approval_summary(track_id, &approved));
     Ok(())
+}
+
+fn signoff_summary(_track_id: &str, _v: &serde_json::Value) -> String {
+    String::new()
 }
 
 fn approval_summary(track_id: &str, approved: &serde_json::Value) -> String {
@@ -218,6 +227,36 @@ mod tests {
         assert!(parse(&a(&["approve-plan"])).is_err());
         assert!(parse(&a(&["approve-plan", "a", "b"])).is_err());
         assert!(parse(&a(&["approve-plan", "--force"])).is_err());
+    }
+
+    #[test]
+    fn signoff_takes_exactly_one_track() {
+        assert_eq!(
+            parse(&a(&["signoff", "t_20261118"])).unwrap(),
+            Some(TrackCommand::Signoff {
+                track_id: "t_20261118".into()
+            })
+        );
+        assert!(parse(&a(&["signoff"])).is_err());
+        assert!(parse(&a(&["signoff", "a", "b"])).is_err());
+        assert!(parse(&a(&["signoff", "--force"])).is_err());
+    }
+
+    #[test]
+    fn the_signoff_summary_names_the_signed_shas() {
+        let v = serde_json::json!({
+            "appended": true, "headSha": "abc", "baseSha": "def", "findingIds": ["f_1", "f_2"]
+        });
+        let s = signoff_summary("t_1", &v);
+        assert!(
+            s.contains("t_1")
+                && s.contains("abc")
+                && s.contains("def")
+                && s.contains("2 finding(s)"),
+            "{s}"
+        );
+        let again = serde_json::json!({"appended": false, "headSha": "abc", "baseSha": "def", "findingIds": []});
+        assert!(signoff_summary("t_1", &again).contains("already signed off"));
     }
 
     #[test]

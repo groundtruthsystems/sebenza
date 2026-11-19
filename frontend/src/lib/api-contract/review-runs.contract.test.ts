@@ -6,6 +6,7 @@ import {
   RecordExistingChecksRequestSchema,
   ReviewFindingSchema,
   ReviewJobStatusSchema,
+  SignOffTrackResponseSchema,
   SubmitReviewRunRequestSchema,
   TrackReviewStatusSchema,
 } from "./schemas";
@@ -130,5 +131,26 @@ describe("review runs contract", () => {
         verdict: "passing",
       }).success,
     ).toBe(false);
+  });
+
+  it("lists the operator sign-off gate and its refusals", () => {
+    expect(apiPaths.signOffTrack).toBe("/api/tracks/:id/signoff");
+    expect(apiContract.signOffTrack.method).toBe("POST");
+    for (const status of [401, 403, 404, 409, 500] as const) {
+      expect(apiContract.signOffTrack.responses[status]).toBeDefined();
+    }
+    const got = SignOffTrackResponseSchema.parse({
+      ok: true,
+      appended: true,
+      trackId: "t_1",
+      jobId: "job_1",
+      headSha: "h",
+      baseSha: "b",
+      findingIds: [],
+    });
+    expect(got.baseSha).toBe("b");
+    expect(
+      ReviewJobStatusSchema.shape.signedOff.safeParse(true).success,
+    ).toBe(true);
   });
 });

@@ -302,14 +302,14 @@
     {
       "id": "phase-6",
       "name": "Compare-and-swap sign-off gate",
-      "status": "backlog",
+      "status": "doing",
       "blocked_reason": null,
       "tasks": [
         {
           "id": "phase-6-task-1",
           "name": "Write tests for the sign-off gate",
           "description": "Add failing tests for refusal without a verdict, stale refs, refs moved mid-commit, audit records and contract parity.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-6-task-2",

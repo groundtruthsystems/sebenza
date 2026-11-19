@@ -71,6 +71,13 @@ class ReviewStandardsStage(unittest.TestCase):
         ):
             self.assertIn(phrase, self.text)
 
+    def test_sign_off_goes_through_the_daemons_gate(self):
+        self.assertIn("sebenza-cli track signoff <track_id>", self.text)
+        self.assertRegex(self.text, r"(?i)operator token")
+        for code in ("no_verdict", "verdict_not_passing", "stale_verdict"):
+            self.assertIn(code, self.text)
+        self.assertRegex(self.text, r"(?i)never sign off (?:on the operator's behalf|yourself)")
+
     def test_the_stage_reports_existing_checks_through_agentctl(self):
         self.assertRegex(self.text, r"(?m)^## .*Standards stage")
         self.assertIn("sebenza-agentctl review-checks --track <track_id>", self.text)

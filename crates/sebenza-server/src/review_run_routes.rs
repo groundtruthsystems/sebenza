@@ -407,6 +407,42 @@ mod tests {
     }
 
     #[test]
+    fn ts52_decision_and_signoff_records_carry_the_same_audit_fields() {
+        let decided = serde_json::to_value(FindingDecided {
+            finding_id: "f_1".into(),
+            track_id: "t_1".into(),
+            job_id: "job_1".into(),
+            head_sha: "a".repeat(40),
+            base_sha: "b".repeat(40),
+            from: FindingStatus::NeedsOperatorDecision,
+            to: FindingStatus::Open,
+            credential: "operator_cli".into(),
+            verdict: VerdictRecord {
+                passing: false,
+                reasons: vec!["open-findings".into()],
+            },
+        })
+        .unwrap();
+        let signed = serde_json::to_value(common::domain::review_records::SignedOff {
+            track_id: "t_1".into(),
+            job_id: "job_1".into(),
+            head_sha: "a".repeat(40),
+            base_sha: "b".repeat(40),
+            credential: "operator_cli".into(),
+            finding_ids: vec!["f_1".into()],
+        })
+        .unwrap();
+        for record in [&decided, &signed] {
+            for key in ["track_id", "job_id", "head_sha", "base_sha", "credential"] {
+                assert!(record.get(key).is_some(), "{key}: {record}");
+            }
+            for free_text in ["description", "reason", "message", "note"] {
+                assert!(record.get(free_text).is_none(), "{free_text}: {record}");
+            }
+        }
+    }
+
+    #[test]
     fn finding_ids_are_checked_before_any_lookup() {
         assert!(valid_finding_id("f_01ABC"));
         for bad in ["", "x_1", "f_../x", &format!("f_{}", "a".repeat(80))] {

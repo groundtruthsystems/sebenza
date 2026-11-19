@@ -7,7 +7,8 @@
 //! submission only ends the run whose lease id it names, once. Plan
 //! approvals are kept per track; the latest one is the boundary in force.
 //! An operator decision moves a finding only from the status it names and
-//! only as the transition table allows the operator.
+//! only as the transition table allows the operator. A sign-off is kept
+//! once per job, for a known job.
 //!
 //! [`JobKey`]: common::adapters::review_log::JobKey
 
@@ -16,7 +17,7 @@ use common::adapters::review_log::{ReviewEvent, ReviewEventKind, TrackCompleted}
 use common::domain::review_records::{
     AttemptCause, AttemptFailed, BlockerRecord, ExistingChecksRecorded, FindingDecided,
     FindingRecord, FindingStatus, JobBlocked, PairRef, PlanApproved, RunKind, RunLeased,
-    RunSubmitted, TransitionRecord, VerdictRecord,
+    RunSubmitted, SignedOff, TransitionRecord, VerdictRecord,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -132,6 +133,7 @@ pub struct ReviewView {
     runs: Vec<Run>,
     findings: Vec<Finding>,
     approvals: Vec<PlanApproved>,
+    signoffs: Vec<SignedOff>,
 }
 
 impl ReviewView {
@@ -154,6 +156,13 @@ impl ReviewView {
             ReviewEventKind::ExistingChecksRecorded(c) => self.record_checks(c),
             ReviewEventKind::PlanApproved(a) => self.approvals.push(a.clone()),
             ReviewEventKind::FindingDecided(d) => self.decide(d),
+            ReviewEventKind::SignedOff(s) => self.sign_off(s),
+        }
+    }
+
+    fn sign_off(&mut self, s: &SignedOff) {
+        if self.job(&s.job_id).is_some() && self.signoff(&s.job_id).is_none() {
+            self.signoffs.push(s.clone());
         }
     }
 
@@ -367,6 +376,11 @@ impl ReviewView {
         self.findings
             .iter()
             .find(|f| f.record.finding_id == finding_id)
+    }
+
+    /// The sign-off of `job_id`, if the operator signed it off.
+    pub fn signoff(&self, job_id: &str) -> Option<&SignedOff> {
+        self.signoffs.iter().find(|s| s.job_id == job_id)
     }
 
     /// The latest plan approval of `track_id`: the boundary in force.

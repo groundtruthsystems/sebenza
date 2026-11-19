@@ -364,6 +364,10 @@ pub fn build_router(state: AppState) -> Router {
             post(crate::track_routes::approve_track_plan),
         )
         .route(
+            "/api/tracks/{id}/signoff",
+            post(crate::track_routes::sign_off_track),
+        )
+        .route(
             "/api/review/tracks/{id}/existing-checks",
             post(crate::track_routes::record_existing_checks),
         )
