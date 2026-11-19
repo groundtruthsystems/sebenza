@@ -12,13 +12,14 @@
           "id": "phase-1-task-1",
           "name": "Write tests for the review log and completion",
           "description": "Add failing tests for fsynced append, torn-tail recovery, idempotent completion, projection CAS and the reconciler.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "797b7bd"
         },
         {
           "id": "phase-1-task-2",
           "name": "Implement the review log and track_completion service",
           "description": "Add the per-project append-only review log and the daemon completion transition with tracks.json projection.",
-          "status": "backlog"
+          "status": "doing"
         },
         {
           "id": "phase-1-task-3",
