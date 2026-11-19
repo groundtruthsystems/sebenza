@@ -84,7 +84,7 @@
           "id": "phase-2-task-3",
           "name": "Execute test scenarios TS-07..TS-57",
           "description": "Run and record evidence for every scenario this phase delivers.",
-          "status": "backlog",
+          "status": "doing",
           "test_scenarios": [
             "TS-07",
             "TS-09",
