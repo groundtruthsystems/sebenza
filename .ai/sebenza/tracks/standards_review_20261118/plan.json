@@ -238,7 +238,8 @@
           "id": "phase-5-task-1",
           "name": "Write tests for measurers, second run and the standards stage",
           "description": "Add failing tests for method-length measurers, second-run scheduling and agreement, notes for absent rules and sandbox egress.",
-          "status": "doing"
+          "status": "done",
+          "commit_sha": "68f6b64"
         },
         {
           "id": "phase-5-task-2",
