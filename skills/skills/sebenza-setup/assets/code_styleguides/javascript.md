@@ -21,5 +21,5 @@ Builds on [general.md](./general.md).
 - No unused exports or dead code.
 
 ## Docs & tests
-- JSDoc on exported functions where types aren't otherwise obvious.
+- JSDoc only on the exported API of a published package, and only for what the types cannot show.
 - Tests with **Jest** or **Vitest**; test success and failure paths; mock network/IO.

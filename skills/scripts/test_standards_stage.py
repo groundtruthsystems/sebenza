@@ -236,6 +236,27 @@ class ProposeRules(unittest.TestCase):
         self.assertIn("--- /dev/null", out.stdout)
         self.assertFalse(os.path.exists(os.path.join(self.ws, "code_styleguides", "general.md")))
 
+    def test_lines_that_mandate_comments_are_reported_outside_the_diff(self):
+        self.write("index.md", "- [General](./code_styleguides/general.md)\n"
+                               "- [Workflow](./workflow.md)\n")
+        self.write("code_styleguides/general.md", read(TEMPLATE_GUIDE))
+        self.write("code_styleguides/python.md",
+                   "# Python\n\n- Docstrings (PEP 257) on public modules, classes, and functions.\n")
+        self.write("workflow.md", "- [ ] All public functions/methods are documented\n")
+        out = self.run_script()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertEqual(out.stdout, "")
+        self.assertIn(".ai/sebenza/code_styleguides/python.md:3:", out.stderr)
+        self.assertIn(".ai/sebenza/workflow.md:1:", out.stderr)
+
+    def test_the_templates_mandate_no_comments(self):
+        assets = os.path.join(SETUP, "assets")
+        self.write("index.md", "- [Workflow](./workflow.md)\n")
+        shutil.copytree(os.path.join(assets, "code_styleguides"),
+                        os.path.join(self.ws, "code_styleguides"), dirs_exist_ok=True)
+        shutil.copy(os.path.join(assets, "workflow.md"), os.path.join(self.ws, "workflow.md"))
+        self.assertNotIn("discourage", self.run_script().stderr)
+
     def test_no_workspace_is_an_error(self):
         shutil.rmtree(os.path.join(self.root, ".ai"))
         out = self.run_script()

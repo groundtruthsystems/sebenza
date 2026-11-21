@@ -4,6 +4,10 @@ This document outlines general coding principles that apply across all languages
 
 ## Readability
 - Code should be easy to read and understand by humans.
+- Let names and structure carry the meaning. A well-named function, variable or type replaces the
+  comment that would have explained it.
+- When a block needs a comment to say what it does, extract it into a function named for that.
+- Keep comments for why: a reason, a constraint, or a surprising choice the code cannot show.
 - Avoid overly clever or obscure constructs.
 
 ## Consistency

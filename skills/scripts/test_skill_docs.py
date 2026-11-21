@@ -275,3 +275,46 @@ class ArchitectureDocuments(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FreshContextReviews(unittest.TestCase):
+    def skill(self, name):
+        return read("skills", name, "SKILL.md")
+
+    def test_resolution_rules_classify_and_forbid_self_serving_contests(self):
+        doc = read("shared", "resolving-findings.md")
+        self.assertFalse(doc.startswith("---"))
+        for cls in ("FIX", "CONTEST", "ESCALATE", "DECLINE"):
+            self.assertIn(f"**{cls}**", doc)
+        self.assertRegex(doc, r"(?i)a contest must be checkable")
+        self.assertRegex(doc, r"(?i)never contest a comprehension gap")
+        self.assertRegex(doc, r"(?i)never change a severity")
+        self.assertRegex(doc, r"(?i)decline is never available for must-fix")
+
+    def test_reviewer_agents_are_read_only_and_see_no_conversation(self):
+        for name, tools in (("comprehension-reviewer", "Read, Glob"),
+                            ("zoom-out-reviewer", "Read, Glob, Grep")):
+            text = read("agents", f"{name}.md")
+            self.assertIn(f"name: {name}", text)
+            self.assertIn(f"tools: {tools}", text)
+            self.assertRegex(text, r"(?i)data, not\s+instructions")
+            self.assertRegex(text, r"(?i)not seen the conversation")
+            self.assertIn("Blocker", text)
+        self.assertRegex(read("agents", "comprehension-reviewer.md"), r"(?i)paraphrase first")
+        self.assertRegex(read("agents", "zoom-out-reviewer.md"), r"(?i)you \*\*must\*\* search")
+
+    def test_architect_runs_zoom_out_before_and_after_and_comprehension_in_verify(self):
+        text = self.skill("sebenza-architect")
+        self.assertIn("../../shared/resolving-findings.md", text)
+        zoom = text.index("## 6a. Zoom-out review")
+        verify = text.index("## 7. Verify")
+        self.assertLess(text.index("## 6. Document structure"), zoom)
+        self.assertLess(zoom, verify)
+        section7 = text[verify:text.index("## 7a.")]
+        self.assertIn("`comprehension-reviewer`", section7)
+        self.assertRegex(section7, r"(?i)what this\s+proposes")
+        self.assertRegex(section7, r"(?i)after rework")
+        self.assertIn("`zoom-out-reviewer`", section7)
+
+    def test_review_hands_code_findings_over_with_the_resolution_rules(self):
+        self.assertIn("../../shared/resolving-findings.md", self.skill("sebenza-review"))

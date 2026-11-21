@@ -97,15 +97,18 @@ Files added under `skills/` after the move:
 
 ```text
 MIGRATION.md
+agents/comprehension-reviewer.md
 agents/project-reviewer.md
 agents/solution-coordinator.md
 agents/solution-reviewer.md
 agents/solutions-architect.md
 agents/system-analyst.md
+agents/zoom-out-reviewer.md
 scripts/test_factory.py
 scripts/test_migration.py
 scripts/test_standards_stage.py
 scripts/test_writing_guidance.py
+shared/resolving-findings.md
 skills/sebenza-review/standards-stage.md
 skills/sebenza-setup/scripts/propose_rules.py
 ```
@@ -116,6 +119,7 @@ Newest first. Each row is a change made here after the move.
 
 | Date | Track / task | Change |
 |---|---|---|
+| 2026-11-20 | no track (EGM review practices) | Added `agents/zoom-out-reviewer.md`, `agents/comprehension-reviewer.md` and `shared/resolving-findings.md`, adapted from the Elephant-Goldfish Model (google/elephant-goldfish-model, Apache-2.0). `sebenza-architect` gains §6a (zoom-out before verification), runs the comprehension reviewer and a second zoom-out in §7, and classifies every finding as FIX / CONTEST / ESCALATE / DECLINE in §7 and §7a; `sebenza-review` §5a hands code findings over with the same rules (skill 1.4). Plugin 1.2.0. Tests: `test_skill_docs.py` `FreshContextReviews`. The setup templates stop asking for comments: `workflow.md`'s quality gate and checklist, and the Rust, Python and JavaScript guides, keep doc comments for a published package's public contract only; `general.md`'s Readability prefers names and extracted functions; `propose_rules.py` lists lines in an existing project's documents that still mandate comments, on stderr. Tests: `test_standards_stage.py` `ProposeRules`. |
 | 2026-11-19 | standards_review_20261118 / phase-6-task-2 | `sebenza-review` §5a gains step 3: sign-off is the operator's `sebenza-cli track signoff <track_id>`, the daemon's compare-and-swap gate, which refuses `no_verdict`, `verdict_not_passing` or `stale_verdict`; the skill never signs off. §6 PASS points at it. Tests: `scripts/test_standards_stage.py`. |
 | 2026-11-19 | standards_review_20261118 / phase-5-task-4 | `sebenza-review` gains §4a, the standards stage: it reports the four existing checks with `sebenza-agentctl review-checks`, reads `sebenza-cli review status` and `review findings`, reports each finding resolved or unresolved, reports `not-run` when the daemon is unreachable and never sets the verdict. Added `skills/sebenza-review/standards-stage.md`, the sandboxed run's instructions, which the server embeds as its agent prompt. `sebenza-setup`'s template `general.md` gains the three default review rules (restating comments, excessive comments, long methods at `max_lines=20`), the template `index.md` lists it, and §1.3 with `scripts/propose_rules.py` proposes the rules to existing projects as a diff and writes nothing. Tests: `scripts/test_standards_stage.py`. |
 | 2026-11-19 | standards_review_20261118 / phase-4-task-3 | `sebenza-implement` gains "Writing code" (comment only for non-obvious intent, short methods, new and changed code only, thresholds deferred to the project's `.ai/sebenza/` documents) and "Commits and the edit boundary" (`Sebenza-Track`/`Sebenza-Task` trailers, the task's `files` boundary), and completes a track with `sebenza-agentctl complete`. `sebenza-plan` gives tasks a `files` boundary and gains §6a, plan approval followed by `sebenza-cli track approve-plan`. `shared/schemas/plan.schema.json` gains the optional task `files`. Tests: `scripts/test_writing_guidance.py`. |

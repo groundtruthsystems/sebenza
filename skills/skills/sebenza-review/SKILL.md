@@ -2,7 +2,7 @@
 name: sebenza-review
 description: Reviews a completed Sebenza track or phase against its spec.md, design.md, architecture documents, test-plan.md, and acceptance criteria - checking requirement coverage, test-plan scenario coverage, tests/coverage, and (for features) architecture conformance via the specialist architect subagents - then reports a verdict. Use when the user wants to review, verify, or quality-check finished Sebenza work before sign-off.
 metadata:
-  version: "1.3"
+  version: "1.4"
 ---
 
 # Sebenza Review Skill
@@ -159,7 +159,10 @@ project reviewer, on a read-only snapshot of this worktree. At most **3 rounds**
    - Exit `0`, verdict `changes`: the helper has already sent the tasks the findings name back to
      `doing` in `plan.json` (with `review_round` and `review_findings`) and resolved findings the
      reviewer dropped. Findings it could not match to a task are listed under `unmatched`; add them
-     to the report. Hand the reopened tasks to `sebenza-implement`, then come back to step 1.
+     to the report. Hand the reopened tasks to `sebenza-implement`, telling it to classify each
+     finding per [`resolving-findings.md`](../../shared/resolving-findings.md) before changing code —
+     a finding the implementer contests needs evidence in the worktree, not a reworded explanation.
+     Then come back to step 1.
    - Exit `0`, verdict `agreed`: go to step 2.
    - Exit `8` (round limit): **stop** — no fourth round. Go to step 2; the open findings travel with it.
    - Exit `9` (not independent) or `10` (voided): as in `sebenza-architect` §7a.

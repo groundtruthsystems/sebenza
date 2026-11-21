@@ -4,7 +4,8 @@ The standards review enforces only rules tagged in the documents `.ai/sebenza/in
 lists. This compares the project with this skill's template guide and prints, for the
 operator to approve, the rules for each category the project has no rule for, plus the
 index line that makes the guide a standards document. It writes nothing; apply the diff
-with `git apply` only after the operator approves it.
+with `git apply` only after the operator approves it. Lines in the project's documents that
+still ask for comments the default rules discourage are listed on stderr, never in the diff.
 
 usage: propose_rules.py [--root <project root>]
 exit:  0 diff printed, or nothing to propose; 2 no `.ai/sebenza/` workspace
@@ -27,6 +28,14 @@ RULE_TAG = re.compile(
     r"^\s*(?:[-*+] +|\d+[.)] +)?\[rule:([a-z0-9][a-z0-9-]{0,63}) category=([a-z0-9][a-z0-9-]{0,63})"
 )
 LINK = re.compile(r"\]\(([^)\s#]+)")
+COMMENT_MANDATE = re.compile(
+    r"(?i)all public [\w/]+ (are|must be) documented"
+    r"|doc comments on all public"
+    r"|every public .* carries a doc comment"
+    r"|docstrings( \(pep 257\))? on public"
+    r"|jsdoc on exported"
+    r"|appropriate comments"
+)
 
 
 def read(path):
@@ -99,6 +108,27 @@ def proposed_index(index_md):
     return "".join(lines[:at] + [INDEX_LINE] + lines[at:])
 
 
+def comment_mandates(root, index_md):
+    guides = os.path.join(root, ".ai", "sebenza", "code_styleguides")
+    docs = set(listed_docs(root, index_md))
+    if os.path.isdir(guides):
+        docs |= {os.path.join(guides, n) for n in os.listdir(guides) if n.endswith(".md")}
+    found = []
+    for doc in sorted(docs):
+        for number, line in enumerate((read(doc) or "").splitlines(), 1):
+            if COMMENT_MANDATE.search(line):
+                found.append(f"{os.path.relpath(doc, root)}:{number}: {line.strip()}")
+    return found
+
+
+def report_comment_mandates(root):
+    found = comment_mandates(root, read(os.path.join(root, INDEX)))
+    if found:
+        print("These lines ask for comments the default rules discourage; "
+              "propose rewording them:", file=sys.stderr)
+        print("\n".join(f"  {line}" for line in found), file=sys.stderr)
+
+
 def diff(path, old, new):
     old_lines = (old or "").splitlines(keepends=True)
     new_lines = new.splitlines(keepends=True)
@@ -137,6 +167,7 @@ def main(argv=None):
     if not out:
         print("The default review rules are already adopted; nothing to propose.", file=sys.stderr)
     sys.stdout.write(out)
+    report_comment_mandates(root)
     return 0
 
 
