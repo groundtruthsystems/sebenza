@@ -56,7 +56,9 @@ template guide (§2.4). An existing project gets them only as a proposal:
 
 1. Run `python3 scripts/propose_rules.py`. It prints, as a unified diff, the template rules for
    each category the project has no rule for, plus the `index.md` line that lists the guide. It
-   writes nothing. Empty output means the rules are already adopted.
+   writes nothing. Empty output means the rules are already adopted. It also lists, separately,
+   lines in the project's documents that still ask for comments (e.g. "all public functions are
+   documented"); propose rewording those to the user too, as their own change.
 2. Show the diff to the user and ask whether to apply it. Never apply it without an explicit yes.
 3. On a yes, apply exactly that diff with `git apply` from the project root, then commit it as
    `sebenza(setup): Adopt the default review rules`. On a no, change nothing.

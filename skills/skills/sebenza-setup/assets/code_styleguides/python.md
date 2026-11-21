@@ -29,5 +29,6 @@ Builds on [general.md](./general.md).
 - Raise specific exceptions; never use a bare `except:`.
 
 ## Docs & tests
-- Docstrings (PEP 257) on public modules, classes, and functions.
+- Docstrings (PEP 257) only on the public API of a published package, stating the contract the
+  signature and type hints cannot show. Never restate what the code does.
 - Tests with **pytest**, run as `uv run pytest`; use fixtures, and mock external dependencies.

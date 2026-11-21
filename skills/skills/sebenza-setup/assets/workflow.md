@@ -282,8 +282,8 @@ Before marking any task complete, verify:
 -   [ ] Code coverage meets requirements (>80%)
 -   [ ] Code follows project's code style guidelines (as defined in
     `code_styleguides/`)
--   [ ] All public functions/methods are documented (e.g., docstrings, JSDoc,
-    GoDoc)
+-   [ ] Names and structure make the code clear; comments explain only why,
+    never what
 -   [ ] Type safety is enforced (e.g., type hints, TypeScript types, Go types)
 -   [ ] No linting or static analysis errors (using the project's configured
     tools)
@@ -365,7 +365,7 @@ Before requesting review:
     -   Follows style guide
     -   DRY principle applied
     -   Clear variable/function names
-    -   Appropriate comments
+    -   No comments that restate the code
 
 3.  **Testing**
 
