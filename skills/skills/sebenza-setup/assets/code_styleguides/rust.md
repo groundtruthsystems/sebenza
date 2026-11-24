@@ -225,12 +225,12 @@ where we commit to a choice the standard leaves open.
 - Minimize `unsafe`; every `unsafe` block carries a `// SAFETY:` comment justifying its invariants.
 
 ## Docs & tests
-- `///` doc comments on all public items; `//!` for module/crate overviews. Document panics, errors,
-  and safety in the standard `# Panics` / `# Errors` / `# Safety` sections.
-- Every public repository method carries a doc comment, and it states the transaction boundary
-  (does this method open one, or must the caller supply one?) plus any error case a caller has to
+- `///` and `//!` doc comments only on the public API of a published crate, stating the contract a
+  caller relies on in the standard `# Panics` / `# Errors` / `# Safety` sections. Never restate what
+  the code does. Runnable examples in them double as **doctests**.
+- A repository method whose signature cannot show its transaction boundary (does it open one, or
+  must the caller supply one?) states it in a doc comment, with any error case a caller has to
   branch on.
-- Write runnable examples in doc comments — they double as **doctests**.
 - Unit tests in a `#[cfg(test)] mod tests` block beside the code; integration tests in `tests/`.
   Run with `cargo test`. For services with a database, use **`testcontainers`** for MySQL/Redis and
   test transaction **rollback**, not just the happy path.

@@ -1,8 +1,8 @@
 ---
 name: sebenza-architect
-description: Designs a feature - defines use cases and use-case/activity/class/component diagrams (Mermaid), then defines AND verifies the business, application, technical, data, and security architecture via specialist architect subagents, and finally turns the use cases and that architecture into a detailed test plan. Produces an overview requirements document (design.md), one document per architecture domain (business-architecture.md, application-architecture.md, data-architecture.md, security-architecture.md, technical-architecture.md) and a test-plan.md before planning. Use for the design stage, to produce diagrams, architecture, or a test plan, or when the user says "design a feature". Mandatory first step for features.
+description: Designs a feature - defines use cases and use-case/activity/class/component diagrams (Mermaid), then defines AND verifies the business, application, technical, data, and security architecture via specialist architect subagents, and finally turns the use cases and that architecture into a detailed test plan. Fresh-context reviewers challenge the design's size (zoom-out) and check a newcomer can follow it (comprehension). Produces an overview requirements document (design.md), one document per architecture domain (business-architecture.md, application-architecture.md, data-architecture.md, security-architecture.md, technical-architecture.md) and a test-plan.md before planning. Use for the design stage, to produce diagrams, architecture, or a test plan, or when the user says "design a feature". Mandatory first step for features.
 metadata:
-  version: "2.2"
+  version: "2.3"
 ---
 
 # Sebenza Architect Skill
@@ -23,8 +23,9 @@ You also create and register the track; `sebenza-plan` later refines the design 
 [`../../shared/framework.md`](../../shared/framework.md),
 [`../../shared/directory-structure.md`](../../shared/directory-structure.md),
 [`../../shared/diagrams.md`](../../shared/diagrams.md),
-[`../../shared/document-budgets.md`](../../shared/document-budgets.md), and
-[`../../shared/inbox.md`](../../shared/inbox.md) (raising requests). Workspace root is
+[`../../shared/document-budgets.md`](../../shared/document-budgets.md),
+[`../../shared/resolving-findings.md`](../../shared/resolving-findings.md) (acting on review
+findings), and [`../../shared/inbox.md`](../../shared/inbox.md) (raising requests). Workspace root is
 `.ai/sebenza/`; every document above lives in `.ai/sebenza/tracks/<track_id>/`.
 
 Three rules govern everything below:
@@ -55,6 +56,16 @@ Six specialist subagents are delegated to (via the Task tool), each of which bot
 | Data | `data-architect` | `data-architecture.md` | §4 | §7 |
 | Security | `security-architect` | `security-architecture.md` | §4 | §7 |
 | Test plan | `test-architect` | `test-plan.md` | §5 | §7 |
+
+Two more subagents only **review**, and each sees the documents with none of this conversation:
+
+| Reviewer | Agent | Asks | Runs |
+|---|---|---|---|
+| Zoom-out | `zoom-out-reviewer` | Does the feature need to be this big? Does the codebase already have it? | §6a, and §7 after rework |
+| Comprehension | `comprehension-reviewer` | Can someone who was not here follow the design? | §7 |
+
+They exist because you are the worst-placed reader of your own design: you fill every gap from
+memory. Act on what they return per [`resolving-findings.md`](../../shared/resolving-findings.md).
 
 **All five architecture domains MUST be considered.** Any domain you do not produce gets an explicit
 one-line reason in its own document — the file always exists, so a domain is never silently
@@ -328,25 +339,55 @@ Then do a **completeness and length pass over all seven files**:
    diagram, a table, or `## Open Questions for Refinement`.
 
 Fix gaps by writing to the files, then tell the user — in a short summary, not by reproducing them —
-that the design and test plan are complete and ready for verification.
+that the design and test plan are complete and ready for review.
+
+## 6a. Zoom-out review (before verification)
+
+Before the domain architects verify their parts, check the whole is the right size: it is cheaper to
+cut scope now than after five verifications and a rework loop.
+
+1. **Delegate.** Invoke `zoom-out-reviewer` via the Task tool, pointing it at the track folder and
+   saying this is the **initial** review. Give it nothing from this conversation: the documents and
+   the codebase are its only inputs, and that is the point.
+2. **Resolve** every finding per [`resolving-findings.md`](../../shared/resolving-findings.md). A cut
+   that removes a use case, or narrows what an `acceptance_criteria` note asked for, is the user's
+   decision: ESCALATE it, never make it silently. After any FIX, re-run §6's completeness pass.
+3. **Report** in ≤ 5 lines: the verdict, findings by class, what was cut or reused (with paths), and
+   every ESCALATE as a question. Then continue to §7.
 
 ## 7. Verify (subagents verify)
 
-1. **Delegate.** Re-invoke each in-scope agent in **"Design Verification" mode**, pointing it at its
-   own `<domain>-architecture.md` and at `design.md` to read from disk, and telling it the other four
-   documents sit beside them for cross-domain checks. Re-invoke `test-architect` the same way,
-   pointing it at `design.md`, the five architecture documents and `test-plan.md` — its job is to
-   judge the test plan against the design. Each returns a `Verdict` (PASS / CONCERNS / FAIL),
-   specific `Findings` (security ranked by severity), and `Confirmations`.
-2. **Resolve.** Fix every must-fix finding — any FAIL, any Critical/High security finding, any
-   uncovered use case — by revising that document, re-invoking the owning agent in Contribution mode
-   for substantive rework, and re-verifying until it passes. Fold remaining CONCERNS into the document
-   or record them under `## Open Questions for Refinement`. Re-check the budget after any rework.
-3. **Re-run `test-architect` whenever rework changes an architecture document**, even if its own
+1. **Delegate, in parallel.** Re-invoke each in-scope agent in **"Design Verification" mode**,
+   pointing it at its own `<domain>-architecture.md` and at `design.md` to read from disk, and telling
+   it the other four documents sit beside them for cross-domain checks. Re-invoke `test-architect`
+   the same way, pointing it at `design.md`, the five architecture documents and `test-plan.md` — its
+   job is to judge the test plan against the design. Each returns a `Verdict` (PASS / CONCERNS /
+   FAIL), specific `Findings` (security ranked by severity), and `Confirmations`. Alongside them,
+   invoke `comprehension-reviewer`, pointing it at the track folder only; it returns a `Paraphrase`
+   as well.
+2. **Check the paraphrase against the intent.** Compare the comprehension reviewer's **What this
+   proposes** with what the user asked for. Show it to the user verbatim (it is ≤ 3 sentences) and ask
+   whether it matches. A wrong paraphrase means the documents say something other than what was
+   meant: treat it as a `Blocker` and FIX the documents, not the paraphrase.
+3. **Resolve.** Classify every finding per
+   [`resolving-findings.md`](../../shared/resolving-findings.md). Must-fix findings — any FAIL, any
+   `Blocker` or `Major`, any Critical/High security finding, any uncovered use case — end as FIX,
+   CONTEST or ESCALATE, never DECLINE. FIX by revising that document, re-invoking the owning agent in
+   Contribution mode for substantive rework. Re-verify with every reviewer whose verdict was not PASS,
+   handing each its contested findings and your evidence, until it passes or what remains is
+   escalated. Fold remaining CONCERNS into the document or record them under
+   `## Open Questions for Refinement`. Re-check the budget after any rework.
+4. **Re-run `test-architect` whenever rework changes an architecture document**, even if its own
    verdict was PASS. A test plan written against a superseded design is worse than none: it reports
    coverage the design no longer has.
-4. **Present** a per-domain verdict table (domain, verdict, fixes applied, residual risk) with the
-   test plan as its last row — compact enough for a terminal — and get confirmation; revise and
+5. **Zoom out again after rework.** If step 3 changed any document, re-invoke `zoom-out-reviewer`
+   saying this is the review **after rework**, and give it its §6a findings with how each was
+   resolved. Fixes tend to grow a design; this catches growth no finding asked for. Resolve what it
+   returns the same way. Once is enough: if it still finds problems after one more FIX, record them as
+   residual risk.
+6. **Present** a verdict table — one row per domain, then comprehension, zoom-out, and the test plan
+   last (verdict, findings fixed / contested / escalated / declined, residual risk) — compact enough
+   for a terminal, with every ESCALATE listed above it as a question. Get confirmation; revise and
    re-verify if asked. Point at the files for the substance of any change.
 
 ## 7a. Independent design review (software factory)
@@ -358,15 +399,19 @@ report it to the user as "round n of 3".
 1. Run `python3 "<sebenza>/scripts/inbox.py" review --level design --track <track_id>`. In a linked
    worktree the daemon runs the configured project reviewer on a read-only snapshot and records the
    round on the origin item. Branch on the exit code (see [`inbox.md`](../../shared/inbox.md)):
-   - `0` — read `verdict` and `findings`. `agreed`: continue to step 3. `changes`: revise the named
-     documents in place, re-run §6's completeness pass, then review again.
+   - `0` — read `verdict` and `findings`. `agreed`: continue to step 3. `changes`: classify each
+     finding per [`resolving-findings.md`](../../shared/resolving-findings.md), revise the named
+     documents in place for every FIX, re-run §6's completeness pass, then review again. The reviewer
+     reads only its snapshot, so a finding it repeats after you contested it is escalated: it goes in
+     the approval request.
    - `8` (round limit) — stop reviewing; carry every open finding into the approval request.
    - `9` (not independent) — the operator's reviewer settings conflict with your agent; raise a
      request saying so and HALT.
    - `10` (voided) — the snapshot or worktree changed during the review. Make sure nothing writes to
      the worktree, then review again; no round was used.
 2. **Unlinked worktree** (exit `3`): there is no daemon reviewer. Invoke the `project-reviewer` agent
-   yourself in design mode, then record its verdict with
+   yourself in design mode — from round 2, also give it the previous round's contested findings and
+   your evidence — then record its verdict with
    `inbox.py review --level design --track <track_id> --local --verdict agreed|changes --findings -`
    (findings JSON on stdin). The round is flagged **not independent**; say so to the user. The same
    cap of 3 applies.

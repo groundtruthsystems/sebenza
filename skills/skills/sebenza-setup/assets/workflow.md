@@ -29,7 +29,9 @@ they are built:
     technical, data, and security** domains (each contributed and verified by
     its specialist architect). As the **last** step, the `test-architect` turns
     those use cases and that architecture into a `test-plan.md` of `TS-nn`
-    scenarios with a traceability table. The outputs are an approved `design.md`,
+    scenarios with a traceability table. Two fresh-context reviewers then check
+    the whole: one challenges whether the feature needs to be this big, one
+    checks that a newcomer can follow the documents. The outputs are an approved `design.md`,
     one `<domain>-architecture.md` per domain, and `test-plan.md`. A feature
     MUST NOT proceed to planning without them.
 2.  **Plan (Spec & Plan) — `sebenza-plan`:** Only after the design is
@@ -280,8 +282,8 @@ Before marking any task complete, verify:
 -   [ ] Code coverage meets requirements (>80%)
 -   [ ] Code follows project's code style guidelines (as defined in
     `code_styleguides/`)
--   [ ] All public functions/methods are documented (e.g., docstrings, JSDoc,
-    GoDoc)
+-   [ ] Names and structure make the code clear; comments explain only why,
+    never what
 -   [ ] Type safety is enforced (e.g., type hints, TypeScript types, Go types)
 -   [ ] No linting or static analysis errors (using the project's configured
     tools)
@@ -363,7 +365,7 @@ Before requesting review:
     -   Follows style guide
     -   DRY principle applied
     -   Clear variable/function names
-    -   Appropriate comments
+    -   No comments that restate the code
 
 3.  **Testing**
 
