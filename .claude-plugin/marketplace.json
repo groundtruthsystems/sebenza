@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "sebenza",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Sebenza's Context-Driven Development workflow for Claude Code: design, test-plan, spec, plan, implement and review skills backed by specialist architecture agents.",
   "owner": {
     "name": "Ground Truth Systems",

@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "sebenza",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Sebenza: the Ground Truth Systems Context-Driven Development workflow. Design, test-plan, spec, plan, and implement features through a set of coordinated skills backed by specialist architecture agents, a test architect, and fresh-context zoom-out and comprehension reviewers.",
   "author": {
     "name": "Ground Truth Systems",
